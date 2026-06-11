@@ -1,0 +1,49 @@
+{
+  "name": "@amaster.ai/pi-dashboard",
+  "version": "0.1.2-beta.15",
+  "description": "Standalone manifest-driven dashboard runtime for Pi Agent iframe dashboards.",
+  "keywords": [
+    "pi",
+    "dashboard",
+    "data-visualization",
+    "runtime"
+  ],
+  "license": "Apache-2.0",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "pi-dashboard": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": {
+      "default": "./package.json"
+    }
+  },
+  "files": [
+    "dist",
+    "static",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TGYD-helige/pi.git",
+    "directory": "packages/pi-dashboard"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "vitest run src"
+  },
+  "devDependencies": {
+    "vitest": "^4.0.0"
+  }
+}
