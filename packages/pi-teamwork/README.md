@@ -7,6 +7,7 @@ Pi extension for team collaboration and project management. Provides LLM-callabl
 ## Supported Providers
 
 - **Multica** — CLI-based adapter via [multica](https://github.com/multica-ai/multica)
+- **AMaster Employee** — CLI-based adapter via managed `amaster-employee` and optional `amaster-runtime`
 
 ## Configuration
 
@@ -71,16 +72,39 @@ For CI or non-interactive environments where you can't run `multica setup`. The 
 
 > ⚠️ `token` is a credential. Keep it out of version control — put it in a local-only settings file or inject via env-substituted config.
 
+### Mode 4 — AMaster Employee managed CLI
+
+For Pi Agent / AMaster Employee integration, configure the provider explicitly. The extension shells out to the stable managed command names; do not point settings at a local `cli/dist/amaster.js` build artifact.
+
+```json
+{
+  "pi-teamwork": {
+    "enabled": true,
+    "provider": "amaster",
+    "amaster": {
+      "apiBase": "https://amaster.example.com"
+    }
+  }
+}
+```
+
+Pi Agent may pass a browser-session board credential through `session_start.amasterEmployee.apiKey`. The extension uses it only in memory for child CLI execution and does not save it to settings.
+
+For the AMaster provider, the LUI-facing `workspaceId` parameter maps to an AMaster company id. The adapter passes that value to the AMaster Employee CLI as `-C <companyId>`. `workspace_list` is a discovery/switch helper, not a hard prerequisite for every tool call: when the account has exactly one company, the adapter falls back to that company automatically; when multiple companies are available and no `workspaceId` is provided, the tool fails clearly and asks the caller to pass a canonical id from `workspace_list`. The adapter does not keep a global "active company" state.
+
 | Field | Description |
 |-------|-------------|
 | `enabled` | Enable/disable the extension |
-| `provider` | Provider name (currently only `multica`) |
+| `provider` | Provider name (`multica` or `amaster`) |
 | `multica.binary` | Path to multica binary (default: `multica`) |
 | `multica.workspace` | Workspace ID override; leave empty to use multica's default |
 | `multica.token` | Headless-login token. Omit when multica is already logged in on the machine |
 | `multica.serverUrl` | Self-hosted server API URL. Triggers `multica setup self-host --server-url` on start |
 | `multica.appUrl` | Self-hosted server frontend URL. Required when `serverUrl` is a remote address |
 | `multica.autoInstall` | Auto-install multica CLI if missing (default: `true`) |
+| `amaster.apiBase` | AMaster Employee API base passed to the CLI as `--api-base` |
+| `amaster.companyId` | Optional AMaster canonical company id override passed to the CLI as `-C` |
+| `amaster.context` / `profile` / `authStore` | Optional CLI context/profile/auth-store overrides |
 
 ## Tools
 
@@ -92,6 +116,8 @@ For CI or non-interactive environments where you can't run `multica setup`. The 
 | `issue_update` | Update an existing issue (title, description, status, priority, assignee) |
 | `issue_comment` | Add a comment to an issue |
 | `project_list` | List all projects in the workspace |
+| `agent_list` | List current AMaster agents (AMaster provider only) |
+| `user_directory_list` | List assignable AMaster users or members (AMaster provider only) |
 | `teamwork_status` | Check provider/daemon status |
 
 ## Commands
@@ -106,7 +132,8 @@ src/
 ├── types.ts              # TeamworkProvider interface + shared types
 └── adapters/
     ├── multica.ts        # Multica CLI adapter + initialization
-    └── multica-installer.ts  # Auto-detect & install multica CLI
+    ├── multica-installer.ts  # Auto-detect & install multica CLI
+    └── amaster.ts        # AMaster Employee CLI adapter
 ```
 
 The extension uses a provider pattern — `index.ts` registers tools that delegate to a `TeamworkProvider` interface. Adding a new provider (Linear, Jira, etc.) only requires implementing the interface and adding a factory branch in `session_start`.
