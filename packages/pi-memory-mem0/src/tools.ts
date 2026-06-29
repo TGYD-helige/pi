@@ -43,7 +43,9 @@ export function createMem0Tools(provider: Mem0Provider, userId: string, agentId?
       if (!query) return textResult(JSON.stringify({ error: 'Query cannot be empty.' }));
 
       try {
-        const results = await provider.search(query, { userId, agentId, topK });
+        const searchOpts: { userId: string; agentId?: string; topK: number } = { userId, topK };
+        if (agentId) searchOpts.agentId = agentId;
+        const results = await provider.search(query, searchOpts);
         if (results.length === 0) {
           return textResult(JSON.stringify({ result: 'No relevant memories found.' }));
         }
@@ -71,7 +73,9 @@ export function createMem0Tools(provider: Mem0Provider, userId: string, agentId?
     parameters: Type.Object({}),
     async execute() {
       try {
-        const memories = await provider.getAll({ userId, agentId });
+        const profileOpts: { userId: string; agentId?: string } = { userId };
+        if (agentId) profileOpts.agentId = agentId;
+        const memories = await provider.getAll(profileOpts);
         if (memories.length === 0) {
           return textResult(JSON.stringify({ result: 'No memories stored yet.' }));
         }
@@ -101,11 +105,9 @@ export function createMem0Tools(provider: Mem0Provider, userId: string, agentId?
       if (!fact) return textResult(JSON.stringify({ error: 'Fact cannot be empty.' }));
 
       try {
-        const result = await provider.add([{ role: 'user', content: fact }], {
-          userId,
-          agentId,
-          infer: false,
-        });
+        const addOpts: { userId: string; agentId?: string; infer: boolean } = { userId, infer: false };
+        if (agentId) addOpts.agentId = agentId;
+        const result = await provider.add([{ role: 'user', content: fact }], addOpts);
         return textResult(
           JSON.stringify(result ? { result: 'Fact stored.' } : { error: 'Failed to store.' }),
         );

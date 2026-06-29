@@ -36,8 +36,34 @@ function resolveUserId(configUserId?: string): string {
   return 'default-user';
 }
 
-function resolveAgentId(configAgentId?: string): string | undefined {
+function resolveAgentId(configAgentId?: string, cwd?: string): string | undefined {
+  // If agentId is explicitly configured, use it
   if (configAgentId?.trim()) return configAgentId.trim();
+  
+  // Try to detect agentId from project mapping
+  if (cwd) {
+    try {
+      const { readFileSync } = require('node:fs');
+      const { join } = require('node:path');
+      const { homedir } = require('node:os');
+      
+      const mappingPath = join(homedir(), '.pi', 'agent', 'mem0-project-mapping.json');
+      const mapping = JSON.parse(readFileSync(mappingPath, 'utf-8'));
+      
+      for (const rule of mapping.mappings || []) {
+        const patterns = rule.pattern.split('|');
+        for (const pattern of patterns) {
+          const regex = new RegExp(pattern.replace(/\*/g, '.*'), 'i');
+          if (regex.test(cwd)) {
+            return rule.agentId;
+          }
+        }
+      }
+    } catch {
+      // Ignore errors, use default
+    }
+  }
+  
   return undefined;
 }
 
@@ -97,7 +123,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
     }
 
     userId = resolveUserId(config.userId);
-    agentId = resolveAgentId(config.agentId);
+    agentId = resolveAgentId(config.agentId, ctx.cwd);
     prefetch = new Prefetch(provider, userId, agentId, {
       topK: config.topK ?? 5,
     });
@@ -129,13 +155,15 @@ export default function mem0Extension(pi: ExtensionAPI): void {
       syncing = true;
       const userText = lastUserText;
       lastUserText = '';
+      const addOpts: { userId: string; agentId?: string } = { userId };
+      if (agentId) addOpts.agentId = agentId;
       provider
         .add(
           [
             { role: 'user', content: userText },
             { role: 'assistant', content: text },
           ],
-          { userId, agentId },
+          addOpts,
         )
         .catch(() => {})
         .finally(() => {
@@ -172,7 +200,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
 
       const config = loadConfig(ctx.cwd);
       const userId = resolveUserId(config.userId);
-      const agentId = resolveAgentId(config.agentId);
+      const agentId = resolveAgentId(config.agentId, ctx.cwd);
       const parts = args.trim().split(/\s+/).filter(Boolean);
       const subcommand = parts[0]?.toLowerCase() ?? 'status';
       const rest = parts.slice(1).join(' ').trim();
@@ -187,7 +215,9 @@ export default function mem0Extension(pi: ExtensionAPI): void {
             ctx.ui.notify('Usage: /mem0 search <query>', 'warning');
             break;
           }
-          const results = await provider.search(rest, { userId, agentId, topK: 10 });
+          const searchOpts: { userId: string; agentId?: string; topK: number } = { userId, topK: 10 };
+          if (agentId) searchOpts.agentId = agentId;
+          const results = await provider.search(rest, searchOpts);
           if (results.length === 0) {
             ctx.ui.notify('No relevant memories found.', 'info');
           } else {
@@ -197,7 +227,9 @@ export default function mem0Extension(pi: ExtensionAPI): void {
           break;
         }
         case 'profile': {
-          const all = await provider.getAll({ userId, agentId });
+          const profileOpts: { userId: string; agentId?: string } = { userId };
+          if (agentId) profileOpts.agentId = agentId;
+          const all = await provider.getAll(profileOpts);
           if (all.length === 0) {
             ctx.ui.notify('No memories stored yet.', 'info');
           } else {

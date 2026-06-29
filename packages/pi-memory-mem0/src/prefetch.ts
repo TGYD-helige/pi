@@ -23,7 +23,9 @@ export class Prefetch {
   /** Phase 1: kick off a background search (called on turn_end with user message). */
   queue(query: string): void {
     if (!query.trim()) return;
-    this.pending = this.provider.search(query, { userId: this.userId, agentId: this.agentId, topK: this.topK });
+    const opts: { userId: string; agentId?: string; topK: number } = { userId: this.userId, topK: this.topK };
+    if (this.agentId) opts.agentId = this.agentId;
+    this.pending = this.provider.search(query, opts);
   }
 
   /** Phase 2: consume the result with a timeout (called on before_agent_start). */

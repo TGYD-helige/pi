@@ -34,7 +34,7 @@ describe('Prefetch', () => {
         { id: '2', memory: 'uses vim' },
       ]),
     });
-    const pf = new Prefetch(provider, 'u', { topK: 5 });
+    const pf = new Prefetch(provider, 'u', undefined, { topK: 5 });
 
     pf.queue('preferences');
     const result = await pf.consume();
@@ -47,7 +47,7 @@ describe('Prefetch', () => {
 
   it('returns empty string when nothing queued', async () => {
     const provider = mockProvider();
-    const pf = new Prefetch(provider, 'u', { topK: 5 });
+    const pf = new Prefetch(provider, 'u', undefined, { topK: 5 });
 
     const result = await pf.consume();
     expect(result).toBe('');
@@ -57,7 +57,7 @@ describe('Prefetch', () => {
     const provider = mockProvider({
       search: vi.fn().mockImplementation(() => new Promise(() => {})),
     });
-    const pf = new Prefetch(provider, 'u', { topK: 5 });
+    const pf = new Prefetch(provider, 'u', undefined, { topK: 5 });
 
     pf.queue('test');
     const result = await pf.consume(50);
@@ -67,7 +67,7 @@ describe('Prefetch', () => {
 
   it('returns empty when search returns no results', async () => {
     const provider = mockProvider({ search: vi.fn().mockResolvedValue([]) });
-    const pf = new Prefetch(provider, 'u', { topK: 5 });
+    const pf = new Prefetch(provider, 'u', undefined, { topK: 5 });
 
     pf.queue('nothing');
     const result = await pf.consume();
@@ -83,7 +83,7 @@ describe('Prefetch', () => {
         { id: '3', memory: '  ' },
       ]),
     });
-    const pf = new Prefetch(provider, 'u', { topK: 5 });
+    const pf = new Prefetch(provider, 'u', undefined, { topK: 5 });
 
     pf.queue('q');
     const result = await pf.consume();
@@ -97,7 +97,7 @@ describe('Prefetch', () => {
     const provider = mockProvider({
       search: vi.fn().mockResolvedValue([{ id: '1', memory: 'fact' }]),
     });
-    const pf = new Prefetch(provider, 'u', { topK: 5 });
+    const pf = new Prefetch(provider, 'u', undefined, { topK: 5 });
 
     pf.queue('q');
     await pf.consume();

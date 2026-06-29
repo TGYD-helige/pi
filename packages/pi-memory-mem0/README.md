@@ -138,13 +138,43 @@ When using an external vector store, the SQLite snapshot is not needed (the vect
 | `apiKey` | string | — | Required for platform mode. Supports `${MEM0_API_KEY}` |
 | `baseUrl` | string | `https://api.mem0.ai` | Custom platform endpoint |
 | `userId` | string | `$USER` or `"default-user"` | Memory scoping identifier |
-| `agentId` | string | — | Agent identifier for memory isolation. When set, memories are scoped to this agent. |
+| `agentId` | string | — | Agent identifier for memory isolation. When set, memories are scoped to this agent. Supports dynamic detection from project mapping. |
 | `topK` | number | `5` | Max recalled memories per turn |
 | `useRegistryKeys` | boolean | `true` | Whether OSS mode resolves keys from pi registry |
 | `oss.llm` | object | OpenAI gpt-4.1-nano | OSS extraction model |
 | `oss.embedder` | object | OpenAI text-embedding-3-small | OSS embedding model |
 | `oss.vectorStore` | object | `memory` (in-memory) | Custom vector store config |
 | `oss.snapshotDbPath` | string | `<home>/memories/mem0-snapshot.db` | SQLite snapshot file path |
+
+### Dynamic Agent ID Selection
+
+If `agentId` is not explicitly configured, the extension will attempt to detect the appropriate agent ID based on the current working directory using a project mapping file.
+
+Create `~/.pi/agent/mem0-project-mapping.json`:
+
+```json
+{
+  "mappings": [
+    {
+      "pattern": "*farmneed*|*hrms*",
+      "agentId": "hermes-fhrms",
+      "description": "Farmneed HRMS project"
+    },
+    {
+      "pattern": "*trader*",
+      "agentId": "trader",
+      "description": "Trading project"
+    },
+    {
+      "pattern": "*",
+      "agentId": "pi",
+      "description": "Default pi agent"
+    }
+  ]
+}
+```
+
+The extension will match the current directory against the patterns (case-insensitive, supports wildcards) and use the first matching `agentId`.
 | `oss.disableHistory` | boolean | `false` | Disable mem0 operation history |
 
 ## Data Storage

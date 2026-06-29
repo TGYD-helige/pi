@@ -111,12 +111,11 @@ class PlatformProvider implements Mem0Provider {
 
   async search(query: string, opts: { userId: string; agentId?: string; topK?: number }): Promise<MemoryItem[]> {
     await this.ensureClient();
-    const searchOpts: Record<string, unknown> = {
-      filters: { user_id: opts.userId },
-    };
+    const filters: Record<string, string> = { user_id: opts.userId };
     if (opts.agentId) {
-      searchOpts.filters.agent_id = opts.agentId;
+      filters.agent_id = opts.agentId;
     }
+    const searchOpts: Record<string, unknown> = { filters };
     if (opts.topK) searchOpts.topK = opts.topK;
     // biome-ignore lint/suspicious/noExplicitAny: mem0ai/oss lacks type definitions
     const results = await (this.client as any).search(query, searchOpts);
@@ -456,12 +455,11 @@ class OSSProvider implements Mem0Provider {
 
   async search(query: string, opts: { userId: string; agentId?: string; topK?: number }): Promise<MemoryItem[]> {
     await this.ensureMemory();
-    const searchOpts: Record<string, unknown> = {
-      filters: { user_id: opts.userId },
-    };
+    const filters: Record<string, string> = { user_id: opts.userId };
     if (opts.agentId) {
-      searchOpts.filters.agent_id = opts.agentId;
+      filters.agent_id = opts.agentId;
     }
+    const searchOpts: Record<string, unknown> = { filters };
     if (opts.topK) searchOpts.topK = opts.topK;
     // biome-ignore lint/suspicious/noExplicitAny: mem0ai/oss lacks type definitions
     const results = await (this.memory as any).search(query, searchOpts);
