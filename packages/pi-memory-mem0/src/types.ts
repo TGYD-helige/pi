@@ -27,6 +27,8 @@ export interface Mem0ExtensionConfig {
   // ── Shared ──────────────────────────────────────────────────────────────
   /** User identifier for memory scoping. Supports ${USER}. */
   userId?: string;
+  /** Agent identifier for memory isolation. When set, memories are scoped to this agent. */
+  agentId?: string;
   /** Max recalled memories per turn. Default: 5 */
   topK?: number;
 

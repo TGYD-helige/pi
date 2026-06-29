@@ -9,19 +9,21 @@ import type { MemoryItem } from './types.js';
 export class Prefetch {
   private readonly provider: Mem0Provider;
   private readonly userId: string;
+  private readonly agentId: string | undefined;
   private readonly topK: number;
   private pending: Promise<MemoryItem[]> | null = null;
 
-  constructor(provider: Mem0Provider, userId: string, opts: { topK: number }) {
+  constructor(provider: Mem0Provider, userId: string, agentId: string | undefined, opts: { topK: number }) {
     this.provider = provider;
     this.userId = userId;
+    this.agentId = agentId;
     this.topK = opts.topK;
   }
 
   /** Phase 1: kick off a background search (called on turn_end with user message). */
   queue(query: string): void {
     if (!query.trim()) return;
-    this.pending = this.provider.search(query, { userId: this.userId, topK: this.topK });
+    this.pending = this.provider.search(query, { userId: this.userId, agentId: this.agentId, topK: this.topK });
   }
 
   /** Phase 2: consume the result with a timeout (called on before_agent_start). */

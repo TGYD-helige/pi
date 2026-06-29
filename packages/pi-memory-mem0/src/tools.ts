@@ -25,7 +25,7 @@ function textResult(text: string): AgentToolResult<unknown> {
   return { content: [{ type: 'text' as const, text }], details: undefined };
 }
 
-export function createMem0Tools(provider: Mem0Provider, userId: string): ToolDefinition[] {
+export function createMem0Tools(provider: Mem0Provider, userId: string, agentId?: string): ToolDefinition[] {
   const searchTool: ToolDefinition = {
     name: 'mem0_search',
     label: 'Mem0',
@@ -43,7 +43,7 @@ export function createMem0Tools(provider: Mem0Provider, userId: string): ToolDef
       if (!query) return textResult(JSON.stringify({ error: 'Query cannot be empty.' }));
 
       try {
-        const results = await provider.search(query, { userId, topK });
+        const results = await provider.search(query, { userId, agentId, topK });
         if (results.length === 0) {
           return textResult(JSON.stringify({ result: 'No relevant memories found.' }));
         }
@@ -71,7 +71,7 @@ export function createMem0Tools(provider: Mem0Provider, userId: string): ToolDef
     parameters: Type.Object({}),
     async execute() {
       try {
-        const memories = await provider.getAll({ userId });
+        const memories = await provider.getAll({ userId, agentId });
         if (memories.length === 0) {
           return textResult(JSON.stringify({ result: 'No memories stored yet.' }));
         }
@@ -103,6 +103,7 @@ export function createMem0Tools(provider: Mem0Provider, userId: string): ToolDef
       try {
         const result = await provider.add([{ role: 'user', content: fact }], {
           userId,
+          agentId,
           infer: false,
         });
         return textResult(

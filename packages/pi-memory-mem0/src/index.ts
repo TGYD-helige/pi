@@ -36,10 +36,16 @@ function resolveUserId(configUserId?: string): string {
   return 'default-user';
 }
 
+function resolveAgentId(configAgentId?: string): string | undefined {
+  if (configAgentId?.trim()) return configAgentId.trim();
+  return undefined;
+}
+
 export default function mem0Extension(pi: ExtensionAPI): void {
   let provider: Mem0Provider | undefined;
   let prefetch: Prefetch | undefined;
   let userId = '';
+  let agentId: string | undefined;
   let lastUserText = '';
   let syncing = false;
 
@@ -91,13 +97,14 @@ export default function mem0Extension(pi: ExtensionAPI): void {
     }
 
     userId = resolveUserId(config.userId);
-    prefetch = new Prefetch(provider, userId, {
+    agentId = resolveAgentId(config.agentId);
+    prefetch = new Prefetch(provider, userId, agentId, {
       topK: config.topK ?? 5,
     });
 
     ctx.ui.setStatus(STATUS_KEY, `mem0: ${mode}`);
 
-    for (const tool of createMem0Tools(provider, userId)) {
+    for (const tool of createMem0Tools(provider, userId, agentId)) {
       pi.registerTool(tool as never);
     }
   });
@@ -128,7 +135,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
             { role: 'user', content: userText },
             { role: 'assistant', content: text },
           ],
-          { userId },
+          { userId, agentId },
         )
         .catch(() => {})
         .finally(() => {
@@ -165,6 +172,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
 
       const config = loadConfig(ctx.cwd);
       const userId = resolveUserId(config.userId);
+      const agentId = resolveAgentId(config.agentId);
       const parts = args.trim().split(/\s+/).filter(Boolean);
       const subcommand = parts[0]?.toLowerCase() ?? 'status';
       const rest = parts.slice(1).join(' ').trim();
@@ -179,7 +187,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
             ctx.ui.notify('Usage: /mem0 search <query>', 'warning');
             break;
           }
-          const results = await provider.search(rest, { userId, topK: 10 });
+          const results = await provider.search(rest, { userId, agentId, topK: 10 });
           if (results.length === 0) {
             ctx.ui.notify('No relevant memories found.', 'info');
           } else {
@@ -189,7 +197,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
           break;
         }
         case 'profile': {
-          const all = await provider.getAll({ userId });
+          const all = await provider.getAll({ userId, agentId });
           if (all.length === 0) {
             ctx.ui.notify('No memories stored yet.', 'info');
           } else {

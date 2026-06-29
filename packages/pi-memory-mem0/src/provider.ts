@@ -23,12 +23,12 @@ import type { AddResult, Mem0ExtensionConfig, MemoryItem } from './types.js';
 export interface Mem0Provider {
   add(
     messages: Array<{ role: string; content: string }>,
-    opts: { userId: string; infer?: boolean },
+    opts: { userId: string; agentId?: string; infer?: boolean },
   ): Promise<AddResult | null>;
 
-  search(query: string, opts: { userId: string; topK?: number }): Promise<MemoryItem[]>;
+  search(query: string, opts: { userId: string; agentId?: string; topK?: number }): Promise<MemoryItem[]>;
 
-  getAll(opts: { userId: string }): Promise<MemoryItem[]>;
+  getAll(opts: { userId: string; agentId?: string }): Promise<MemoryItem[]>;
 
   delete(memoryId: string): Promise<void>;
 
@@ -96,32 +96,42 @@ class PlatformProvider implements Mem0Provider {
 
   async add(
     messages: Array<{ role: string; content: string }>,
-    opts: { userId: string; infer?: boolean },
+    opts: { userId: string; agentId?: string; infer?: boolean },
   ): Promise<AddResult | null> {
     await this.ensureClient();
     const addOpts: Record<string, unknown> = { userId: opts.userId };
+    if (opts.agentId) {
+      addOpts.filters = { user_id: opts.userId, agent_id: opts.agentId };
+    }
     if (opts.infer === false) addOpts.infer = false;
     // biome-ignore lint/suspicious/noExplicitAny: mem0ai/oss lacks type definitions
     const result = await (this.client as any).add(messages, addOpts);
     return result as AddResult;
   }
 
-  async search(query: string, opts: { userId: string; topK?: number }): Promise<MemoryItem[]> {
+  async search(query: string, opts: { userId: string; agentId?: string; topK?: number }): Promise<MemoryItem[]> {
     await this.ensureClient();
     const searchOpts: Record<string, unknown> = {
       filters: { user_id: opts.userId },
     };
+    if (opts.agentId) {
+      searchOpts.filters.agent_id = opts.agentId;
+    }
     if (opts.topK) searchOpts.topK = opts.topK;
     // biome-ignore lint/suspicious/noExplicitAny: mem0ai/oss lacks type definitions
     const results = await (this.client as any).search(query, searchOpts);
     return normalizeResults(results);
   }
 
-  async getAll(opts: { userId: string }): Promise<MemoryItem[]> {
+  async getAll(opts: { userId: string; agentId?: string }): Promise<MemoryItem[]> {
     await this.ensureClient();
+    const filters: Record<string, unknown> = { user_id: opts.userId };
+    if (opts.agentId) {
+      filters.agent_id = opts.agentId;
+    }
     // biome-ignore lint/suspicious/noExplicitAny: mem0ai/oss lacks type definitions
     const results = await (this.client as any).getAll({
-      filters: { user_id: opts.userId },
+      filters,
     });
     return normalizeResults(results);
   }
@@ -430,10 +440,13 @@ class OSSProvider implements Mem0Provider {
 
   async add(
     messages: Array<{ role: string; content: string }>,
-    opts: { userId: string; infer?: boolean },
+    opts: { userId: string; agentId?: string; infer?: boolean },
   ): Promise<AddResult | null> {
     await this.ensureMemory();
     const addOpts: Record<string, unknown> = { userId: opts.userId };
+    if (opts.agentId) {
+      addOpts.filters = { user_id: opts.userId, agent_id: opts.agentId };
+    }
     if (opts.infer === false) addOpts.infer = false;
     // biome-ignore lint/suspicious/noExplicitAny: mem0ai/oss lacks type definitions
     const result = await (this.memory as any).add(messages, addOpts);
@@ -441,22 +454,29 @@ class OSSProvider implements Mem0Provider {
     return result as AddResult;
   }
 
-  async search(query: string, opts: { userId: string; topK?: number }): Promise<MemoryItem[]> {
+  async search(query: string, opts: { userId: string; agentId?: string; topK?: number }): Promise<MemoryItem[]> {
     await this.ensureMemory();
     const searchOpts: Record<string, unknown> = {
       filters: { user_id: opts.userId },
     };
+    if (opts.agentId) {
+      searchOpts.filters.agent_id = opts.agentId;
+    }
     if (opts.topK) searchOpts.topK = opts.topK;
     // biome-ignore lint/suspicious/noExplicitAny: mem0ai/oss lacks type definitions
     const results = await (this.memory as any).search(query, searchOpts);
     return normalizeResults(results);
   }
 
-  async getAll(opts: { userId: string }): Promise<MemoryItem[]> {
+  async getAll(opts: { userId: string; agentId?: string }): Promise<MemoryItem[]> {
     await this.ensureMemory();
+    const filters: Record<string, unknown> = { user_id: opts.userId };
+    if (opts.agentId) {
+      filters.agent_id = opts.agentId;
+    }
     // biome-ignore lint/suspicious/noExplicitAny: mem0ai/oss lacks type definitions
     const results = await (this.memory as any).getAll({
-      filters: { user_id: opts.userId },
+      filters,
     });
     return normalizeResults(results);
   }

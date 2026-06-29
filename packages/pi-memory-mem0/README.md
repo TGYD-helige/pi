@@ -138,6 +138,7 @@ When using an external vector store, the SQLite snapshot is not needed (the vect
 | `apiKey` | string | — | Required for platform mode. Supports `${MEM0_API_KEY}` |
 | `baseUrl` | string | `https://api.mem0.ai` | Custom platform endpoint |
 | `userId` | string | `$USER` or `"default-user"` | Memory scoping identifier |
+| `agentId` | string | — | Agent identifier for memory isolation. When set, memories are scoped to this agent. |
 | `topK` | number | `5` | Max recalled memories per turn |
 | `useRegistryKeys` | boolean | `true` | Whether OSS mode resolves keys from pi registry |
 | `oss.llm` | object | OpenAI gpt-4.1-nano | OSS extraction model |
