@@ -27,8 +27,8 @@ function createMockPi() {
     on(event: string, handler: Function) {
       listeners[event] = handler;
     },
-    async triggerSessionStart(cwd = '/test') {
-      const ctx = { cwd } as any;
+    async triggerSessionStart(cwd = '/test', context: Record<string, unknown> = {}) {
+      const ctx = { cwd, ...context } as any;
       await listeners.session_start!({}, ctx);
     },
   };
@@ -71,6 +71,47 @@ describe('piWebToolExtension - tool registration', () => {
     const pi = createMockPi();
     piWebToolExtension(pi as any);
     await pi.triggerSessionStart();
+
+    expect(pi.tools.map((t) => t.name)).not.toContain('web_search');
+  });
+
+  it('registers web_search with runtime auth from the session model registry', async () => {
+    mockLoadSettings.mockReturnValue({
+      search: { provider: 'kimi' },
+      providers: { kimi: { runtimeAuthProvider: 'amaster' } },
+    });
+
+    const pi = createMockPi();
+    piWebToolExtension(pi as any);
+    await pi.triggerSessionStart('/test', {
+      modelRegistry: {
+        getAll: () => [{ provider: 'amaster', baseUrl: 'https://company-a.example/v1' }],
+        getApiKeyAndHeaders: async () => ({ ok: true, apiKey: 'company-a-key' }),
+      },
+    });
+
+    expect(pi.tools.map((t) => t.name)).toContain('web_search');
+  });
+
+  it('does not register runtime-auth search when session auth is unavailable', async () => {
+    mockLoadSettings.mockReturnValue({
+      search: { provider: 'kimi' },
+      providers: {
+        kimi: {
+          apiKey: 'stale-shared-key',
+          runtimeAuthProvider: 'amaster',
+        },
+      },
+    });
+
+    const pi = createMockPi();
+    piWebToolExtension(pi as any);
+    await pi.triggerSessionStart('/test', {
+      modelRegistry: {
+        getAll: () => [],
+        getApiKeyAndHeaders: vi.fn(),
+      },
+    });
 
     expect(pi.tools.map((t) => t.name)).not.toContain('web_search');
   });

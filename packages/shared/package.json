@@ -15,6 +15,10 @@
       "types": "./dist/settings.d.ts",
       "default": "./dist/settings.js"
     },
+    "./runtime-auth": {
+      "types": "./dist/runtime-auth.d.ts",
+      "default": "./dist/runtime-auth.js"
+    },
     "./package.json": {
       "default": "./package.json"
     }

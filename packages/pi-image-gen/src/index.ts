@@ -10,6 +10,7 @@ import {
 } from './config.js';
 import { errorMessageForUser, toLogSummary } from './errors.js';
 import { generateImage } from './generate.js';
+import { materializeImageGenSettings } from './runtime-auth.js';
 import type { ApiStyle, GenerateImageParams, ImageGenResult, ImageGenSettings } from './types.js';
 
 export { loadImageGenSettings, resolveModel } from './config.js';
@@ -103,7 +104,10 @@ export default function piImageGenExtension(pi: ExtensionAPI): void {
 
   pi.on('session_start', async (_event: unknown, ctx: ExtensionContext) => {
     sessionCwd = ctx.cwd;
-    settings = loadImageGenSettings(ctx.cwd, isProjectTrusted(ctx));
+    settings = await materializeImageGenSettings(
+      loadImageGenSettings(ctx.cwd, isProjectTrusted(ctx)),
+      ctx.modelRegistry,
+    );
     registerImageTool();
   });
 
@@ -113,7 +117,10 @@ export default function piImageGenExtension(pi: ExtensionAPI): void {
       const raw = (args ?? '').trim();
       const tokens = raw.split(/\s+/).filter(Boolean);
       if (tokens[0] === 'reload') {
-        settings = loadImageGenSettings(ctx.cwd, isProjectTrusted(ctx));
+        settings = await materializeImageGenSettings(
+          loadImageGenSettings(ctx.cwd, isProjectTrusted(ctx)),
+          ctx.modelRegistry,
+        );
         // Re-register so the schema (e.g. whether `quality` is exposed) tracks
         // the newly loaded model, not just the settings read at execute time.
         registerImageTool();

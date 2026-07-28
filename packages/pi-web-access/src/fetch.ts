@@ -1,6 +1,6 @@
 import TurndownService from 'turndown';
 import { resolveFetchProvider } from './config.js';
-import type { FetchResponse } from './providers/index.js';
+import type { FetchResponse, ResolvedProvider } from './providers/index.js';
 import { getProvider } from './providers/index.js';
 import type { WebToolSettings } from './types.js';
 
@@ -81,9 +81,11 @@ async function fetchWithFallback(url: string, timeoutMs: number): Promise<FetchR
 export async function webFetch(
   params: WebFetchParams,
   settings: WebToolSettings,
+  resolvedProvider?: ResolvedProvider | null,
 ): Promise<FetchResponse> {
   const timeoutMs = settings.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const resolved = resolveFetchProvider(settings);
+  const resolved =
+    resolvedProvider === undefined ? resolveFetchProvider(settings) : resolvedProvider;
   if (resolved) {
     const provider = getProvider(resolved.id);
     if (!provider) {

@@ -34,7 +34,9 @@ function buildBuiltInProvider(
   settings: ImageGenSettings,
 ): ResolvedProvider | null {
   const override = settings.providers?.[id] ?? {};
-  const apiKey = override.apiKey || process.env[ENV_VARS[id]];
+  const apiKey = override.runtimeAuthProvider
+    ? override.apiKey
+    : override.apiKey || process.env[ENV_VARS[id]];
   const provider: ResolvedProvider = {
     id,
     api: DEFAULT_API_STYLE[id],

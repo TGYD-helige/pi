@@ -1,11 +1,16 @@
 import { isProjectTrusted } from '@amaster.ai/pi-shared/settings';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
-import { loadWebToolSettings, resolveProvider, resolveSearchProvider } from './config.js';
+import { loadWebToolSettings } from './config.js';
 import { webFetch } from './fetch.js';
 import type { SearchParams } from './providers/index.js';
 import { getProvider } from './providers/index.js';
 import type { XaiProvider } from './providers/xai.js';
+import {
+  resolveFetchProviderForSession,
+  resolveProviderForSession,
+  resolveSearchProviderForSession,
+} from './runtime-auth.js';
 import { search } from './search.js';
 import { summarizeContent } from './summary.js';
 import type { WebToolSettings } from './types.js';
@@ -38,9 +43,15 @@ export default function piWebToolExtension(pi: ExtensionAPI): void {
   pi.on('session_start', async (_event: unknown, ctx: ExtensionContext) => {
     settings = loadWebToolSettings(ctx.cwd, isProjectTrusted(ctx));
 
-    const searchResolved = resolveSearchProvider(settings);
+    const searchResolved = await resolveSearchProviderForSession(settings, ctx.modelRegistry);
     const hasSearch = !('error' in searchResolved) && Boolean(searchResolved.apiKey);
-    const hasFetch = Boolean(settings.fetch?.provider) || Boolean(settings.fetch?.summary);
+    const fetchResolved = await resolveFetchProviderForSession(settings, ctx.modelRegistry);
+    const fetchRuntimeProvider = settings.fetch?.provider
+      ? settings.providers?.[settings.fetch.provider]?.runtimeAuthProvider
+      : undefined;
+    const hasFetch = fetchRuntimeProvider
+      ? fetchResolved !== null && !('error' in fetchResolved) && Boolean(fetchResolved.apiKey)
+      : Boolean(settings.fetch?.provider) || Boolean(settings.fetch?.summary);
 
     if (hasSearch) {
       pi.registerTool({
@@ -97,7 +108,7 @@ export default function piWebToolExtension(pi: ExtensionAPI): void {
           _ctx: ExtensionContext,
         ) {
           const searchParams = params as unknown as SearchParams;
-          const response = await search(searchParams, settings);
+          const response = await search(searchParams, settings, searchResolved);
 
           const lines: string[] = [];
           lines.push(`## Web Search Results (${response.provider})`);
@@ -158,7 +169,11 @@ export default function piWebToolExtension(pi: ExtensionAPI): void {
           fetchCtx: ExtensionContext,
         ) {
           const fetchParams = params as unknown as { url: string; prompt: string };
-          const result = await webFetch({ url: fetchParams.url }, settings);
+          const result = await webFetch(
+            { url: fetchParams.url },
+            settings,
+            fetchResolved && !('error' in fetchResolved) ? fetchResolved : null,
+          );
 
           let content = result.content;
           if (settings.fetch?.summary) {
@@ -183,7 +198,7 @@ export default function piWebToolExtension(pi: ExtensionAPI): void {
     }
 
     // x_search: only register when xai provider has an API key
-    const xaiResolved = resolveProvider('xai', settings);
+    const xaiResolved = await resolveProviderForSession('xai', settings, ctx.modelRegistry);
     const hasXai = !('error' in xaiResolved) && Boolean(xaiResolved.apiKey);
     if (hasXai) {
       pi.registerTool({

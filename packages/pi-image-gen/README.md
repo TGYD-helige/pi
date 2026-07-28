@@ -100,13 +100,19 @@ That's it. From the agent: `image_generate({ prompt: "a cyberpunk cat" })`.
 | ----------------- | ---------------------------------------------------------------------------------------- |
 | `defaultModel`    | Model id or alias the tool will use. **Required.**                                       |
 | `outputDir`       | Where to write generated images. Relative paths resolve against the session cwd. Default `.pi/images`. |
-| `providers`       | Per-built-in-provider override. Set `apiKey`, `baseUrl`, or `headers` to point at a proxy or non-standard env var. |
+| `providers`       | Per-built-in-provider override. Set `apiKey`, `baseUrl`, `headers`, or `runtimeAuthProvider`. |
 | `customProviders` | User-defined providers — see below.                                                      |
 
 In global and agent settings, `apiKey`, `baseUrl`, and `headers` values support
 `$VAR` and `${VAR}` environment interpolation. Fallbacks require the braced
 form (for example, `${FOO:-default}`); `$FOO:-default` is not supported.
 Project settings keep all of these placeholders literal.
+
+Set `runtimeAuthProvider` on a built-in or custom provider to resolve its API
+key, base URL, and auth headers from `ctx.modelRegistry` in the current Pi
+session. Runtime auth is kept in memory, replaces static authentication fields,
+and fails closed when unavailable; resolved credentials are never written back
+to settings.
 
 ## Built-in setup walkthrough
 
@@ -201,10 +207,11 @@ Each custom provider declares:
 | Field      | Required | Notes                                                                                |
 | ---------- | -------- | ------------------------------------------------------------------------------------ |
 | `api` | yes      | One of `openai`, `gemini`, `dashscope`, `openrouter`, `ark`. Picks the image-API wire shape. |
-| `baseUrl`  | yes      | API endpoint URL. `$VAR` syntax supported.                                           |
-| `apiKey`   | usually  | API key string. `$VAR` syntax supported.                                             |
+| `baseUrl`  | yes, unless runtime auth | API endpoint URL. `$VAR` syntax supported.                              |
+| `apiKey`   | usually, unless runtime auth | API key string. `$VAR` syntax supported.                          |
 | `name`     | no       | Display name shown in `/image-gen list`.                                             |
 | `headers`  | no       | Extra headers merged into every request.                                             |
+| `runtimeAuthProvider` | no | Pi model-registry provider used for session-scoped API credentials and endpoint. |
 | `models`   | no       | Optional model id/alias list. Omit to make this a **catch-all** — the provider will accept any unknown model id (passed through as the remote id). Provide a list only when you want aliases or want to route specific ids elsewhere. Each entry is a string or `{ id, alias?, name? }`. |
 
 > Note: pi.dev custom providers also have an `api` field, but its values (`openai-completions`, `anthropic-messages`, …) are LLM streaming formats that don't apply to image generation. The values here (`openai`, `gemini`, `dashscope`, `openrouter`, `ark`) are image-API wire shapes — same field name, different namespace.

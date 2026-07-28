@@ -123,8 +123,12 @@ Per-provider configuration. Each provider supports:
 | `baseUrl` | Override the default API endpoint. |
 | `model` | Override the default model. |
 | `headers` | Extra headers merged into every request. |
+| `runtimeAuthProvider` | Resolve the API key, base URL, and auth headers from this provider in the current Pi session. Runtime auth replaces static auth and fails closed when unavailable. |
 
 Environment variables serve as fallbacks when `apiKey` is not set in config.
+When `runtimeAuthProvider` is set, the extension resolves auth from
+`ctx.modelRegistry` for that session instead; it does not write the resolved
+credential back to settings or fall back to a configured static key.
 
 ## Architecture
 

@@ -1,13 +1,14 @@
 import { resolveSearchProvider } from './config.js';
-import type { SearchParams, SearchResponse } from './providers/index.js';
+import type { ResolvedProvider, SearchParams, SearchResponse } from './providers/index.js';
 import { getProvider } from './providers/index.js';
 import type { WebToolSettings } from './types.js';
 
 export async function search(
   params: SearchParams,
   settings: WebToolSettings,
+  resolvedProvider?: ResolvedProvider,
 ): Promise<SearchResponse> {
-  const resolved = resolveSearchProvider(settings);
+  const resolved = resolvedProvider ?? resolveSearchProvider(settings);
   if ('error' in resolved) {
     throw new Error(resolved.error);
   }

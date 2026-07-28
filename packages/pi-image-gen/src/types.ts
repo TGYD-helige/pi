@@ -25,6 +25,8 @@ export type CustomImageProvider = {
   name?: string;
   /** Extra headers merged into every outbound request. */
   headers?: Record<string, string>;
+  /** Resolve API credentials and endpoint from this provider in the current Pi session. */
+  runtimeAuthProvider?: string;
   /** Models routed through this provider. Each entry is a model id (string) or an object. */
   models?: Array<string | CustomImageModel>;
 };
@@ -43,6 +45,8 @@ export type BuiltInProviderOverride = {
   apiKey?: string;
   baseUrl?: string;
   headers?: Record<string, string>;
+  /** Resolve API credentials and endpoint from this provider in the current Pi session. */
+  runtimeAuthProvider?: string;
 };
 
 export type ImageGenSettings = {

@@ -95,7 +95,7 @@ export function resolveProvider(
   return provider;
 }
 
-const ALL_SEARCH_PROVIDER_IDS: BuiltInProviderId[] = [
+export const SEARCH_PROVIDER_IDS: BuiltInProviderId[] = [
   'tavily',
   'brave',
   'firecrawl',
@@ -116,7 +116,7 @@ export function resolveSearchProvider(
   if (settings.search?.provider) {
     return resolveProvider(settings.search.provider, settings);
   }
-  for (const id of ALL_SEARCH_PROVIDER_IDS) {
+  for (const id of SEARCH_PROVIDER_IDS) {
     const resolved = resolveProvider(id, settings);
     if (!('error' in resolved) && resolved.apiKey) return resolved;
   }

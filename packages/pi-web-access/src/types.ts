@@ -20,6 +20,8 @@ export interface ProviderConfig {
   baseUrl?: string;
   model?: string;
   headers?: Record<string, string>;
+  /** Resolve API credentials and endpoint from this provider in the current Pi session. */
+  runtimeAuthProvider?: string;
 }
 
 export interface SummaryModelConfig {
