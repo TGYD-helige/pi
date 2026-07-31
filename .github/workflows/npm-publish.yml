@@ -34,22 +34,39 @@ jobs:
     strategy:
       matrix:
         include:
+          # darwin targets need macOS hosts, so they stay on GitHub-hosted
+          # runners; the Linux-hosted builds (native + both cross targets)
+          # run on the accelerated self-hosted runner for reliable source
+          # downloads (ffmpeg.org, zlib.net, code.videolan.org).
           - target: darwin-arm64
             runner: macos-15
           - target: darwin-x64
             runner: macos-15-intel
           - target: linux-x64
-            runner: ubuntu-22.04
+            runner: [instance-hnpsq9go, linux, x64]
           - target: linux-arm64
-            runner: ubuntu-22.04
+            runner: [instance-hnpsq9go, linux, x64]
           - target: win32-x64
-            runner: ubuntu-24.04
+            runner: [instance-hnpsq9go, linux, x64]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
 
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
+
+      # The self-hosted runner's distro is not pinned by the image, so guard
+      # the published glibc floor: linux-* binaries must be linked against
+      # the Ubuntu 22.04 baseline their SOURCE.md provenance declares.
+      # win32-x64 produces PE binaries via mingw and is host-glibc-agnostic.
+      - name: Check glibc baseline (linux targets)
+        if: startsWith(matrix.target, 'linux-')
+        run: |
+          . /etc/os-release
+          if [ "${ID:-}" != "ubuntu" ] || [ "${VERSION_ID:-}" != "22.04" ]; then
+            echo "linux-* builds must run on Ubuntu 22.04 (glibc baseline); got ${PRETTY_NAME:-unknown}" >&2
+            exit 1
+          fi
 
       - name: Install build dependencies
         run: |
