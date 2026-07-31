@@ -74,13 +74,7 @@ describe('pi-video-gen package artifacts', () => {
   });
 
   it('builds against declared platform baselines and verifies release binaries', () => {
-    // darwin builds stay on GitHub-hosted macOS images; the Linux-hosted
-    // builds use the self-hosted runner, whose Ubuntu 22.04 glibc baseline
-    // is enforced by the guard step above the build.
-    expect(publishWorkflow).toContain('runner: macos-15');
-    expect(publishWorkflow).toContain('runner: [instance-hnpsq9go, linux, x64]');
-    expect(publishWorkflow).toContain('Check glibc baseline (linux targets)');
-    expect(publishWorkflow).toContain('${VERSION_ID:-}');
+    expect(publishWorkflow).toContain('runner: ubuntu-22.04');
     expect(publishWorkflow).toContain('Verify FFmpeg binary');
     expect(publishWorkflow).toContain('vtool -show-build');
     expect(publishWorkflow).not.toContain('vars.X264_SHA256');
