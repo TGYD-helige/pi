@@ -475,3 +475,20 @@ export type SandboxFileEntry = {
   size?: number;
   modifiedAt?: string;
 };
+
+// Re-export the runtime helpers from the settings module via the root entry.
+// Some module loaders do not honour the "./settings" subpath in package
+// "exports" and resolve `@amaster.ai/pi-shared/settings` to this root entry
+// (which previously held only type exports), leaving `isProjectTrusted`,
+// `loadPiSettings`, etc. as `undefined` at runtime. Re-exporting them here
+// makes every consumer resilient to that mis-resolution.
+// See https://github.com/TGYD-helige/pi/issues/117
+export {
+  isProjectTrusted,
+  resolveHome,
+  resolveConfigDir,
+  resolveAgentDir,
+  loadPiSettings,
+  loadJsonProfileDir,
+  loadPiPolicyProfiles,
+} from './settings.js';
