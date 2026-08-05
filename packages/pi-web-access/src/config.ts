@@ -52,14 +52,32 @@ const DEFAULT_MODEL: Partial<Record<BuiltInProviderId, string>> = {
 // ─── Settings loading ────────────────────────────────────────────────────────
 
 export function loadWebToolSettings(cwd: string, projectTrusted = false): WebToolSettings {
+  const runtimeMode = process.env.PI_WEB_ACCESS_RUNTIME_FETCH_MODE;
+  const runtimeObservation = process.env.PI_WEB_ACCESS_RUNTIME_OBSERVATION;
+  if (runtimeObservation !== undefined && runtimeObservation !== 'required') {
+    throw new Error('PI_WEB_ACCESS_RUNTIME_OBSERVATION is invalid.');
+  }
+  const runtimeLocked = runtimeMode !== undefined || runtimeObservation === 'required';
+  let settings: WebToolSettings;
   try {
-    return loadPiSettings<WebToolSettings>(SETTINGS_KEY, {
+    settings = loadPiSettings<WebToolSettings>(SETTINGS_KEY, {
       cwd,
-      projectTrusted,
+      projectTrusted: runtimeLocked ? false : projectTrusted,
     });
   } catch {
-    return {};
+    settings = {};
   }
+
+  if (runtimeMode !== undefined) {
+    if (runtimeMode !== 'provider_jina_or_local' && runtimeMode !== 'local_only') {
+      throw new Error('PI_WEB_ACCESS_RUNTIME_FETCH_MODE is invalid.');
+    }
+    settings.fetch = { ...settings.fetch, mode: runtimeMode };
+  }
+  if (runtimeObservation === 'required' && !settings.fetch?.observation) {
+    throw new Error('A runtime web observation profile is required.');
+  }
+  return settings;
 }
 
 // ─── Provider resolution ─────────────────────────────────────────────────────

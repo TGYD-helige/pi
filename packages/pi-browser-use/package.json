@@ -1,8 +1,16 @@
 {
   "name": "@amaster.ai/pi-browser-use",
-  "version": "0.1.2-beta.15",
+  "version": "0.1.2-beta.16",
   "description": "Pi extension for browser automation via chrome-devtools-mcp with browser_ prefixed tools",
-  "keywords": ["pi-package", "pi", "extension", "browser", "automation", "chrome-devtools", "mcp"],
+  "keywords": [
+    "pi-package",
+    "pi",
+    "extension",
+    "browser",
+    "automation",
+    "chrome-devtools",
+    "mcp"
+  ],
   "license": "Apache-2.0",
   "type": "module",
   "engines": {
@@ -50,7 +58,8 @@
   "dependencies": {
     "@amaster.ai/pi-shared": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "chrome-devtools-mcp": "^1.6.0"
+    "chrome-devtools-mcp": "^1.6.0",
+    "puppeteer-core": "25.3.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": ">=0.80.10",

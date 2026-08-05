@@ -1,6 +1,6 @@
 {
   "name": "@amaster.ai/pi-memory",
-  "version": "0.1.2-beta.15",
+  "version": "0.1.2-beta.16",
   "description": "Pi extension providing persistent curated memory (MEMORY.md + USER.md) injected into the system prompt as a frozen snapshot.",
   "keywords": ["pi-package", "pi", "extension", "memory", "persistence"],
   "license": "Apache-2.0",

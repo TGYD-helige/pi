@@ -1,6 +1,6 @@
 {
   "name": "@amaster.ai/pi-web-access",
-  "version": "0.1.2-beta.15",
+  "version": "0.1.2-beta.16",
   "description": "Pi extension for web search (Tavily, Kimi, DeepSeek, Mimo, Z.AI) and URL content extraction",
   "keywords": [
     "pi-package",

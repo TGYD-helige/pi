@@ -12,6 +12,7 @@ pi-coding-agent extension that wraps [chrome-devtools-mcp](https://github.com/Ch
 - **Page-scoped routing** — routes page tools by explicit `pageId` instead of shared selected-page state
 - **Connection recovery** — detects closed or unhealthy MCP transports and reconnects before the next call
 - **Navigation safety** — supports URL allow/block patterns and redacts sensitive network headers by default
+- **Runtime read policy** — a managed browser can enforce exact top-level navigation, public-or-same-origin subresources, denied popups/downloads/new targets, and content-free observation receipts before requests leave Chrome
 - **Tool description augmentation** — adds usage hints for key tools (click, fill, press_key, etc.)
 - **Result post-processing** — strips embedded snapshots, detects overlay/stale element issues
 - **Optional visual analysis** — `browser_analyze_screenshot` via configurable vision model
@@ -132,6 +133,22 @@ npx @amaster.ai/pi-browser-use --config path/to/config.json
 | `blockedUrlPattern` | `string[]` | — | Block matching navigation and subresource URLPattern values |
 
 `allowedUrlPattern` and `blockedUrlPattern` are mutually exclusive. Page ID routing is disabled automatically in `slim` mode because upstream slim tools do not expose `pageId`.
+
+### Runtime-managed read policy
+
+Hosts may set `PI_BROWSER_USE_RUNTIME_READ_POLICY=required` and provide a
+`readPolicy` in the isolated agent settings. In that mode project settings are
+ignored, arbitrary browser endpoints/arguments are rejected, and the package
+owns the Chromium session so request interception and DNS-pinning policy are
+installed before navigation. Public policies require `sessionMode: "isolated"`;
+authenticated policies require `sessionMode: "existing"` plus an
+adapter-resolved `userDataDir`.
+
+The read-policy surface registers only list, navigate, snapshot, screenshot and
+wait tools. Top-level navigation must match a declared locator and origin;
+third-party subresources must resolve publicly, while an authenticated signed
+origin may resolve privately. Tool `details` contain only a
+`source_observation_v1` receipt when an observation profile is configured.
 
 ### Page-scoped Tool Calls
 

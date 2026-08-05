@@ -3,8 +3,12 @@ import { beforeEach, describe, expect, it, test, vi } from 'vitest';
 // --- Mocks ---
 
 const mockPrepareBrowserProfile = vi.hoisted(() => vi.fn());
+const mockStartBrowserReadSession = vi.hoisted(() => vi.fn(() => Promise.resolve(undefined)));
 
 vi.mock('../profile.js', () => ({ prepareBrowserProfile: mockPrepareBrowserProfile }));
+vi.mock('../browser-read-session.js', () => ({
+  startBrowserReadSession: mockStartBrowserReadSession,
+}));
 
 const mockListAllTools = vi.fn(() =>
   Promise.resolve([
@@ -149,6 +153,7 @@ async function shutdownExtension() {
 
 describe('browserUseExtension', () => {
   beforeEach(() => {
+    delete process.env.PI_BROWSER_USE_RUNTIME_READ_POLICY;
     registeredTools.clear();
     sessionStartHandlers.length = 0;
     sessionShutdownHandlers.length = 0;
@@ -160,6 +165,7 @@ describe('browserUseExtension', () => {
     mockComplete.mockClear();
     mockListAllTools.mockClear();
     mockPrepareBrowserProfile.mockClear();
+    mockStartBrowserReadSession.mockClear();
   });
 
   test('registers session_start and session_shutdown handlers', () => {
@@ -187,6 +193,13 @@ describe('browserUseExtension', () => {
       expect(mockPrepareBrowserProfile).toHaveBeenCalledWith(
         expect.objectContaining({ sessionMode: 'persistent', userDataDir: '/tmp/test-profile' }),
       );
+    });
+
+    it('fails closed when runtime read policy is required but absent', async () => {
+      process.env.PI_BROWSER_USE_RUNTIME_READ_POLICY = 'required';
+
+      await expect(startExtension()).rejects.toThrow('runtime browser read policy is required');
+      expect(mockConnect).not.toHaveBeenCalled();
     });
   });
 
@@ -349,6 +362,74 @@ describe('browserUseExtension', () => {
       };
 
       expect(result.content[0]!.text).toBe('Tool result');
+    });
+
+    it('rejects browser navigation outside the signed read policy before MCP', async () => {
+      await startExtension({
+        sessionMode: 'existing',
+        userDataDir: '/opaque/browser-profile',
+        readPolicy: {
+          version: 'browser_read_policy_v1',
+          accessMode: 'authenticated',
+          allowedTopLevelLocators: ['https://private.example/page'],
+          allowedTopLevelOrigins: ['https://private.example'],
+          subresources: 'public_or_same_origin',
+          privateCrossOriginSubresources: 'deny',
+          popups: 'deny',
+          downloads: 'deny',
+          newTargets: 'deny',
+        },
+      });
+      const navTool = registeredTools.get('browser_navigate_page')!;
+
+      await expect(
+        navTool.execute(
+          'call-1',
+          { type: 'url', url: 'https://other.example/' },
+          undefined,
+          undefined,
+          {},
+        ),
+      ).rejects.toThrow('outside the signed browser read scope');
+      expect(mockCallTool).not.toHaveBeenCalled();
+    });
+
+    it('attaches a content-free observation receipt to source read results', async () => {
+      mockCallTool.mockResolvedValueOnce({
+        content: [{ type: 'text', text: 'sensitive page snapshot' }],
+      });
+      await startExtension({
+        sessionMode: 'existing',
+        userDataDir: '/opaque/browser-profile',
+        readPolicy: {
+          version: 'browser_read_policy_v1',
+          accessMode: 'authenticated',
+          allowedTopLevelLocators: ['https://private.example/page'],
+          allowedTopLevelOrigins: ['https://private.example'],
+          subresources: 'public_or_same_origin',
+          privateCrossOriginSubresources: 'deny',
+          popups: 'deny',
+          downloads: 'deny',
+          newTargets: 'deny',
+          observation: { runId: 'run-1', retention: 'source_summary_only_v1' },
+        },
+      });
+      const snapshotTool = registeredTools.get('browser_take_snapshot')!;
+
+      const result = (await snapshotTool.execute(
+        'call-1',
+        { pageId: 1 },
+        undefined,
+        undefined,
+        {},
+      )) as { details: Record<string, unknown> };
+
+      expect(result.details).toMatchObject({
+        version: 'source_observation_v1',
+        runId: 'run-1',
+        toolName: 'browser_take_snapshot',
+      });
+      expect(JSON.stringify(result.details)).not.toContain('sensitive page snapshot');
     });
 
     test('strips embedded page snapshot from non-snapshot results', async () => {

@@ -1,6 +1,6 @@
 {
   "name": "@amaster.ai/pi-channels",
-  "version": "0.1.2-beta.15",
+  "version": "0.1.2-beta.16",
   "description": "Pi extension for native messaging channels including Feishu, DingTalk, WeCom, and webhooks.",
   "keywords": [
     "pi-package",

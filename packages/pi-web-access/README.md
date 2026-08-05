@@ -60,7 +60,7 @@ Search X (Twitter) for posts and social media content. Only registered when xai 
 
 Custom Kimi base URLs must support both `/chat/completions` and `/formulas/*`.
 
-**Fetch fallback** (when `fetch.provider` is not set): Jina Reader (`r.jina.ai`, free, JS-rendered) → local HTTP GET + turndown.
+**Fetch fallback** (when `fetch.provider` is not set): Jina Reader (`r.jina.ai`, free, JS-rendered) → local HTTP GET + turndown. A managed runtime can force `local_only` so neither a configured provider nor Jina is contacted.
 
 ## Configuration
 
@@ -110,11 +110,22 @@ environment interpolation.
 | Field | Description |
 |-------|-------------|
 | `provider` | Which provider to use for URL fetching. Not set = Jina Reader → local fallback. |
+| `mode` | `provider_jina_or_local` (default) or `local_only`. Runtime-managed callers should lock this with `PI_WEB_ACCESS_RUNTIME_FETCH_MODE`. |
 | `summary` | Model config for summarizing fetched content. |
 | `summary.provider` | Model provider name (resolved via pi model registry). |
 | `summary.model` | Model id. |
 
 If neither `fetch.provider` nor `fetch.summary` is configured, `web_fetch` is not registered.
+
+### Runtime-managed source reads
+
+`PI_WEB_ACCESS_RUNTIME_FETCH_MODE=local_only` is a hard runtime override: it
+ignores project settings and calls the pinned local safe-fetch path before any
+provider or Jina request. `PI_WEB_ACCESS_RUNTIME_OBSERVATION=required` likewise
+ignores project settings and requires an isolated agent setting with
+`fetch.observation.runId` and `retention: "source_summary_only_v1"`. Successful
+fetches then include a content-free `source_observation_v1` receipt in tool
+details; the fetched body remains only in the model-visible tool result.
 
 ### `providers`
 

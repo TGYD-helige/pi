@@ -1,6 +1,6 @@
 {
   "name": "@amaster.ai/pi-attachments",
-  "version": "0.1.2-beta.15",
+  "version": "0.1.2-beta.16",
   "description": "Pi extension for attachment processing — classifies, parses, and renders file attachments into LLM-visible prompt context",
   "keywords": ["pi-package", "pi", "extension", "attachments", "files", "documents"],
   "license": "Apache-2.0",

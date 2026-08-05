@@ -1,6 +1,6 @@
 {
   "name": "@amaster.ai/pi-teamwork",
-  "version": "0.1.2-beta.15",
+  "version": "0.1.2-beta.16",
   "description": "Pi extension for team collaboration and issue management via Multica",
   "keywords": ["pi-package", "pi", "extension", "teamwork", "issues", "project-management", "multica"],
   "license": "Apache-2.0",

@@ -1,6 +1,6 @@
 {
   "name": "@amaster.ai/pi-security",
-  "version": "0.1.2-beta.15",
+  "version": "0.1.2-beta.16",
   "description": "Pi extension for resource-aware security policy engine and tool authorization",
   "keywords": ["pi-package", "pi", "extension", "security", "policy", "authorization", "access-control"],
   "license": "Apache-2.0",

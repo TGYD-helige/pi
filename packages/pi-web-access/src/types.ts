@@ -33,6 +33,11 @@ export interface SearchConfig {
 }
 
 export interface FetchConfig {
+  mode?: 'provider_jina_or_local' | 'local_only';
+  observation?: {
+    runId: string;
+    retention: 'source_summary_only_v1';
+  };
   provider?: BuiltInProviderId;
   summary?: SummaryModelConfig;
 }

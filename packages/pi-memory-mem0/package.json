@@ -1,6 +1,6 @@
 {
   "name": "@amaster.ai/pi-memory-mem0",
-  "version": "0.1.2-beta.15",
+  "version": "0.1.2-beta.16",
   "description": "Explicit Mem0 semantic memory tools for pi — Platform cloud or local SQLite.",
   "keywords": ["pi-package", "pi", "extension", "memory", "mem0", "semantic-search", "sqlite"],
   "license": "Apache-2.0",

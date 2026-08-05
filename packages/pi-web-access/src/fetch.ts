@@ -97,6 +97,9 @@ export async function webFetch(
   lookup?: DnsLookup,
 ): Promise<FetchResponse> {
   const timeoutMs = settings.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  if (settings.fetch?.mode === 'local_only') {
+    return fetchLocal(params.url, timeoutMs, lookup);
+  }
   const resolved = resolveFetchProvider(settings);
   if (resolved) {
     if (lookup) await assertPublicHttpUrl(params.url, lookup);

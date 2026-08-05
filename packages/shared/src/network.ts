@@ -92,7 +92,7 @@ function isPublicIp(address: string): boolean {
  * Parse an outbound URL once using Node's WHATWG parser and require every DNS
  * answer to be globally routable. Call this again for every redirect target.
  */
-async function resolvePublicHttpUrl(
+export async function resolvePublicHttpUrl(
   value: string | URL,
   lookup: DnsLookup = defaultLookup,
 ): Promise<{ url: URL; addresses: Array<{ address: string; family: number }> }> {

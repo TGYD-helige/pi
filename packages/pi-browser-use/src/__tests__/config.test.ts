@@ -85,6 +85,104 @@ describe('configToArgs', () => {
     ).toThrow('allowedUrlPattern and blockedUrlPattern cannot be used together');
   });
 
+  it('requires isolated browser mode for public read policy', () => {
+    expect(() =>
+      resolveConfig({
+        sessionMode: 'existing',
+        readPolicy: {
+          version: 'browser_read_policy_v1',
+          accessMode: 'public',
+          allowedTopLevelLocators: ['https://example.com/'],
+          allowedTopLevelOrigins: ['https://example.com'],
+          subresources: 'public_or_same_origin',
+          privateCrossOriginSubresources: 'deny',
+          popups: 'deny',
+          downloads: 'deny',
+          newTargets: 'deny',
+        },
+      }),
+    ).toThrow('public browser read policy requires isolated session mode');
+  });
+
+  it('requires existing browser mode for authenticated read policy', () => {
+    expect(() =>
+      resolveConfig({
+        sessionMode: 'isolated',
+        readPolicy: {
+          version: 'browser_read_policy_v1',
+          accessMode: 'authenticated',
+          allowedTopLevelLocators: ['https://private.example/page'],
+          allowedTopLevelOrigins: ['https://private.example'],
+          subresources: 'public_or_same_origin',
+          privateCrossOriginSubresources: 'deny',
+          popups: 'deny',
+          downloads: 'deny',
+          newTargets: 'deny',
+        },
+      }),
+    ).toThrow('authenticated browser read policy requires existing session mode');
+  });
+
+  it('requires a package-managed ephemeral profile for public policy', () => {
+    expect(() =>
+      resolveConfig({
+        sessionMode: 'isolated',
+        userDataDir: '/tmp/not-ephemeral',
+        readPolicy: {
+          version: 'browser_read_policy_v1',
+          accessMode: 'public',
+          allowedTopLevelLocators: ['https://example.com/'],
+          allowedTopLevelOrigins: ['https://example.com'],
+          subresources: 'public_or_same_origin',
+          privateCrossOriginSubresources: 'deny',
+          popups: 'deny',
+          downloads: 'deny',
+          newTargets: 'deny',
+        },
+      }),
+    ).toThrow('ephemeral profile');
+  });
+
+  it('requires an adapter-resolved profile for authenticated policy', () => {
+    expect(() =>
+      resolveConfig({
+        sessionMode: 'existing',
+        readPolicy: {
+          version: 'browser_read_policy_v1',
+          accessMode: 'authenticated',
+          allowedTopLevelLocators: ['https://private.example/page'],
+          allowedTopLevelOrigins: ['https://private.example'],
+          subresources: 'public_or_same_origin',
+          privateCrossOriginSubresources: 'deny',
+          popups: 'deny',
+          downloads: 'deny',
+          newTargets: 'deny',
+        },
+      }),
+    ).toThrow('adapter-resolved profile');
+  });
+
+  it('rejects externally managed browser endpoints under read policy', () => {
+    expect(() =>
+      resolveConfig({
+        sessionMode: 'existing',
+        userDataDir: '/opaque/browser-profile',
+        browserUrl: 'http://127.0.0.1:9222',
+        readPolicy: {
+          version: 'browser_read_policy_v1',
+          accessMode: 'authenticated',
+          allowedTopLevelLocators: ['https://private.example/page'],
+          allowedTopLevelOrigins: ['https://private.example'],
+          subresources: 'public_or_same_origin',
+          privateCrossOriginSubresources: 'deny',
+          popups: 'deny',
+          downloads: 'deny',
+          newTargets: 'deny',
+        },
+      }),
+    ).toThrow('package-managed browser session');
+  });
+
   it('disables page ID routing automatically in slim mode', () => {
     expect(configToArgs({ slim: true })).not.toContain('--experimental-page-id-routing');
   });

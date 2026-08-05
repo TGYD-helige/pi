@@ -1,6 +1,6 @@
 {
   "name": "@amaster.ai/pi-computer-use",
-  "version": "0.1.2-beta.15",
+  "version": "0.1.2-beta.16",
   "description": "Cross-platform computer-use tools for Pi desktop automation",
   "keywords": ["pi-package", "pi", "extension", "computer-use", "desktop", "automation", "cua-driver", "mcp"],
   "license": "Apache-2.0",

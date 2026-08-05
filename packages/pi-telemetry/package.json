@@ -1,6 +1,6 @@
 {
   "name": "@amaster.ai/pi-telemetry",
-  "version": "0.1.2-beta.15",
+  "version": "0.1.2-beta.16",
   "description": "Pi extension for runtime telemetry with Langfuse and OpenTelemetry exporters",
   "keywords": ["pi-package", "pi", "extension", "telemetry", "observability", "langfuse", "opentelemetry", "tracing"],
   "license": "Apache-2.0",

@@ -480,5 +480,12 @@ export {
   assertPublicHttpUrl,
   type DnsLookup,
   readResponseBytes,
+  resolvePublicHttpUrl,
   safeFetch,
 } from './network.js';
+export {
+  createSourceObservationReceipt,
+  type SourceObservationInput,
+  type SourceObservationReceiptV1,
+  sanitizeObservationLocator,
+} from './source-observation.js';

@@ -153,6 +153,28 @@ describe('webFetch', () => {
     expect(mockFetch.mock.calls[1]![0]).toBe('https://example.com/');
   });
 
+  it('uses only the local safe fetch path in local_only mode', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers([['content-type', 'text/html']]),
+      text: async () =>
+        '<html><head><title>Private Page</title></head><body>Authenticated content</body></html>',
+    });
+
+    const result = await webFetch(
+      { url: 'https://example.com/private?token=secret' },
+      {
+        fetch: { mode: 'local_only', provider: 'zai' },
+        providers: { zai: { apiKey: 'configured-but-forbidden' } },
+      },
+      publicLookup,
+    );
+
+    expect(result.title).toBe('Private Page');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockFetch.mock.calls[0]![0]).toBe('https://example.com/private?token=secret');
+  });
+
   it('blocks loopback URLs before either fetch path runs', async () => {
     const { safeFetch } =
       await vi.importActual<typeof import('@amaster.ai/pi-shared')>('@amaster.ai/pi-shared');

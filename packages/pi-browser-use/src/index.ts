@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
+import { createSourceObservationReceipt } from '@amaster.ai/pi-shared';
 import {
   isProjectTrusted,
   loadPiSettings,
@@ -17,7 +18,9 @@ import {
   VISUAL_SYSTEM_PROMPT,
   type VisionCaller,
 } from './analyze-screenshot.js';
+import { type BrowserReadSession, startBrowserReadSession } from './browser-read-session.js';
 import {
+  type BrowserReadPolicyV1,
   type BrowserSessionMode,
   type BrowserUseConfig,
   configToArgs,
@@ -25,13 +28,15 @@ import {
   type VisionModelConfig,
 } from './config.js';
 import { prepareBrowserProfile } from './profile.js';
+import { assertBrowserReadNavigation } from './read-policy.js';
 import {
   augmentToolDescription,
   extractTextContent,
   postProcessToolResult,
 } from './tool-augment.js';
 
-export type { BrowserSessionMode, BrowserUseConfig, VisionModelConfig };
+export { assertBrowserReadNavigation, assertBrowserReadSubresource } from './read-policy.js';
+export type { BrowserReadPolicyV1, BrowserSessionMode, BrowserUseConfig, VisionModelConfig };
 export { configToArgs, resolveConfig };
 
 // All upstream tools are re-exported with this prefix to avoid name collisions with other extensions.
@@ -50,6 +55,13 @@ const EXCLUDED_TOOLS = new Set([
   'reload_extension',
   'trigger_extension_action',
   'uninstall_extension',
+]);
+const READ_POLICY_TOOLS = new Set([
+  'list_pages',
+  'navigate_page',
+  'take_snapshot',
+  'take_screenshot',
+  'wait_for',
 ]);
 
 const MCP_TIMEOUT_MS = 60_000;
@@ -338,9 +350,17 @@ export class DevToolsClient {
 
 /** Read pi-browser-use settings, including the project layer only when trusted. */
 function loadConfigFromFile(options?: PiSettingsOptions): BrowserUseConfig {
-  return loadPiSettings<BrowserUseConfig>('pi-browser-use', {
-    ...options,
-  });
+  const runtimePolicy = process.env.PI_BROWSER_USE_RUNTIME_READ_POLICY;
+  if (runtimePolicy !== undefined && runtimePolicy !== 'required') {
+    throw new Error('PI_BROWSER_USE_RUNTIME_READ_POLICY is invalid.');
+  }
+  const settingsOptions: PiSettingsOptions = { ...options };
+  if (runtimePolicy === 'required') settingsOptions.projectTrusted = false;
+  const config = loadPiSettings<BrowserUseConfig>('pi-browser-use', settingsOptions);
+  if (runtimePolicy === 'required' && !config.readPolicy) {
+    throw new Error('A runtime browser read policy is required.');
+  }
+  return config;
 }
 
 /** Convert upstream MCP result into pi-agent content, applying text post-processing. */
@@ -406,6 +426,7 @@ function toToolContent(
 export default function browserUseExtension(pi: ExtensionAPI): void {
   let config: BrowserUseConfig | undefined;
   let client: DevToolsClient | undefined;
+  let readSession: BrowserReadSession | undefined;
 
   async function ensureConnected(signal?: AbortSignal): Promise<void> {
     if (!client) throw new Error('browser-use: session not started');
@@ -418,6 +439,7 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
 
     for (const tool of upstreamTools) {
       if (EXCLUDED_TOOLS.has(tool.name)) continue;
+      if (config?.readPolicy && !READ_POLICY_TOOLS.has(tool.name)) continue;
 
       const prefixedName = `${TOOL_PREFIX}${tool.name}`;
       const originalName = tool.name;
@@ -439,10 +461,42 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
           _onUpdate: unknown,
           _ctx: ExtensionContext,
         ) {
+          if (config?.readPolicy && originalName === 'navigate_page') {
+            if (
+              params.type !== 'url' ||
+              typeof params.url !== 'string' ||
+              params.initScript !== undefined ||
+              params.handleBeforeUnload !== undefined
+            ) {
+              throw new Error('Browser read policy allows only explicit URL navigation.');
+            }
+            await assertBrowserReadNavigation(params.url, config.readPolicy);
+          }
           await ensureConnected(signal);
           const result = await client!.callTool(originalName, params, signal);
           const toolContent = toToolContent(result, originalName);
-          return { ...toolContent, details: undefined };
+          const observation = config?.readPolicy?.observation;
+          const locator =
+            typeof params.url === 'string'
+              ? params.url
+              : (config?.readPolicy?.allowedTopLevelLocators[0] ?? '[browser-page]');
+          const rawContent = (result.content ?? [])
+            .map((item) => item.text ?? item.data ?? '')
+            .join('');
+          const details = observation
+            ? createSourceObservationReceipt({
+                runId: observation.runId,
+                toolName: prefixedName,
+                requestedLocator: locator,
+                finalLocator: locator,
+                mediaType: result.content?.some((item) => item.type === 'image')
+                  ? 'image/png'
+                  : 'text/plain',
+                content: rawContent,
+                truncated: false,
+              })
+            : undefined;
+          return { ...toolContent, details };
         },
       });
     }
@@ -571,10 +625,19 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
       }),
     );
     prepareBrowserProfile(config);
-    client = new DevToolsClient(config);
-    await registerUpstreamTools();
-    if (config.visionModel) {
-      await registerVisionTool(config.visionModel);
+    try {
+      readSession = await startBrowserReadSession(config);
+      client = new DevToolsClient(readSession?.mcpConfig ?? config);
+      await registerUpstreamTools();
+      if (config.visionModel) {
+        await registerVisionTool(config.visionModel);
+      }
+    } catch (error) {
+      await client?.close().catch(() => {});
+      client = undefined;
+      await readSession?.close().catch(() => {});
+      readSession = undefined;
+      throw error;
     }
   });
 
@@ -582,6 +645,10 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
     if (client) {
       await client.close();
       client = undefined;
+    }
+    if (readSession) {
+      await readSession.close();
+      readSession = undefined;
     }
   });
 }

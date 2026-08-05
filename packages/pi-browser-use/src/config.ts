@@ -9,6 +9,22 @@ export interface VisionModelConfig {
 
 export type BrowserSessionMode = 'persistent' | 'isolated' | 'existing';
 
+export type BrowserReadPolicyV1 = {
+  version: 'browser_read_policy_v1';
+  accessMode: 'public' | 'authenticated';
+  allowedTopLevelLocators: string[];
+  allowedTopLevelOrigins: string[];
+  subresources: 'public_or_same_origin';
+  privateCrossOriginSubresources: 'deny';
+  popups: 'deny';
+  downloads: 'deny';
+  newTargets: 'deny';
+  observation?: {
+    runId: string;
+    retention: 'source_summary_only_v1';
+  };
+};
+
 /** Configuration for the chrome-devtools-mcp upstream process. */
 export interface BrowserUseConfig {
   sessionMode?: BrowserSessionMode;
@@ -41,6 +57,7 @@ export interface BrowserUseConfig {
   acceptInsecureCerts?: boolean;
   allowedUrlPattern?: string[];
   blockedUrlPattern?: string[];
+  readPolicy?: BrowserReadPolicyV1;
 
   slim?: boolean;
   extraArgs?: string[];
@@ -72,6 +89,33 @@ export function resolveConfig(config?: BrowserUseConfig): BrowserUseConfig {
     throw new Error('allowedUrlPattern and blockedUrlPattern cannot be used together');
   }
 
+  if (resolved.readPolicy) {
+    if (resolved.readPolicy.accessMode === 'public' && resolved.sessionMode !== 'isolated') {
+      throw new Error('public browser read policy requires isolated session mode');
+    }
+    if (resolved.readPolicy.accessMode === 'authenticated' && resolved.sessionMode !== 'existing') {
+      throw new Error('authenticated browser read policy requires existing session mode');
+    }
+    if (resolved.allowedUrlPattern?.length || resolved.blockedUrlPattern?.length) {
+      throw new Error('browser read policy owns URL filtering configuration');
+    }
+    if (
+      resolved.browserUrl ||
+      resolved.wsEndpoint ||
+      resolved.wsHeaders ||
+      resolved.autoConnect ||
+      resolved.extraArgs?.length
+    ) {
+      throw new Error('browser read policy requires a package-managed browser session');
+    }
+    if (resolved.readPolicy.accessMode === 'public' && resolved.userDataDir) {
+      throw new Error('public browser read policy requires an ephemeral profile');
+    }
+    if (resolved.readPolicy.accessMode === 'authenticated' && !resolved.userDataDir) {
+      throw new Error('authenticated browser read policy requires an adapter-resolved profile');
+    }
+  }
+
   if (resolved.slim) {
     if (config?.experimentalPageIdRouting === true) {
       throw new Error('experimentalPageIdRouting cannot be used with slim mode');
@@ -81,7 +125,12 @@ export function resolveConfig(config?: BrowserUseConfig): BrowserUseConfig {
 
   switch (resolved.sessionMode) {
     case 'existing':
-      if (!resolved.autoConnect && !resolved.browserUrl && !resolved.wsEndpoint) {
+      if (
+        !resolved.readPolicy &&
+        !resolved.autoConnect &&
+        !resolved.browserUrl &&
+        !resolved.wsEndpoint
+      ) {
         resolved.autoConnect = true;
       }
       break;

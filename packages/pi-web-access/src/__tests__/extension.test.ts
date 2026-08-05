@@ -1,6 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import piWebToolExtension from '../index.js';
 
+const mockWebFetch = vi.hoisted(() =>
+  vi.fn(async ({ url }: { url: string }) => ({
+    url,
+    title: 'Private Page',
+    content: 'sensitive source body',
+  })),
+);
+
+vi.mock('../fetch.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../fetch.js')>()),
+  webFetch: mockWebFetch,
+}));
+
 vi.mock('../config.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../config.js')>();
   return {
@@ -14,7 +27,10 @@ import { loadWebToolSettings } from '../config.js';
 const mockLoadSettings = vi.mocked(loadWebToolSettings);
 
 function createMockPi() {
-  const tools: Array<{ name: string }> = [];
+  const tools: Array<{
+    name: string;
+    execute?: (...args: any[]) => Promise<unknown>;
+  }> = [];
   // biome-ignore lint/complexity/noBannedTypes: mock helper
   const listeners: Record<string, Function> = {};
   return {
@@ -86,6 +102,37 @@ describe('piWebToolExtension - tool registration', () => {
     await pi.triggerSessionStart();
 
     expect(pi.tools.map((t) => t.name)).toContain('web_fetch');
+  });
+
+  it('returns a content-free observation receipt for source retention mode', async () => {
+    mockLoadSettings.mockReturnValue({
+      fetch: {
+        mode: 'local_only',
+        provider: 'zai',
+        observation: { runId: 'run-1', retention: 'source_summary_only_v1' },
+      },
+      providers: { zai: { apiKey: 'configured' } },
+    });
+
+    const pi = createMockPi();
+    piWebToolExtension(pi as any);
+    await pi.triggerSessionStart();
+    const fetchTool = pi.tools.find((tool) => tool.name === 'web_fetch')!;
+    const result = (await fetchTool.execute!(
+      'call-1',
+      { url: 'https://example.com/private?token=secret', prompt: 'summarize' },
+      undefined,
+      undefined,
+      {},
+    )) as { details: Record<string, unknown> };
+
+    expect(result.details).toMatchObject({
+      version: 'source_observation_v1',
+      runId: 'run-1',
+      toolName: 'web_fetch',
+      requestedLocator: 'https://example.com/private',
+    });
+    expect(JSON.stringify(result.details)).not.toContain('secret');
   });
 
   it('registers web_fetch when fetch.summary is configured (no fetch.provider)', async () => {

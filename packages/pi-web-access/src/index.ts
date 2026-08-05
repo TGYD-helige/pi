@@ -1,3 +1,4 @@
+import { createSourceObservationReceipt } from '@amaster.ai/pi-shared';
 import { isProjectTrusted } from '@amaster.ai/pi-shared/settings';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
@@ -177,7 +178,19 @@ export default function piWebToolExtension(pi: ExtensionAPI): void {
           lines.push(content);
 
           const text = lines.join('\n');
-          return { content: [{ type: 'text' as const, text }], details: undefined };
+          const observation = settings.fetch?.observation;
+          const details = observation
+            ? createSourceObservationReceipt({
+                runId: observation.runId,
+                toolName: 'web_fetch',
+                requestedLocator: fetchParams.url,
+                finalLocator: result.url,
+                mediaType: 'text/markdown',
+                content: result.content,
+                truncated: false,
+              })
+            : undefined;
+          return { content: [{ type: 'text' as const, text }], details };
         },
       });
     }

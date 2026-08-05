@@ -1,6 +1,6 @@
 {
   "name": "@amaster.ai/pi-image-gen",
-  "version": "0.1.2-beta.15",
+  "version": "0.1.2-beta.16",
   "description": "Pi extension for image generation via OpenAI gpt-image, Google Nano Banana (Gemini), Alibaba Qwen-Image, OpenRouter, and custom providers.",
   "keywords": [
     "pi-package",

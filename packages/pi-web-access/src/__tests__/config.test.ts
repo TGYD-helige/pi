@@ -1,5 +1,13 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { resolveFetchProvider, resolveProvider, resolveSearchProvider } from '../config.js';
+import {
+  loadWebToolSettings,
+  resolveFetchProvider,
+  resolveProvider,
+  resolveSearchProvider,
+} from '../config.js';
 import type { WebToolSettings } from '../types.js';
 
 describe('resolveProvider', () => {
@@ -355,5 +363,56 @@ describe('resolveFetchProvider', () => {
     const result = resolveFetchProvider(settings);
     expect(result).not.toBeNull();
     expect(result!.id).toBe('firecrawl');
+  });
+});
+
+describe('loadWebToolSettings', () => {
+  let originalEnv: NodeJS.ProcessEnv;
+  let root: string;
+
+  beforeEach(() => {
+    originalEnv = { ...process.env };
+    root = mkdtempSync(join(tmpdir(), 'pi-web-access-config-'));
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('locks local_only mode after trusted project settings are merged', () => {
+    const configDir = join(root, 'agent');
+    const cwd = join(root, 'project');
+    mkdirSync(configDir, { recursive: true });
+    mkdirSync(join(cwd, '.pi'), { recursive: true });
+    writeFileSync(
+      join(configDir, 'settings.json'),
+      JSON.stringify({
+        'pi-web-access': {
+          fetch: {
+            mode: 'local_only',
+            observation: { runId: 'run-1', retention: 'source_summary_only_v1' },
+          },
+        },
+      }),
+    );
+    writeFileSync(
+      join(cwd, '.pi', 'settings.json'),
+      JSON.stringify({
+        'pi-web-access': {
+          fetch: { mode: 'provider_jina_or_local', provider: 'zai' },
+          providers: { zai: { apiKey: 'project-key' } },
+        },
+      }),
+    );
+    process.env.PI_CODING_AGENT_DIR = configDir;
+    process.env.PI_WEB_ACCESS_RUNTIME_FETCH_MODE = 'local_only';
+    process.env.PI_WEB_ACCESS_RUNTIME_OBSERVATION = 'required';
+
+    expect(loadWebToolSettings(cwd, true).fetch).toMatchObject({
+      mode: 'local_only',
+      observation: { runId: 'run-1', retention: 'source_summary_only_v1' },
+    });
+    expect(loadWebToolSettings(cwd, true).fetch?.provider).toBeUndefined();
   });
 });

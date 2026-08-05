@@ -20,8 +20,8 @@ product-specific UI.
 | Extension | `@amaster.ai/pi-telemetry` | Runtime telemetry with Langfuse and OpenTelemetry exporters. |
 | Extension | `@amaster.ai/pi-task-scheduler` | Cron-based scheduled task management with LLM-callable tools. |
 | Extension | `@amaster.ai/pi-goal` | Derives a goal from the conversation and keeps the agent working until the condition is met, with iteration/token backstops. |
-| Extension | `@amaster.ai/pi-browser-use` | Browser automation wrapping chrome-devtools-mcp with `browser_`-prefixed tools. |
-| Extension | `@amaster.ai/pi-web-access` | Web search and URL content extraction across configurable providers. |
+| Extension | `@amaster.ai/pi-browser-use` | Browser automation wrapping chrome-devtools-mcp, including an optional runtime-enforced read policy. |
+| Extension | `@amaster.ai/pi-web-access` | Web search and URL extraction with provider/Jina/local or hard local-only fetch modes. |
 | Extension | `@amaster.ai/pi-computer-use` | Cross-platform computer-use tools for desktop automation. |
 | Extension | `@amaster.ai/pi-channels` | Native messaging channels: Feishu, WeCom, and webhooks. |
 | Extension | `@amaster.ai/pi-memory` | Persistent curated memory (`MEMORY.md` + `USER.md`) injected into the system prompt as a refreshed prompt snapshot. |
