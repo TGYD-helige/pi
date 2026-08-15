@@ -121,6 +121,43 @@ export type ResolvedModel = {
   provider: ResolvedProvider;
 };
 
+/** A film-level character whose description is inlined into shot prompts on demand. */
+export type PromptCharacter = {
+  id: string;
+  /** Static + dynamic appearance (face, hair, build, outfit). */
+  description: string;
+};
+
+/**
+ * Per-shot prompt fields. Content is authored by the caller (skill/LLM);
+ * assembly into the provider string is mechanical (see prompt.ts).
+ */
+export type ShotPrompt = {
+  /** Setting of the shot. Required when no first frame anchors the visuals. */
+  scene?: string | undefined;
+  /** Camera, framing, composition ("Static camera, medium close-up, …"). */
+  visuals: string;
+  /** In-frame action/movement. */
+  action: string;
+  /** Time-varying visuals a static frame cannot carry: transformations, lighting shifts, particles, mood. */
+  effects?: string | undefined;
+  /** Audio cues, e.g. "[Sound Effect] rain; [Speaker] Alice (soft): line". */
+  audio?: string | undefined;
+  /** Ids of film-level characters appearing in this shot. */
+  visibleCharacters?: string[] | undefined;
+};
+
+/** Film-level prompt fields shared across shots. */
+export type FilmPrompt = {
+  /** Overall look: genre, quality, render texture ("cinematic, 8K, film grain"). */
+  style?: string | undefined;
+  characters?: PromptCharacter[] | undefined;
+  /** Consistency directive ("Face, hair and outfit stay identical, no morphing or drift"). */
+  consistency?: string | undefined;
+  /** Negative directive ("no text, watermarks, or subtitles"). */
+  negative?: string | undefined;
+};
+
 export type GenerateVideoParams = {
   prompt: string;
   /** Stable orchestration identity for provider idempotency/recovery keys. */

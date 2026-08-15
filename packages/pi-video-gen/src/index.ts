@@ -45,6 +45,7 @@ import {
   singleJobDir,
   writeJsonAtomic,
 } from './jobs/store.js';
+import { assemblePrompt, validateFilmPrompt, validateShotPrompt } from './prompt.js';
 import { arkAdapter } from './providers/ark.js';
 import { dashscopeAdapter } from './providers/dashscope.js';
 import { klingAdapter } from './providers/kling.js';
@@ -57,9 +58,11 @@ import { runRender } from './render.js';
 import { hasCjkFont } from './text-layer.js';
 import { runTimeline } from './timeline-render.js';
 import type {
+  FilmPrompt,
   GenerateVideoParams,
   RemoteTaskHandle,
   ResolvedProvider,
+  ShotPrompt,
   VideoApiStyle,
   VideoGenSettings,
   VideoModelCapabilities,
@@ -118,13 +121,100 @@ function boundDetails(details: Record<string, unknown>): Record<string, unknown>
   }
 }
 
+/**
+ * Parse `--key value` / `--key "quoted value"` flags for `/video-gen generate`.
+ * Quoted values may escape their delimiter quote (and backslash) with `\`.
+ */
+function parseGenerateFlags(text: string): { flags: Record<string, string> } | { error: string } {
+  const flags: Record<string, string> = {};
+  const re = /--([a-z][a-z-]*)\s+("((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|(\S+))/g;
+  let covered = 0;
+  for (let m = re.exec(text); m !== null; m = re.exec(text)) {
+    const gap = text.slice(covered, m.index).trim();
+    if (gap !== '') {
+      return { error: `Unrecognized text "${gap}" — use --key "value" flags.` };
+    }
+    const quoted = m[3] ?? m[4];
+    flags[m[1]!] = quoted !== undefined ? quoted.replace(/\\(["'\\])/g, '$1') : (m[5] ?? '');
+    covered = m.index + m[0].length;
+  }
+  const tail = text.slice(covered).trim();
+  if (tail !== '') {
+    return { error: `Unrecognized text "${tail}" — use --key "value" flags.` };
+  }
+  return { flags };
+}
+
 /** Capability-driven schema for video_generate (mirrors pi-image-gen's approach). */
 function buildGenerateParams(caps: VideoModelCapabilities | null) {
   return Type.Object({
-    prompt: Type.String({
-      description:
-        'Text prompt for the clip. Describe subject, motion, and camera. When the active model has nativeAudio, append audio cues (e.g. "[Sound Effect] rain; [Speaker] Alice (soft): line").',
-    }),
+    prompt: Type.Optional(
+      Type.Object(
+        {
+          scene: Type.Optional(
+            Type.String({
+              description:
+                'Setting of the clip. REQUIRED when no firstFrame is passed (text-to-video).',
+            }),
+          ),
+          visuals: Type.String({
+            description:
+              'Camera, framing, composition (e.g. "Slow push-in from medium shot to close-up, shallow depth of field").',
+          }),
+          action: Type.String({ description: 'In-frame action/movement.' }),
+          effects: Type.Optional(
+            Type.String({
+              description:
+                'Time-varying visuals a static frame cannot carry: transformations, lighting shifts, particles, atmosphere.',
+            }),
+          ),
+          audio: Type.Optional(
+            Type.String({
+              description:
+                'Audio cues when the active model has nativeAudio (e.g. "[Sound Effect] rain; [Speaker] Alice (soft): line").',
+            }),
+          ),
+          visibleCharacters: Type.Optional(
+            Type.Array(Type.String(), {
+              description: 'Ids of characters (from the characters param) appearing in this clip.',
+            }),
+          ),
+        },
+        {
+          description:
+            'Structured per-shot prompt. Fields are assembled into labeled sections ([Scene]/[Visuals]/[Action]/[Effects]/[Audio]) — write content, not a pre-joined string. Required for a fresh generation; omit when resuming an interrupted job via jobId.',
+        },
+      ),
+    ),
+    style: Type.Optional(
+      Type.String({
+        description:
+          'Film-level look: genre, quality, render texture (e.g. "cinematic, 8K, shallow DoF, film grain"). REQUIRED when no firstFrame is passed.',
+      }),
+    ),
+    characters: Type.Optional(
+      Type.Array(
+        Type.Object({
+          id: Type.String(),
+          description: Type.String({ description: 'Appearance + outfit.' }),
+        }),
+        {
+          description:
+            'Reusable character registry; shots inline a character via prompt.visibleCharacters.',
+        },
+      ),
+    ),
+    consistency: Type.Optional(
+      Type.String({
+        description:
+          'Consistency directive appended to the prompt (e.g. "Face, hair and outfit stay identical throughout, no morphing or drift").',
+      }),
+    ),
+    negative: Type.Optional(
+      Type.String({
+        description: 'Negative directive (e.g. "no text, watermarks, or subtitles").',
+      }),
+    ),
     firstFrame: Type.Optional(
       Type.String({
         description:
@@ -216,8 +306,9 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
   };
 
   /** Tool-facing params (LLM names) — mapped explicitly to the internal shape. */
-  type GenerateToolParams = {
-    prompt: string;
+  type GenerateToolParams = FilmPrompt & {
+    /** Required for a fresh generation; unused on resume (jobId). */
+    prompt?: ShotPrompt | undefined;
     firstFrame?: string | undefined;
     lastFrame?: string | undefined;
     referenceImages?: string[] | undefined;
@@ -255,21 +346,26 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
         ).message,
       );
     }
-    // Map tool params → internal params, applying model defaults. (A raw cast
-    // here silently DROPPED firstFrame/lastFrame and defaulted resolution,
-    // duration, ratio and audio — turning paid requests into silent t2v.)
-    const params: GenerateVideoParams = {
-      prompt: toolParams.prompt,
-      firstFramePath: toolParams.firstFrame ? resolve(ctx.cwd, toolParams.firstFrame) : undefined,
-      lastFramePath: toolParams.lastFrame ? resolve(ctx.cwd, toolParams.lastFrame) : undefined,
-      referenceImagePaths: toolParams.referenceImages?.map((p) => resolve(ctx.cwd, p)),
-      durationSec: toolParams.durationSec ?? resolved.entry.defaultDurationSec,
-      aspectRatio: toolParams.aspectRatio ?? resolved.entry.defaultAspectRatio,
-      resolution: resolved.entry.defaultResolution,
-      generateAudio: caps.nativeAudio,
-    };
-
-    if (toolParams.lastFrame && !caps.supportsFirstLastFrame) {
+    // Trim-normalized once — validation, capability checks and the submit
+    // mapping must all agree on whether a frame is present.
+    const firstFrame = toolParams.firstFrame?.trim();
+    const lastFrame = toolParams.lastFrame?.trim();
+    // Structured prompt validation happens only on fresh submits — the resume
+    // path (jobId) re-polls a frozen request and never re-reads the prompt.
+    if (!toolParams.jobId) {
+      const promptError =
+        validateFilmPrompt(toolParams, 'video_generate') ??
+        validateShotPrompt(
+          toolParams,
+          toolParams.prompt,
+          { hasFirstFrame: !!firstFrame },
+          'prompt',
+        );
+      if (promptError) {
+        return errResult(promptError);
+      }
+    }
+    if (lastFrame && !caps.supportsFirstLastFrame) {
       return errResult(
         `The active model (${resolved.entry.id}) does not support last-frame interpolation. Remove lastFrame, or switch models (/video-gen models).`,
       );
@@ -295,9 +391,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
       );
     }
     const totalRefs =
-      (toolParams.firstFrame ? 1 : 0) +
-      (toolParams.lastFrame ? 1 : 0) +
-      (toolParams.referenceImages?.length ?? 0);
+      (firstFrame ? 1 : 0) + (lastFrame ? 1 : 0) + (toolParams.referenceImages?.length ?? 0);
     if (totalRefs > caps.maxReferenceImages) {
       return errResult(
         `Too many reference images (${totalRefs}) — ${resolved.entry.id} accepts at most ${caps.maxReferenceImages} total (frames + references).`,
@@ -410,6 +504,21 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
 
     const jobId = newJobId('gen');
     const jobDir = ensureSingleJobDir(outputDir, jobId);
+    // Map tool params → internal params, applying model defaults. (A raw cast
+    // here silently DROPPED firstFrame/lastFrame and defaulted resolution,
+    // duration, ratio and audio — turning paid requests into silent t2v.)
+    const params: GenerateVideoParams = {
+      // prompt is present here: fresh submits were validated above, and the
+      // resume branch (jobId) has already returned.
+      prompt: assemblePrompt(toolParams, toolParams.prompt!),
+      firstFramePath: firstFrame ? resolve(ctx.cwd, firstFrame) : undefined,
+      lastFramePath: lastFrame ? resolve(ctx.cwd, lastFrame) : undefined,
+      referenceImagePaths: toolParams.referenceImages?.map((p) => resolve(ctx.cwd, p)),
+      durationSec: toolParams.durationSec ?? resolved.entry.defaultDurationSec,
+      aspectRatio: toolParams.aspectRatio ?? resolved.entry.defaultAspectRatio,
+      resolution: resolved.entry.defaultResolution,
+      generateAudio: caps.nativeAudio,
+    };
     params.requestId = jobId;
     const release = activeJobs.acquire(jobDir);
     try {
@@ -756,24 +865,21 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
       name: 'video_generate',
       label: 'Generate Video Clip',
       description:
-        'Generate a single short video clip (one shot) from a text prompt, optionally anchored by first/last frame images. Paid, slow (minutes per clip). For multi-shot videos, use the video-gen skill workflow instead of calling this repeatedly.',
+        'Generate a single short video clip (one shot) from a structured prompt (style/scene/visuals/action/effects/audio), optionally anchored by first/last frame images. Paid, slow (minutes per clip). For multi-shot videos, use the video-gen skill workflow instead of calling this repeatedly.',
       parameters: buildGenerateParams(caps),
-      promptSnippet: 'Generate one short video clip (paid, minutes) via the active video model',
+      promptSnippet:
+        'Generate one short video clip (paid, minutes) from a structured prompt via the active video model',
       promptGuidelines: [
         "Before composing prompts for a video task, call video_capabilities to learn the active model's duration range, aspect ratios, audio support, and first/last-frame support — do not assume.",
+        'Fill the structured prompt fields; never a pre-joined string. visuals + action are always required; style + scene are required when no firstFrame anchors the clip; use effects for transformations or lighting shifts a static frame cannot carry.',
         'Video generation is paid and slow. State the expected clip count and duration to the user and get explicit confirmation before the first call.',
         'Only pass lastFrame when the user needs first+last-frame interpolation and the active model supports it.',
-        'If a call is interrupted, resume with the returned jobId instead of submitting a new task (avoids double billing).',
+        'If a call is interrupted, resume with the returned jobId instead of submitting a new task (avoids double billing); prompt is not needed on resume.',
         'If submit is reported as ambiguous, do not start another generation until the provider console confirms that no paid task exists.',
       ],
       async execute(_toolCallId, params, signal, onUpdate, ctx) {
         try {
-          return await runGenerate(
-            params as GenerateVideoParams & { jobId?: string },
-            ctx,
-            signal,
-            onUpdate,
-          );
+          return await runGenerate(params as GenerateToolParams, ctx, signal, onUpdate);
         } catch (error) {
           console.error(`[pi-video-gen] video_generate failed: ${toLogSummary(error)}`);
           return errResult(errorMessageForUser(error));
@@ -830,6 +936,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
       promptGuidelines: [
         'Call ONLY after the user explicitly confirmed rendering: frames ready, shot count and cost magnitude stated.',
         'Generate all frames first via image_generate (pi-image-gen) and record their returned absolute paths in the render spec.',
+        'render-input.json carries structured prompts: film-level style/characters/consistency/negative, per-shot prompt.{scene,visuals,action,effects,audio,visibleCharacters} — the plugin assembles the labeled prompt text; never pre-join a prompt string.',
         'The spec is immutable per job directory: rerunning the same path resumes identical input; revisions go in a NEW job directory.',
         'Interrupting stops locally only — remote tasks may keep billing; rerun the same spec path to resume after they finish.',
       ],
@@ -863,18 +970,68 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
 
   pi.registerCommand('video-gen', {
     description:
-      'pi-video-gen: /video-gen [generate <prompt>|render <spec>|compose <spec>|recover <jobId>|models|reload|doctor]',
+      'pi-video-gen: /video-gen [generate --visuals ".." --action ".." [--style .. --scene ..]|render <spec>|compose <spec>|recover <jobId>|models|reload|doctor]',
     handler: async (args: string | undefined, ctx: ExtensionContext) => {
       const tokens = (args ?? '').trim().split(/\s+/).filter(Boolean);
       const sub = tokens[0];
 
       if (sub === 'generate') {
-        const prompt = tokens.slice(1).join(' ').trim();
-        if (!prompt) {
-          ctx.ui.notify('Usage: /video-gen generate <prompt>', 'error');
+        const parsed = parseGenerateFlags((args ?? '').trim().slice('generate'.length));
+        if ('error' in parsed || Object.keys(parsed.flags).length === 0) {
+          ctx.ui.notify(
+            `${'error' in parsed ? `${parsed.error} ` : ''}Usage: /video-gen generate --visuals "..." --action "..." [--style "..."] [--scene "..."] [--effects "..."] [--audio "..."] [--consistency "..."] [--negative "..."] [--first-frame <path>] [--last-frame <path>] [--duration <sec>] [--ratio <ratio>]`,
+            'error',
+          );
           return;
         }
-        const result = await runGenerate({ prompt }, ctx, ctx.signal);
+        const f = parsed.flags;
+        const known = new Set([
+          'style',
+          'scene',
+          'visuals',
+          'action',
+          'effects',
+          'audio',
+          'consistency',
+          'negative',
+          'first-frame',
+          'last-frame',
+          'duration',
+          'ratio',
+        ]);
+        const unknown = Object.keys(f).filter((k) => !known.has(k));
+        if (unknown.length > 0) {
+          ctx.ui.notify(`Unknown flag(s): ${unknown.map((k) => `--${k}`).join(', ')}.`, 'error');
+          return;
+        }
+        const durationSec = f.duration !== undefined ? Number(f.duration) : undefined;
+        if (durationSec !== undefined && !Number.isInteger(durationSec)) {
+          ctx.ui.notify(
+            `--duration must be an integer number of seconds (got "${f.duration}").`,
+            'error',
+          );
+          return;
+        }
+        const result = await runGenerate(
+          {
+            style: f.style,
+            consistency: f.consistency,
+            negative: f.negative,
+            prompt: {
+              scene: f.scene,
+              visuals: f.visuals ?? '',
+              action: f.action ?? '',
+              effects: f.effects,
+              audio: f.audio,
+            },
+            firstFrame: f['first-frame'],
+            lastFrame: f['last-frame'],
+            durationSec,
+            aspectRatio: f.ratio,
+          },
+          ctx,
+          ctx.signal,
+        );
         ctx.ui.notify(result.content[0]!.text, result.isError ? 'error' : 'info');
         return;
       }
@@ -1072,7 +1229,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
       }
 
       ctx.ui.notify(
-        'pi-video-gen commands:\n  /video-gen generate <prompt>  Generate a single clip\n  /video-gen render <spec>      Render a multi-shot video\n  /video-gen compose <spec>     Concat clips or render an image/TTS timeline\n  /video-gen recover <jobId>    Resolve ambiguous shots (reset/adopt)\n  /video-gen models             List registered models\n  /video-gen reload             Reload settings\n  /video-gen doctor             Check environment (ffmpeg, CJK fonts, keys, image_generate, output dir)',
+        'pi-video-gen commands:\n  /video-gen generate --visuals ".." --action ".." [--style ".." --scene ".."]  Generate a single clip\n  /video-gen render <spec>      Render a multi-shot video\n  /video-gen compose <spec>     Concat clips or render an image/TTS timeline\n  /video-gen recover <jobId>    Resolve ambiguous shots (reset/adopt)\n  /video-gen models             List registered models\n  /video-gen reload             Reload settings\n  /video-gen doctor             Check environment (ffmpeg, CJK fonts, keys, image_generate, output dir)',
         'info',
       );
     },

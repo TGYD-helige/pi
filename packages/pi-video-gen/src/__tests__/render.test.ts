@@ -126,7 +126,14 @@ describe('runRender', () => {
     const frame = makeFrame(cwd, 'a.png');
     const jobDir = makeJob(cwd, {
       jobId: 'job-x',
-      shots: [{ id: 's1', videoPrompt: 'motion', firstFramePath: frame, durationSec }],
+      shots: [
+        {
+          id: 's1',
+          prompt: { visuals: 'v', action: 'motion' },
+          firstFramePath: frame,
+          durationSec,
+        },
+      ],
     } as unknown as RenderInput);
 
     await expect(
@@ -138,14 +145,178 @@ describe('runRender', () => {
     expect(calls.submit).toBe(0);
   });
 
+  it('rejects a shot prompt missing required fields before any paid submit', async () => {
+    const frame = makeFrame(cwd, 'a.png');
+    const jobDir = makeJob(cwd, {
+      shots: [{ id: 's1', prompt: { action: 'm1' }, firstFramePath: frame }],
+    } as unknown as RenderInput);
+
+    await expect(
+      runRender({
+        renderSpecPath: join(jobDir, 'render-input.json'),
+        ...baseOpts(cwd, mockAdapter(calls), concatCalls),
+      }),
+    ).rejects.toThrow(/\.prompt\.visuals is required/);
+    expect(calls.submit).toBe(0);
+  });
+
+  it('rejects a non-string shot id instead of coercing it', async () => {
+    const frame = makeFrame(cwd, 'a.png');
+    const jobDir = makeJob(cwd, {
+      shots: [{ id: 42, prompt: { visuals: 'v', action: 'm1' }, firstFramePath: frame }],
+    } as unknown as RenderInput);
+    await expect(
+      runRender({
+        renderSpecPath: join(jobDir, 'render-input.json'),
+        ...baseOpts(cwd, mockAdapter(calls), concatCalls),
+      }),
+    ).rejects.toThrow(/id must be a non-empty string/);
+    expect(calls.submit).toBe(0);
+  });
+
+  it('rejects a non-string aspectRatio instead of letting it reach the fingerprint', async () => {
+    const frame = makeFrame(cwd, 'a.png');
+    const jobDir = makeJob(cwd, {
+      aspectRatio: 0,
+      shots: [{ id: 's1', prompt: { visuals: 'v', action: 'm1' }, firstFramePath: frame }],
+    } as unknown as RenderInput);
+    await expect(
+      runRender({
+        renderSpecPath: join(jobDir, 'render-input.json'),
+        ...baseOpts(cwd, mockAdapter(calls), concatCalls),
+      }),
+    ).rejects.toThrow(/aspectRatio must be a non-empty string/);
+    expect(calls.submit).toBe(0);
+  });
+
+  it('rejects a non-string lastFramePath before path operations', async () => {
+    const frame = makeFrame(cwd, 'a.png');
+    const jobDir = makeJob(cwd, {
+      shots: [
+        {
+          id: 's1',
+          prompt: { visuals: 'v', action: 'm1' },
+          firstFramePath: frame,
+          lastFramePath: 42,
+        },
+      ],
+    } as unknown as RenderInput);
+    await expect(
+      runRender({
+        renderSpecPath: join(jobDir, 'render-input.json'),
+        ...baseOpts(cwd, mockAdapter(calls), concatCalls),
+      }),
+    ).rejects.toThrow(/lastFramePath must be a path string/);
+    expect(calls.submit).toBe(0);
+  });
+
+  it('rejects a visibleCharacters reference missing from the film registry', async () => {
+    const frame = makeFrame(cwd, 'a.png');
+    const jobDir = makeJob(cwd, {
+      characters: [{ id: 'alice', description: 'red scarf' }],
+      shots: [
+        {
+          id: 's1',
+          prompt: { visuals: 'v', action: 'm1', visibleCharacters: ['bob'] },
+          firstFramePath: frame,
+        },
+      ],
+    });
+
+    await expect(
+      runRender({
+        renderSpecPath: join(jobDir, 'render-input.json'),
+        ...baseOpts(cwd, mockAdapter(calls), concatCalls),
+      }),
+    ).rejects.toThrow(/unknown character "bob"/);
+    expect(calls.submit).toBe(0);
+  });
+
+  it('rejects duplicate film-level character ids', async () => {
+    const frame = makeFrame(cwd, 'a.png');
+    const jobDir = makeJob(cwd, {
+      characters: [
+        { id: 'alice', description: 'd1' },
+        { id: 'alice', description: 'd2' },
+      ],
+      shots: [{ id: 's1', prompt: { visuals: 'v', action: 'm1' }, firstFramePath: frame }],
+    });
+
+    await expect(
+      runRender({
+        renderSpecPath: join(jobDir, 'render-input.json'),
+        ...baseOpts(cwd, mockAdapter(calls), concatCalls),
+      }),
+    ).rejects.toThrow(/duplicates character id "alice"/);
+    expect(calls.submit).toBe(0);
+  });
+
+  it('submits the assembled labeled prompt carrying film-level directives', async () => {
+    const frame = makeFrame(cwd, 'a.png');
+    const jobDir = makeJob(cwd, {
+      style: 'cinematic, 8K',
+      characters: [
+        { id: 'alice', description: 'long blonde hair, red scarf' },
+        { id: 'bob', description: 'tall, black coat' },
+      ],
+      consistency: 'Faces stay identical, no morphing.',
+      negative: 'no text or watermarks',
+      shots: [
+        {
+          id: 's1',
+          prompt: {
+            scene: 'rainy alley',
+            visuals: 'slow push-in',
+            action: 'Alice walks in',
+            effects: 'rain intensifies',
+            audio: '[Sound Effect] rain',
+            visibleCharacters: ['alice'],
+          },
+          firstFramePath: frame,
+          durationSec: 5,
+        },
+      ],
+    });
+
+    await runRender({
+      renderSpecPath: join(jobDir, 'render-input.json'),
+      ...baseOpts(cwd, mockAdapter(calls), concatCalls),
+    });
+
+    expect(calls.submit).toBe(1);
+    expect(calls.params[0]!.prompt).toBe(
+      [
+        '[Style] cinematic, 8K',
+        '[Character] alice: long blonde hair, red scarf',
+        '[Scene] rainy alley',
+        '[Visuals] slow push-in',
+        '[Action] Alice walks in',
+        '[Effects] rain intensifies',
+        '[Audio] [Sound Effect] rain',
+        'Faces stay identical, no morphing.',
+        'Negative: no text or watermarks',
+      ].join('\n'),
+    );
+  });
+
   it('runs a fresh job end-to-end: snapshot → submit → download → concat', async () => {
     const f1 = makeFrame(cwd, 'a.png');
     const f2 = makeFrame(cwd, 'b.png');
     const jobDir = makeJob(cwd, {
       title: 't',
       shots: [
-        { id: 's1', videoPrompt: 'motion one', firstFramePath: f1, durationSec: 5 },
-        { id: 's2', videoPrompt: 'motion two', firstFramePath: f2, durationSec: 5 },
+        {
+          id: 's1',
+          prompt: { visuals: 'v1', action: 'motion one' },
+          firstFramePath: f1,
+          durationSec: 5,
+        },
+        {
+          id: 's2',
+          prompt: { visuals: 'v2', action: 'motion two' },
+          firstFramePath: f2,
+          durationSec: 5,
+        },
       ],
     });
 
@@ -181,8 +352,8 @@ describe('runRender', () => {
     const f2 = makeFrame(cwd, 'b.png');
     const jobDir = makeJob(cwd, {
       shots: [
-        { id: 's1', videoPrompt: 'm1', firstFramePath: f1 },
-        { id: 's2', videoPrompt: 'm2', firstFramePath: f2 },
+        { id: 's1', prompt: { visuals: 'v1', action: 'm1' }, firstFramePath: f1 },
+        { id: 's2', prompt: { visuals: 'v2', action: 'm2' }, firstFramePath: f2 },
       ],
     });
     const specPath = join(jobDir, 'render-input.json');
@@ -216,7 +387,7 @@ describe('runRender', () => {
   it('refuses resume when normalized model defaults changed', async () => {
     const frame = makeFrame(cwd, 'a.png');
     const jobDir = makeJob(cwd, {
-      shots: [{ id: 's1', videoPrompt: 'm1', firstFramePath: frame }],
+      shots: [{ id: 's1', prompt: { visuals: 'v1', action: 'm1' }, firstFramePath: frame }],
     });
     const specPath = join(jobDir, 'render-input.json');
     const resolved = baseResolved();
@@ -241,7 +412,9 @@ describe('runRender', () => {
 
   it('merges assets.json instead of wiping image-stage entries', async () => {
     const f1 = makeFrame(cwd, 'a.png');
-    const jobDir = makeJob(cwd, { shots: [{ id: 's1', videoPrompt: 'm1', firstFramePath: f1 }] });
+    const jobDir = makeJob(cwd, {
+      shots: [{ id: 's1', prompt: { visuals: 'v1', action: 'm1' }, firstFramePath: f1 }],
+    });
     // image stage pre-registered a portrait
     writeFileSync(
       join(jobDir, 'assets.json'),
@@ -258,7 +431,9 @@ describe('runRender', () => {
 
   it('refuses a manifest missing a spec shot instead of re-submitting it', async () => {
     const f1 = makeFrame(cwd, 'a.png');
-    const jobDir = makeJob(cwd, { shots: [{ id: 's1', videoPrompt: 'm1', firstFramePath: f1 }] });
+    const jobDir = makeJob(cwd, {
+      shots: [{ id: 's1', prompt: { visuals: 'v1', action: 'm1' }, firstFramePath: f1 }],
+    });
     const specPath = join(jobDir, 'render-input.json');
     await runRender({
       renderSpecPath: specPath,
@@ -285,7 +460,14 @@ describe('runRender', () => {
     const first = makeFrame(cwd, 'first.png');
     const last = makeFrame(cwd, 'last.png');
     const jobDir = makeJob(cwd, {
-      shots: [{ id: 's1', videoPrompt: 'm1', firstFramePath: first, lastFramePath: last }],
+      shots: [
+        {
+          id: 's1',
+          prompt: { visuals: 'v1', action: 'm1' },
+          firstFramePath: first,
+          lastFramePath: last,
+        },
+      ],
     });
     const specPath = join(jobDir, 'render-input.json');
     await runRender({
@@ -310,7 +492,9 @@ describe('runRender', () => {
 
   it('refuses a corrupted manifest instead of re-billing everything', async () => {
     const f1 = makeFrame(cwd, 'a.png');
-    const jobDir = makeJob(cwd, { shots: [{ id: 's1', videoPrompt: 'm1', firstFramePath: f1 }] });
+    const jobDir = makeJob(cwd, {
+      shots: [{ id: 's1', prompt: { visuals: 'v1', action: 'm1' }, firstFramePath: f1 }],
+    });
     writeFileSync(join(jobDir, 'manifest.json'), '{not json');
     await expect(
       runRender({
@@ -327,7 +511,9 @@ describe('runRender', () => {
     mkdirSync(outside, { recursive: true });
     writeFileSync(
       join(outside, 'render-input.json'),
-      JSON.stringify({ shots: [{ id: 's1', videoPrompt: 'm1', firstFramePath: f1 }] }),
+      JSON.stringify({
+        shots: [{ id: 's1', prompt: { visuals: 'v1', action: 'm1' }, firstFramePath: f1 }],
+      }),
     );
     const linkDir = join(cwd, '.video-gen', 'linked-job');
     mkdirSync(join(cwd, '.video-gen'), { recursive: true });
@@ -344,7 +530,9 @@ describe('runRender', () => {
 
   it('refuses a pre-placed destination symlink for a frame snapshot', async () => {
     const f1 = makeFrame(cwd, 'a.png');
-    const jobDir = makeJob(cwd, { shots: [{ id: 's1', videoPrompt: 'm1', firstFramePath: f1 }] });
+    const jobDir = makeJob(cwd, {
+      shots: [{ id: 's1', prompt: { visuals: 'v1', action: 'm1' }, firstFramePath: f1 }],
+    });
     const outside = join(cwd, 'victim.txt');
     writeFileSync(outside, 'precious');
     const shotDir = join(jobDir, 'shots', 's1');
@@ -364,7 +552,9 @@ describe('runRender', () => {
 
   it('manifest frame hashes match the SNAPSHOT bytes', async () => {
     const f1 = makeFrame(cwd, 'a.png', 'frame-v1');
-    const jobDir = makeJob(cwd, { shots: [{ id: 's1', videoPrompt: 'm1', firstFramePath: f1 }] });
+    const jobDir = makeJob(cwd, {
+      shots: [{ id: 's1', prompt: { visuals: 'v1', action: 'm1' }, firstFramePath: f1 }],
+    });
     await runRender({
       renderSpecPath: join(jobDir, 'render-input.json'),
       ...baseOpts(cwd, mockAdapter(calls), concatCalls),
@@ -378,7 +568,9 @@ describe('runRender', () => {
 
   it('concat cancel ⇒ polling_stopped; concat error ⇒ failed', async () => {
     const f1 = makeFrame(cwd, 'a.png');
-    const jobDir = makeJob(cwd, { shots: [{ id: 's1', videoPrompt: 'm1', firstFramePath: f1 }] });
+    const jobDir = makeJob(cwd, {
+      shots: [{ id: 's1', prompt: { visuals: 'v1', action: 'm1' }, firstFramePath: f1 }],
+    });
     const opts = baseOpts(cwd, mockAdapter(calls), concatCalls);
     opts.concatImpl = (async () => {
       const { CancelledError } = await import('../providers/task.js');
@@ -394,7 +586,9 @@ describe('runRender', () => {
     mkdirSync(jobDir2, { recursive: true });
     writeFileSync(
       join(jobDir2, 'render-input.json'),
-      JSON.stringify({ shots: [{ id: 's1', videoPrompt: 'm1', firstFramePath: f1 }] }),
+      JSON.stringify({
+        shots: [{ id: 's1', prompt: { visuals: 'v1', action: 'm1' }, firstFramePath: f1 }],
+      }),
     );
     const opts2 = baseOpts(cwd, mockAdapter(calls), concatCalls);
     opts2.concatImpl = (async () => {
@@ -414,7 +608,9 @@ describe('runRender', () => {
     mkdirSync(jobDir, { recursive: true });
     writeFileSync(
       join(jobDir, 'render-input.json'),
-      JSON.stringify({ shots: [{ id: 's1', videoPrompt: 'm1', firstFramePath: f1 }] }),
+      JSON.stringify({
+        shots: [{ id: 's1', prompt: { visuals: 'v1', action: 'm1' }, firstFramePath: f1 }],
+      }),
     );
     const aliasOut = join(cwd, 'alias-out');
     const { symlinkSync, realpathSync } = await import('node:fs');
@@ -432,7 +628,9 @@ describe('runRender', () => {
 
   it('refuses resume when a shot dir was swapped for an external symlink', async () => {
     const f1 = makeFrame(cwd, 'a.png');
-    const jobDir = makeJob(cwd, { shots: [{ id: 's1', videoPrompt: 'm1', firstFramePath: f1 }] });
+    const jobDir = makeJob(cwd, {
+      shots: [{ id: 's1', prompt: { visuals: 'v1', action: 'm1' }, firstFramePath: f1 }],
+    });
     const specPath = join(jobDir, 'render-input.json');
     await runRender({
       renderSpecPath: specPath,
@@ -455,7 +653,9 @@ describe('runRender', () => {
 
   it('corrupted assets.json refuses rather than truncating the image-stage index', async () => {
     const f1 = makeFrame(cwd, 'a.png');
-    const jobDir = makeJob(cwd, { shots: [{ id: 's1', videoPrompt: 'm1', firstFramePath: f1 }] });
+    const jobDir = makeJob(cwd, {
+      shots: [{ id: 's1', prompt: { visuals: 'v1', action: 'm1' }, firstFramePath: f1 }],
+    });
     writeFileSync(join(jobDir, 'assets.json'), '{corrupted');
     await expect(
       runRender({
@@ -469,7 +669,9 @@ describe('runRender', () => {
 
   it('ambiguous submit parks the shot and blocks automatic resubmit', async () => {
     const f1 = makeFrame(cwd, 'a.png');
-    const jobDir = makeJob(cwd, { shots: [{ id: 's1', videoPrompt: 'm1', firstFramePath: f1 }] });
+    const jobDir = makeJob(cwd, {
+      shots: [{ id: 's1', prompt: { visuals: 'v1', action: 'm1' }, firstFramePath: f1 }],
+    });
     const specPath = join(jobDir, 'render-input.json');
 
     const ambiguousAdapter: VideoProviderAdapter = {
@@ -515,7 +717,7 @@ describe('runRender', () => {
   it('persists ambiguous before entering the paid submit call', async () => {
     const frame = makeFrame(cwd, 'a.png');
     const jobDir = makeJob(cwd, {
-      shots: [{ id: 's1', videoPrompt: 'm1', firstFramePath: frame }],
+      shots: [{ id: 's1', prompt: { visuals: 'v1', action: 'm1' }, firstFramePath: frame }],
     });
     let stateAtSubmit = '';
     const adapter: VideoProviderAdapter = {
@@ -543,7 +745,7 @@ describe('runRender', () => {
   it('retries a definitively failed provider task in the same job', async () => {
     const frame = makeFrame(cwd, 'a.png');
     const jobDir = makeJob(cwd, {
-      shots: [{ id: 's1', videoPrompt: 'm1', firstFramePath: frame }],
+      shots: [{ id: 's1', prompt: { visuals: 'v1', action: 'm1' }, firstFramePath: frame }],
     });
     let submits = 0;
     const requestIds: Array<string | undefined> = [];
@@ -582,7 +784,7 @@ describe('runRender', () => {
   it('resumes a legacy submitted shot without persisting attempt zero', async () => {
     const frame = makeFrame(cwd, 'a.png');
     const jobDir = makeJob(cwd, {
-      shots: [{ id: 's1', videoPrompt: 'm1', firstFramePath: frame }],
+      shots: [{ id: 's1', prompt: { visuals: 'v1', action: 'm1' }, firstFramePath: frame }],
     });
     let cancelled = false;
     const adapter: VideoProviderAdapter = {
@@ -621,7 +823,7 @@ describe('runRender', () => {
   it('calls provider cancellation with a fresh signal before parking remaining work', async () => {
     const frame = makeFrame(cwd, 'cancel.png');
     const jobDir = makeJob(cwd, {
-      shots: [{ id: 's1', videoPrompt: 'stop', firstFramePath: frame }],
+      shots: [{ id: 's1', prompt: { visuals: 'v', action: 'stop' }, firstFramePath: frame }],
     });
     let cancelSignal: AbortSignal | undefined;
     const adapter: VideoProviderAdapter = {
@@ -661,7 +863,7 @@ describe('runRender', () => {
   it('parks a provider-missing task for explicit recover instead of looping forever', async () => {
     const frame = makeFrame(cwd, 'a.png');
     const jobDir = makeJob(cwd, {
-      shots: [{ id: 's1', videoPrompt: 'm1', firstFramePath: frame }],
+      shots: [{ id: 's1', prompt: { visuals: 'v1', action: 'm1' }, firstFramePath: frame }],
     });
     let submits = 0;
     const adapter: VideoProviderAdapter = {
@@ -698,7 +900,7 @@ describe('runRender', () => {
   it('validates the shots parent before creating a shot directory', async () => {
     const frame = makeFrame(cwd, 'a.png');
     const jobDir = makeJob(cwd, {
-      shots: [{ id: 's1', videoPrompt: 'm1', firstFramePath: frame }],
+      shots: [{ id: 's1', prompt: { visuals: 'v1', action: 'm1' }, firstFramePath: frame }],
     });
     const outside = join(cwd, 'outside-shots');
     mkdirSync(outside, { recursive: true });
@@ -719,7 +921,7 @@ describe('runRender', () => {
       const caseCwd = join(cwd, `assets-${i}`);
       const f1 = makeFrame(caseCwd, 'a.png');
       const jobDir = makeJob(caseCwd, {
-        shots: [{ id: 's1', videoPrompt: 'm1', firstFramePath: f1 }],
+        shots: [{ id: 's1', prompt: { visuals: 'v1', action: 'm1' }, firstFramePath: f1 }],
       });
       const raw = JSON.stringify(invalid);
       writeFileSync(join(jobDir, 'assets.json'), raw);
@@ -736,7 +938,9 @@ describe('runRender', () => {
 
   it('refuses resume when the spec changed (revision ⇒ new job)', async () => {
     const f1 = makeFrame(cwd, 'a.png');
-    const jobDir = makeJob(cwd, { shots: [{ id: 's1', videoPrompt: 'm1', firstFramePath: f1 }] });
+    const jobDir = makeJob(cwd, {
+      shots: [{ id: 's1', prompt: { visuals: 'v1', action: 'm1' }, firstFramePath: f1 }],
+    });
     const specPath = join(jobDir, 'render-input.json');
     await runRender({
       renderSpecPath: specPath,
@@ -745,7 +949,9 @@ describe('runRender', () => {
 
     writeFileSync(
       specPath,
-      JSON.stringify({ shots: [{ id: 's1', videoPrompt: 'CHANGED', firstFramePath: f1 }] }),
+      JSON.stringify({
+        shots: [{ id: 's1', prompt: { visuals: 'v', action: 'CHANGED' }, firstFramePath: f1 }],
+      }),
     );
     await expect(
       runRender({ renderSpecPath: specPath, ...baseOpts(cwd, mockAdapter(calls), concatCalls) }),
@@ -754,7 +960,9 @@ describe('runRender', () => {
 
   it('refuses resume when a frame snapshot was tampered with', async () => {
     const f1 = makeFrame(cwd, 'a.png');
-    const jobDir = makeJob(cwd, { shots: [{ id: 's1', videoPrompt: 'm1', firstFramePath: f1 }] });
+    const jobDir = makeJob(cwd, {
+      shots: [{ id: 's1', prompt: { visuals: 'v1', action: 'm1' }, firstFramePath: f1 }],
+    });
     const specPath = join(jobDir, 'render-input.json');
     await runRender({
       renderSpecPath: specPath,
@@ -771,7 +979,14 @@ describe('runRender', () => {
     const f1 = makeFrame(cwd, 'a.png');
     const f2 = makeFrame(cwd, 'b.png');
     const jobDir = makeJob(cwd, {
-      shots: [{ id: 's1', videoPrompt: 'm1', firstFramePath: f1, lastFramePath: f2 }],
+      shots: [
+        {
+          id: 's1',
+          prompt: { visuals: 'v1', action: 'm1' },
+          firstFramePath: f1,
+          lastFramePath: f2,
+        },
+      ],
     });
     const specPath = join(jobDir, 'render-input.json');
 
@@ -796,8 +1011,8 @@ describe('runRender', () => {
     // duplicate ids
     const dupDir = makeJob(cwd, {
       shots: [
-        { id: 's1', videoPrompt: 'a', firstFramePath: f1 },
-        { id: 's1', videoPrompt: 'b', firstFramePath: f1 },
+        { id: 's1', prompt: { visuals: 'v', action: 'a' }, firstFramePath: f1 },
+        { id: 's1', prompt: { visuals: 'v', action: 'b' }, firstFramePath: f1 },
       ],
     });
     await expect(
@@ -812,7 +1027,9 @@ describe('runRender', () => {
     mkdirSync(outside, { recursive: true });
     writeFileSync(
       join(outside, 'render-input.json'),
-      JSON.stringify({ shots: [{ id: 's1', videoPrompt: 'a', firstFramePath: f1 }] }),
+      JSON.stringify({
+        shots: [{ id: 's1', prompt: { visuals: 'v', action: 'a' }, firstFramePath: f1 }],
+      }),
     );
     await expect(
       runRender({
@@ -822,7 +1039,9 @@ describe('runRender', () => {
     ).rejects.toThrow(/must live under/);
 
     // wrong spec filename
-    const bad = makeJob(cwd, { shots: [{ id: 's1', videoPrompt: 'a', firstFramePath: f1 }] });
+    const bad = makeJob(cwd, {
+      shots: [{ id: 's1', prompt: { visuals: 'v', action: 'a' }, firstFramePath: f1 }],
+    });
     const { renameSync } = await import('node:fs');
     renameSync(join(bad, 'render-input.json'), join(bad, 'spec.json'));
     await expect(
@@ -838,7 +1057,9 @@ describe('runRender', () => {
   it('rejects non-integer shot durations before anything paid', async () => {
     const f1 = makeFrame(cwd, 'a.png');
     const jobDir = makeJob(cwd, {
-      shots: [{ id: 's1', videoPrompt: 'm1', firstFramePath: f1, durationSec: 4.5 }],
+      shots: [
+        { id: 's1', prompt: { visuals: 'v1', action: 'm1' }, firstFramePath: f1, durationSec: 4.5 },
+      ],
     });
     await expect(
       runRender({
@@ -851,7 +1072,9 @@ describe('runRender', () => {
 
   it('rejects concurrent runs of the same job dir', async () => {
     const f1 = makeFrame(cwd, 'a.png');
-    const jobDir = makeJob(cwd, { shots: [{ id: 's1', videoPrompt: 'm1', firstFramePath: f1 }] });
+    const jobDir = makeJob(cwd, {
+      shots: [{ id: 's1', prompt: { visuals: 'v1', action: 'm1' }, firstFramePath: f1 }],
+    });
     const opts = baseOpts(cwd, mockAdapter(calls), concatCalls);
     // Hold the job dir's active slot on its REAL path (the lock's key) —
     // /tmp on macOS is itself a symlink, so lexical ≠ real here.

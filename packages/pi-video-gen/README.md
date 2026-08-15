@@ -165,16 +165,34 @@ the binaries.
 | Tool | What it does |
 |---|---|
 | `video_compose` | **Local video assembly, no paid video models.** C0 (`compose-input.json`) concatenates compatible clips. Timeline media, overlays, transitions, subtitles, source audio, and BGM render locally. Narration is an explicit network feature: setting `voice` to `edge-tts:<voice-name>` sends narration text to Microsoft Edge TTS. |
-| `video_generate` | One short clip from a prompt (+ optional first/last frame images). Paid, minutes per clip. Interrupted after receiving a task id? Resume with the returned `jobId`; an ambiguous submit is parked and never resubmitted automatically. |
+| `video_generate` | One short clip from a structured prompt (style/scene/visuals/action/effects/audio + optional first/last frame images). Paid, minutes per clip. Interrupted after receiving a task id? Resume with the returned `jobId`; an ambiguous submit is parked and never resubmitted automatically. |
 | `video_render` | Multi-shot film from `<jobDir>/render-input.json`: snapshots + hashes all frames, submits one paid task per shot (resume-aware, finished shots never re-bill), downloads clips, ffmpeg-concats into `final_video.mp4`. |
 | `video_capabilities` | Read-only: active model's capability table + registered models. Call before composing prompts or shot books. |
+
+## Structured prompts
+
+Both paid tools take structured prompt fields, never a pre-joined string. The
+plugin assembles the labeled prompt text (`[Style]` / `[Character]` / `[Scene]`
+/ `[Visuals]` / `[Action]` / `[Effects]` / `[Audio]` + consistency/negative
+directives), so every shot reliably carries the film-level directives:
+
+- **Film level** — `style` (genre/quality/texture), `characters`
+  (`{id, description}` registry), `consistency` (identity/no-drift directive),
+  `negative` (e.g. "no text, watermarks, or subtitles").
+- **Shot level** (`prompt` object) — `visuals` (camera/framing) and `action`
+  are always required; `scene` plus film-level `style` are **required when no
+  first frame anchors the shot** (text-to-video must not go out action-only);
+  `effects` carries time-varying content a static frame cannot express
+  (transformations, lighting shifts, atmosphere); `audio` takes
+  `[Sound Effect] … / [Speaker] …` cues; `visibleCharacters` inlines the
+  referenced character descriptions.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
 | `/video-gen compose <spec>` | Same as the `video_compose` tool |
-| `/video-gen generate <prompt>` | Same as the `video_generate` tool |
+| `/video-gen generate --visuals ".." --action ".." [--style ".." --scene ".."]` | Structured-prompt flags for the `video_generate` tool (also `--effects/--audio/--consistency/--negative/--first-frame/--last-frame/--duration/--ratio`; quote values may escape their delimiter as `\"`). The `characters` registry is tool/render-spec only — not available via flags |
 | `/video-gen render <spec>` | Same as the `video_render` tool |
 | `/video-gen recover <jobId>` | List ambiguous render shots; explicitly `reset` a confirmed-absent task or `adopt <taskId>` found in the provider console |
 | `/video-gen models` | List registered models + key readiness |
@@ -186,8 +204,8 @@ the binaries.
 Driven by the `video-gen` skill in conversation:
 
 1. **Shot book** — the agent authors a shot book (characters + shots with
-   first/last-frame descriptions, motion, audio, continuity) and you review it
-   in chat. Default small: 1 scene, 3–5 shots.
+   first/last-frame descriptions, visuals+action, effects, audio, continuity)
+   and you review it in chat. Default small: 1 scene, 3–5 shots.
 2. **Frames** — the agent generates character portraits and per-shot frames via
    `image_generate` (pi-image-gen), tracking real returned paths in
    `assets.json`.
@@ -216,3 +234,11 @@ console before starting another generation. Single-job resume independently
 recomputes the request fingerprint from its frozen `input.json`; an inspect 404
 keeps the remote handle and parks the job as ambiguous instead of declaring it
 safe to resubmit.
+
+**Upgrading from the pre-structured format**: render jobs whose
+`render-input.json` still uses the old `videoPrompt` string can no longer be
+parsed or resumed (the structured `prompt` object replaced it deliberately,
+with no compatibility layer). If an in-flight paid task is stranded by the
+upgrade, download its clip manually from the provider console — task URLs
+expire (Ark: 24h). Single-clip jobs are unaffected: their frozen `input.json`
+is read, not re-parsed.

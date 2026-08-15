@@ -42,10 +42,18 @@ interface VideoArgs {
   storyId: string;
   videoModel: string;
   imageModel: string;
+  durationSec: number;
 }
 
 function parseVideoArgs(): VideoArgs {
   const argv = process.argv.slice(2);
+  const durationSecRaw = getFlag(argv, '--duration-sec', '5');
+  const durationSec = Number(durationSecRaw);
+  // Reject malformed input at t=0 — a NaN/negative would otherwise surface only
+  // after paid frame generation. The model's range check stays with the extension.
+  if (!Number.isInteger(durationSec) || durationSec <= 0) {
+    throw new Error(`--duration-sec must be a positive integer, got "${durationSecRaw}".`);
+  }
   return {
     samples: Number(getFlag(argv, '--samples', '2')),
     tier: getFlag(argv, '--tier', 'medium') as VideoArgs['tier'],
@@ -53,6 +61,9 @@ function parseVideoArgs(): VideoArgs {
     // CI-proven ids from integration.yml; override for other gateways.
     videoModel: getFlag(argv, '--video-model', process.env.PI_EVAL_VIDEO_MODEL || 'doubao-seedance-2-0-260128'),
     imageModel: getFlag(argv, '--image-model', process.env.PI_EVAL_IMAGE_MODEL || ''),
+    // Per-shot clip length. 5 keeps smoke cheap; use 10-15 for scored runs —
+    // longer clips expose within-shot motion drift.
+    durationSec,
   };
 }
 
@@ -122,7 +133,7 @@ function buildSettings(args: ReturnType<typeof parseCommonArgs>, vargs: VideoArg
 }
 
 /** ViMax story → VideoProject shot book (skill §B schema), deterministically. */
-function toShotBook(story: VimaxStory) {
+function toShotBook(story: VimaxStory, durationSec: number) {
   return {
     title: story.theme,
     characters: [],
@@ -130,8 +141,8 @@ function toShotBook(story: VimaxStory) {
       id: s.shotId,
       intent: s.videoPrompt,
       firstFrame: s.firstFrame,
-      motion: s.videoPrompt,
-      durationSec: 5,
+      action: s.videoPrompt,
+      durationSec,
       continuityGroup: `scene-${s.sceneNum}`,
     })),
   };
@@ -143,9 +154,9 @@ function buildPrompt(story: VimaxStory, shotBookPath: string, renderSpecHint: st
 Shot book (VideoProject JSON): ${shotBookPath} — read it first with the read tool.
 
 Execute exactly:
-1. Call video_capabilities and respect the active model's limits.
+1. Call video_capabilities first. If the shot book's durationSec is outside the active model's duration range, STOP and report the mismatch — do not generate any frames (they are paid).
 2. Image stage: for each shot in order, generate its first frame with image_generate (text-to-image, 16:9) using the shot's firstFrame text VERBATIM as the prompt. Record each returned absolute image path immediately.
-3. Write render-input.json (${renderSpecHint}): {"title","aspectRatio":"16:9","shots":[{"id","videoPrompt","firstFramePath","durationSec"}...]} — videoPrompt is the shot's motion text, firstFramePath the generated frame path from step 2.
+3. Write render-input.json (${renderSpecHint}): {"title","aspectRatio":"16:9","shots":[{"id","prompt":{"visuals","action"},"firstFramePath","durationSec"}...]} — prompt.action is the shot book shot's action text VERBATIM, prompt.visuals describes camera/framing ("Static camera" when the action text implies no camera move), firstFramePath the generated frame path from step 2.
 4. Call video_render ONCE with that spec path.
 5. Reply with the final video path.
 
@@ -294,6 +305,7 @@ async function main() {
     return {
       model: `${args.provider}/${args.model}`,
       videoModel: vargs.videoModel,
+      durationSec: vargs.durationSec,
       n: rows.length,
       completed: completed.length,
       completionRate: completed.length / Math.max(1, rows.length),
@@ -312,7 +324,7 @@ async function main() {
     // Sequential: paid generation; a parallel fleet would also trip rate limits.
     for (const story of selected) {
       const shotBookPath = path.join(shotBooksDir, `${story.id}.json`);
-      writeFileSync(shotBookPath, JSON.stringify(toShotBook(story), null, 2));
+      writeFileSync(shotBookPath, JSON.stringify(toShotBook(story, vargs.durationSec), null, 2));
       const renderSpecHint = hcfg.useDefaultPi
         ? `under the video-gen output dir as job '${story.id}', i.e. <outputDir>/${story.id}/render-input.json`
         : path.join(ARTIFACTS_DIR, 'video', story.id, 'render-input.json');
