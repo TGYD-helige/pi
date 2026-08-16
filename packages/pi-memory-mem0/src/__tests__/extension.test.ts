@@ -425,6 +425,146 @@ describe('passive recall', () => {
 });
 
 // ---------------------------------------------------------------------------
+// recallMode — session vs every-turn
+// ---------------------------------------------------------------------------
+
+describe('recallMode', () => {
+  function activateWith(recallMode: string) {
+    const provider = {
+      add: vi.fn().mockResolvedValue({ results: [] }),
+      search: vi.fn().mockResolvedValue([{ id: '1', memory: 'likes cats' }]),
+      getAll: vi.fn().mockResolvedValue([]),
+      delete: vi.fn().mockResolvedValue(undefined),
+    };
+    mockCreateMem0Provider.mockResolvedValue(provider);
+    vi.mocked(loadPiSettings).mockReturnValue({
+      mode: 'platform',
+      apiKey: 'm0-test',
+      memoryMode: 'hybrid',
+      recallMode,
+    });
+    return provider;
+  }
+
+  it('recallMode "every-turn" (default) recalls on every turn', async () => {
+    activateWith('every-turn');
+    const { pi, handlers } = createMockPi();
+    const ctx = createMockCtx();
+    await handlers.session_start![0]!({}, ctx);
+
+    // Turn 1
+    await handlers.input![0]!({ text: 'pets' }, ctx);
+    let recall = (await handlers.before_agent_start![0]!({}, ctx)) as
+      | { message?: { content: string } }
+      | undefined;
+    expect(recall?.message?.content).toContain('## Recalled Memories');
+
+    // Turn 2 — should still recall
+    await handlers.input![0]!({ text: 'food' }, ctx);
+    recall = (await handlers.before_agent_start![0]!({}, ctx)) as
+      | { message?: { content: string } }
+      | undefined;
+    expect(recall?.message?.content).toContain('## Recalled Memories');
+  });
+
+  it('recallMode "session" recalls only on the first turn', async () => {
+    activateWith('session');
+    const { pi, handlers } = createMockPi();
+    const ctx = createMockCtx();
+    await handlers.session_start![0]!({}, ctx);
+
+    // Turn 1 — should recall
+    await handlers.input![0]!({ text: 'pets' }, ctx);
+    let recall = (await handlers.before_agent_start![0]!({}, ctx)) as
+      | { message?: { content: string } }
+      | undefined;
+    expect(recall?.message?.content).toContain('## Recalled Memories');
+
+    // Turn 2 — should NOT recall
+    await handlers.input![0]!({ text: 'food' }, ctx);
+    recall = (await handlers.before_agent_start![0]!({}, ctx)) as
+      | { message?: { content: string } }
+      | undefined;
+    expect(recall).toBeUndefined();
+  });
+
+  it('recallMode "session" resets on a new session_start', async () => {
+    activateWith('session');
+    const { pi, handlers } = createMockPi();
+    const ctx = createMockCtx();
+    await handlers.session_start![0]!({}, ctx);
+
+    // Turn 1 — recall
+    await handlers.input![0]!({ text: 'pets' }, ctx);
+    let recall = (await handlers.before_agent_start![0]!({}, ctx)) as
+      | { message?: { content: string } }
+      | undefined;
+    expect(recall?.message?.content).toContain('## Recalled Memories');
+
+    // Turn 2 — no recall
+    await handlers.input![0]!({ text: 'food' }, ctx);
+    recall = (await handlers.before_agent_start![0]!({}, ctx)) as
+      | { message?: { content: string } }
+      | undefined;
+    expect(recall).toBeUndefined();
+
+    // New session — recall again
+    await handlers.session_shutdown![0]!({}, ctx);
+    await handlers.session_start![0]!({}, ctx);
+    await handlers.input![0]!({ text: 'weather' }, ctx);
+    recall = (await handlers.before_agent_start![0]!({}, ctx)) as
+      | { message?: { content: string } }
+      | undefined;
+    expect(recall?.message?.content).toContain('## Recalled Memories');
+  });
+
+  it('recallMode defaults to "every-turn" when omitted', async () => {
+    activateWith('');
+    const { pi, handlers } = createMockPi();
+    const ctx = createMockCtx();
+    await handlers.session_start![0]!({}, ctx);
+
+    // Turn 1
+    await handlers.input![0]!({ text: 'pets' }, ctx);
+    let recall = (await handlers.before_agent_start![0]!({}, ctx)) as
+      | { message?: { content: string } }
+      | undefined;
+    expect(recall?.message?.content).toContain('## Recalled Memories');
+
+    // Turn 2 — default behavior, still recalls
+    await handlers.input![0]!({ text: 'food' }, ctx);
+    recall = (await handlers.before_agent_start![0]!({}, ctx)) as
+      | { message?: { content: string } }
+      | undefined;
+    expect(recall?.message?.content).toContain('## Recalled Memories');
+  });
+
+  it('recallMode "session" skips input queue after first recall', async () => {
+    const provider = activateWith('session');
+    const { pi, handlers } = createMockPi();
+    const ctx = createMockCtx();
+    await handlers.session_start![0]!({}, ctx);
+
+    // Turn 1 — recall happens, search is called once
+    await handlers.input![0]!({ text: 'pets' }, ctx);
+    let recall = (await handlers.before_agent_start![0]!({}, ctx)) as
+      | { message?: { content: string } }
+      | undefined;
+    expect(recall?.message?.content).toContain('## Recalled Memories');
+    expect(provider.search).toHaveBeenCalledTimes(1);
+
+    // Turn 2 — no recall, search should NOT be called again
+    await handlers.input![0]!({ text: 'food' }, ctx);
+    recall = (await handlers.before_agent_start![0]!({}, ctx)) as
+      | { message?: { content: string } }
+      | undefined;
+    expect(recall).toBeUndefined();
+    // search was only called once (on turn 1), not on turn 2
+    expect(provider.search).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Passive capture — turn_end writes with credential redaction
 // ---------------------------------------------------------------------------
 

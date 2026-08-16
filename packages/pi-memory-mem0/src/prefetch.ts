@@ -34,6 +34,11 @@ export class Prefetch {
     this.pending = search;
   }
 
+  /** Reset internal state (call from session_start handler). */
+  reset(): void {
+    this.pending = null;
+  }
+
   /** Phase 2: consume the result with a timeout (called on before_agent_start). */
   async consume(timeoutMs = 3000): Promise<string> {
     if (!this.pending) return '';

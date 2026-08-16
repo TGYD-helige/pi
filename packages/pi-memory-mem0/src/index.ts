@@ -37,6 +37,11 @@ import {
 import { createMem0MemoryTool } from './tools.js';
 import type { Mem0ExtensionConfig, MemoryUserIdScope } from './types.js';
 
+function normalizeRecallMode(recallMode?: string): 'every-turn' | 'session' {
+  if (recallMode === 'session') return 'session';
+  return 'every-turn';
+}
+
 const SETTINGS_KEY = 'pi-memory-mem0';
 const STATUS_KEY = 'mem0';
 
@@ -65,6 +70,9 @@ export default function mem0Extension(pi: ExtensionAPI): void {
   let userId = '';
   let activeMode = '';
   let activeMemoryMode = '';
+  let activeRecallMode: 'every-turn' | 'session' = 'every-turn';
+  /** Only used when recallMode="session" — skip recall after first successful hit. */
+  let recallUsedThisSession = false;
   let activeToolEnabled = false;
   let lastUserText = '';
   let pendingWrite: Promise<void> = Promise.resolve();
@@ -120,6 +128,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
       userId = scopeMemoryUserId(resolvedUserId, ctx.cwd, config.userIdScope);
       activeMode = mode;
       activeMemoryMode = memoryMode;
+      activeRecallMode = normalizeRecallMode(config.recallMode);
       if (memoryMode !== 'active') {
         prefetch = new Prefetch(provider, userId, { topK: config.topK ?? 5 });
       }
@@ -147,11 +156,15 @@ export default function mem0Extension(pi: ExtensionAPI): void {
       return;
     }
 
+    recallUsedThisSession = false;
+    prefetch?.reset();
     ctx.ui.setStatus(STATUS_KEY, `mem0: ${activeMode}/${activeMemoryMode}`);
   });
 
   pi.on('input', async (event) => {
     if (!prefetch) return;
+    // Session-mode: skip queuing search after first successful recall this session.
+    if (activeRecallMode === 'session' && recallUsedThisSession) return;
     const text = event.text ?? '';
     if (text) {
       prefetch.queue(redactMemoryText(text));
@@ -196,9 +209,13 @@ export default function mem0Extension(pi: ExtensionAPI): void {
 
   pi.on('before_agent_start', async () => {
     if (!prefetch) return;
+    // Session-mode: skip recall after the first successful hit this session.
+    if (activeRecallMode === 'session' && recallUsedThisSession) return;
 
     const recalled = await prefetch.consume();
     if (!recalled) return;
+    // Mark so subsequent turns skip recall in session mode.
+    if (activeRecallMode === 'session') recallUsedThisSession = true;
 
     return {
       message: {

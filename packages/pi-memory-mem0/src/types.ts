@@ -4,6 +4,7 @@
 
 export type Mem0Mode = 'platform' | 'embedded' | 'self-hosted';
 export type Mem0MemoryMode = 'hybrid' | 'active' | 'passive';
+export type Mem0RecallMode = 'every-turn' | 'session';
 export type MemoryUserIdScope = 'project' | 'exact';
 
 export interface Mem0ExtensionConfig {
@@ -44,6 +45,14 @@ export interface Mem0ExtensionConfig {
   userIdScope?: MemoryUserIdScope;
   /** Max recalled memories per turn. Default: 5 */
   topK?: number;
+
+  /**
+   * How often to inject recalled memories into context.
+   * - "every-turn" (default): recall on every agent turn, as now.
+   * - "session": recall only once per session — the first turn after
+   *   session start. Subsequent turns skip prefetch entirely.
+   */
+  recallMode?: Mem0RecallMode;
 
   /**
    * When true (default), embedded mode will attempt to resolve API keys from
