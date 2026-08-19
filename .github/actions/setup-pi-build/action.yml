@@ -1,9 +1,9 @@
 name: Setup pi build environment
 description: >
-  Shared setup steps for every pi monorepo CI job: clean self-hosted runner
-  state, checkout, pnpm + Node 24, install deps (with optional better-sqlite3
-  prebuilt fetch), and build the workspace. Optionally installs pi-coding-agent
-  globally and exposes a per-job PI_CODING_AGENT_DIR.
+  Shared setup steps for every pi monorepo CI job: per-job pi config dir,
+  pnpm + Node 24, install deps (with optional better-sqlite3 prebuilt fetch),
+  and build the workspace. Optionally installs pi-coding-agent globally and
+  exposes a per-job PI_CODING_AGENT_DIR.
 
 inputs:
   install-pi-cli:
@@ -26,9 +26,9 @@ inputs:
     default: 'false'
   set-pi-agent-dir:
     description: >
-      When 'true', point PI_CODING_AGENT_DIR at $RUNNER_TEMP/pi-agent so
-      concurrent jobs on the same self-hosted host don't trample each
-      other's ~/.pi/agent/settings.json. Sets up the dir clean.
+      When 'true', point PI_CODING_AGENT_DIR at $RUNNER_TEMP/pi-agent so the
+      job's pi state stays isolated under the per-job temp dir. Sets up the
+      dir clean.
     required: false
     default: 'false'
   build:
@@ -43,31 +43,16 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Bypass proxy for the npm mirror
-      shell: bash
-      run: |
-        # Self-hosted runners route egress through a host-level proxy. npmmirror
-        # redirects package downloads to CDN subdomains (e.g. cdn.npmmirror.com),
-        # which the proxy refuses — breaking pnpm/action-setup and installs with
-        # "fetch failed" / 403. Send the mirror and ALL its subdomains direct.
-        # Append (don't replace) to keep the runner's existing bypasses.
-        {
-          echo "NO_PROXY=${NO_PROXY:+$NO_PROXY,}registry.npmmirror.com,npmmirror.com,.npmmirror.com"
-          echo "no_proxy=${no_proxy:+$no_proxy,}registry.npmmirror.com,npmmirror.com,.npmmirror.com"
-        } >> "$GITHUB_ENV"
-
     - name: Set up per-job pi config dir
       if: inputs.set-pi-agent-dir == 'true'
       shell: bash
       run: |
-        # Self-hosted runners share $HOME across the matrix workers
-        # (instance-hnpsq9go-1..N), so writes to ~/.pi/agent race between
-        # concurrent jobs. RUNNER_TEMP is per-job. `env:` blocks can't
-        # reference `runner.temp` at job-startup time, so we resolve via
-        # $RUNNER_TEMP at step time and persist via $GITHUB_ENV.
+        # RUNNER_TEMP is per-job. `env:` blocks can't reference `runner.temp`
+        # at job-startup time, so we resolve via $RUNNER_TEMP at step time and
+        # persist via $GITHUB_ENV.
         echo "PI_CODING_AGENT_DIR=$RUNNER_TEMP/pi-agent" >> "$GITHUB_ENV"
 
-    - name: Clean self-hosted runner caches
+    - name: Reset per-job pi config dir
       if: inputs.set-pi-agent-dir == 'true'
       shell: bash
       run: |
@@ -79,34 +64,20 @@ runs:
     # this composite — GitHub needs to find action.yml on disk first.
 
     # Node must come before pnpm: v6's npm-based bootstrap (@pnpm/exe
-    # postinstall uses import.meta.dirname) needs Node >= 20.11, and the
-    # self-hosted runner's system Node is 18.
+    # postinstall uses import.meta.dirname) needs Node >= 20.11.
     - name: Setup Node
       uses: actions/setup-node@v7
       with:
         node-version: 24
 
-    # cache: false — this self-hosted runner persists its host disk across
-    # jobs, so a shared host-level pnpm store (pinned in the next step) gives
-    # the same install speedup without per-job cache upload/download.
+    # cache: false — every job runs on a fresh hosted runner, so there is no
+    # persisted store to reuse and no cache upload/download is configured.
+    # `dest` keeps the pnpm bootstrap inside the per-job temp dir.
     - name: Setup pnpm
       uses: pnpm/action-setup@v6
       with:
         cache: false
-        # Per-job temp dir avoids cwd-deleted races between concurrent matrix
-        # jobs sharing the runner's $HOME/setup-pnpm.
         dest: ${{ runner.temp }}/setup-pnpm
-
-    - name: Use the host-persisted shared pnpm store
-      shell: bash
-      run: |
-        # `dest` above relocates PNPM_HOME into the per-job temp dir, which
-        # can drag the default store along with it. Pin store-dir back to the
-        # host so every job shares one content-addressed store (safe for
-        # concurrent matrix jobs). `pnpm store path` echoes the resolved path
-        # into the log so a misconfigured store is visible at a glance.
-        pnpm config set store-dir "$HOME/.local/share/pnpm/store/v10" --global
-        pnpm store path
 
     - name: Install dependencies
       shell: bash

@@ -26,10 +26,7 @@ jobs:
   review:
     name: Pi code review
     if: github.event.pull_request.draft == false && github.actor != 'dependabot[bot]'
-    runs-on:
-      - instance-hnpsq9go
-      - linux
-      - x64
+    runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
@@ -46,16 +43,6 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: 24
-
-      - name: Bypass proxy for the npm mirror
-        run: |
-          # Self-hosted runners route egress through a host-level proxy that
-          # refuses npmmirror's CDN subdomains — every npm/npx install in this
-          # job must reach the mirror directly (same as setup-pi-build).
-          {
-            echo "NO_PROXY=${NO_PROXY:+$NO_PROXY,}registry.npmmirror.com,npmmirror.com,.npmmirror.com"
-            echo "no_proxy=${no_proxy:+$no_proxy,}registry.npmmirror.com,npmmirror.com,.npmmirror.com"
-          } >> "$GITHUB_ENV"
 
       - name: Prepare isolated Pi directories
         run: |
