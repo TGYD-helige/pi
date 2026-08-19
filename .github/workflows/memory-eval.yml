@@ -1,9 +1,8 @@
 name: Memory Eval
 
 # Manual-only. Benchmarks pi-memory (curated write loop) and pi-memory-mem0
-# (passive extraction) against LoCoMo, then LLM-judges the result. Runs on the
-# self-hosted runner and talks to the custom provider behind
-# PI_INTEGRATION_BASE_URL / PI_INTEGRATION_API_KEY.
+# (passive extraction) against LoCoMo, then LLM-judges the result. Talks to the
+# custom provider behind PI_INTEGRATION_BASE_URL / PI_INTEGRATION_API_KEY.
 on:
   workflow_dispatch:
     inputs:
@@ -39,10 +38,7 @@ permissions:
 jobs:
   memory-eval:
     name: Memory eval (LoCoMo)
-    runs-on:
-      - instance-hnpsq9go
-      - linux
-      - x64
+    runs-on: ubuntu-latest
     timeout-minutes: 240
     env:
       PI_INTEGRATION_BASE_URL: ${{ secrets.PI_INTEGRATION_BASE_URL }}

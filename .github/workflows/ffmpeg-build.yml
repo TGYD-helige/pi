@@ -28,10 +28,7 @@ concurrency:
 jobs:
   decide:
     name: check for unpublished platform versions
-    runs-on:
-      - instance-hnpsq9go
-      - linux
-      - x64
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       missing: ${{ steps.check.outputs.missing }}
@@ -72,9 +69,8 @@ jobs:
         include:
           # darwin targets need macOS hosts; linux-* targets keep the pinned
           # ubuntu-22.04 image for the published glibc baseline. win32-x64
-          # produces PE binaries via mingw (host-glibc-agnostic), so it runs
-          # on the accelerated self-hosted runner for reliable source
-          # downloads (ffmpeg.org, zlib.net, code.videolan.org).
+          # produces PE binaries via mingw (host-glibc-agnostic), so it shares
+          # the linux image and cross-compiles inside an ubuntu:22.04 container.
           - target: darwin-arm64
             runner: macos-15
           - target: darwin-x64
@@ -84,7 +80,7 @@ jobs:
           - target: linux-arm64
             runner: ubuntu-22.04
           - target: win32-x64
-            runner: [instance-hnpsq9go, linux, x64]
+            runner: ubuntu-22.04
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
 
@@ -107,9 +103,8 @@ jobs:
               sudo apt-get install -y gcc-aarch64-linux-gnu pkg-config qemu-user
               ;;
             win32-x64)
-              # The self-hosted runner has Docker access but intentionally has
-              # no passwordless sudo. Install the cross toolchain inside an
-              # ephemeral container without mutating the host.
+              # Install the cross toolchain inside an ephemeral container
+              # instead of mutating the hosted runner image.
               win_container="pi-video-gen-win32-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
               docker pull ubuntu:22.04
               docker run --detach --rm --name "$win_container" \
@@ -266,10 +261,7 @@ jobs:
     name: publish FFmpeg platform packages
     needs: [decide, build]
     if: needs.decide.outputs.missing == 'true'
-    runs-on:
-      - instance-hnpsq9go
-      - linux
-      - x64
+    runs-on: ubuntu-latest
     timeout-minutes: 20
 
     steps:
