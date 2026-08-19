@@ -39,10 +39,7 @@ jobs:
     name: publish packages
     needs: ffmpeg
     if: always() && (needs.ffmpeg.result == 'success' || needs.ffmpeg.result == 'skipped')
-    runs-on:
-      - instance-hnpsq9go
-      - linux
-      - x64
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     outputs:
       publish_filters: ${{ steps.versioning.outputs.publish_filters }}
@@ -414,10 +411,7 @@ jobs:
     name: notify feishu
     needs: publish
     if: needs.publish.result == 'success'
-    runs-on:
-      - instance-hnpsq9go
-      - linux
-      - x64
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read

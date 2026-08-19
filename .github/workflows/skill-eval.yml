@@ -24,10 +24,7 @@ jobs:
   evaluate:
     name: skill eval
     if: github.event.pull_request.draft == false
-    runs-on:
-      - instance-hnpsq9go
-      - linux
-      - x64
+    runs-on: ubuntu-latest
     timeout-minutes: 120
 
     steps:
