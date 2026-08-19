@@ -607,17 +607,216 @@ describe('telemetry', () => {
     const generation = client.traces[0]?.spans[0]?.generations[0];
     expect(generation?.body).toMatchObject({
       name: 'llm-generation [main] [hello]',
+      startTime: '2026-05-02T00:00:00.100Z',
+      endTime: '2026-05-02T00:00:01.000Z',
       model: 'kimi-k2.5',
       input: 'hello',
-    });
-    const genUpdates = generation?.updates ?? [];
-    expect(genUpdates[genUpdates.length - 1]).toMatchObject({
       output: 'world',
-      endTime: '2026-05-02T00:00:01.000Z',
       level: 'DEFAULT',
       usage: { input: 10, output: 3, total: 16, unit: 'TOKENS' },
       usageDetails: { input: 10, output: 3, cache_read: 2, cache_write: 1, total: 16 },
     });
+    expect(generation?.updates).toHaveLength(0);
+  });
+
+  it('keeps generation start and terminal data in one SDK create event', async () => {
+    const client = new FakeLangfuseSdkClient();
+    const exporter = new LangfuseSdkRuntimeEventExporter(
+      {
+        enabled: true,
+        publicKey: 'public',
+        secretKey: 'secret',
+        baseUrl: 'https://langfuse.example.com',
+        flushAt: 20,
+        flushIntervalMs: 5_000,
+        includePayloads: true,
+      },
+      client,
+    );
+
+    await exporter.publish({
+      id: 'turn-start',
+      traceId,
+      type: 'chat_turn_started',
+      sessionId: 'session-1',
+      conversationId: 'conversation-1',
+      createdAt: '2026-05-02T00:00:00.000Z',
+    });
+    await exporter.publish({
+      id: 'generation-start',
+      traceId,
+      sessionId: 'session-1',
+      conversationId: 'conversation-1',
+      llmGenerationId: 'call-1',
+      status: 'started',
+      createdAt: '2026-05-02T00:00:00.100Z',
+      model: { provider: 'anthropic-compatible', model: 'kimi-k2.5' },
+      input: { messages: [{ role: 'user', content: 'hello' }] },
+    });
+
+    expect(client.traces[0]?.spans[0]?.generations).toHaveLength(0);
+
+    await exporter.publish({
+      id: 'generation-complete',
+      traceId,
+      sessionId: 'session-1',
+      conversationId: 'conversation-1',
+      llmGenerationId: 'call-1',
+      status: 'completed',
+      createdAt: '2026-05-02T00:00:01.000Z',
+      model: { provider: 'anthropic-compatible', model: 'kimi-k2.5' },
+      output: 'world',
+      usage: { input: 10, output: 3, totalTokens: 13 },
+    });
+
+    const generation = client.traces[0]?.spans[0]?.generations[0];
+    expect(generation?.body).toMatchObject({
+      startTime: '2026-05-02T00:00:00.100Z',
+      endTime: '2026-05-02T00:00:01.000Z',
+      input: { messages: [{ role: 'user', content: 'hello' }] },
+      output: 'world',
+      usage: { input: 10, output: 3, total: 13, unit: 'TOKENS' },
+      metadata: { llmGenerationId: 'call-1', status: 'completed' },
+    });
+    expect(generation?.updates).toHaveLength(0);
+  });
+
+  it('keeps interleaved sessions isolated while completing generations', async () => {
+    const client = new FakeLangfuseSdkClient();
+    const exporter = new LangfuseSdkRuntimeEventExporter(
+      {
+        enabled: true,
+        publicKey: 'public',
+        secretKey: 'secret',
+        baseUrl: 'https://langfuse.example.com',
+        flushAt: 20,
+        flushIntervalMs: 5_000,
+        includePayloads: true,
+      },
+      client,
+    );
+    const otherTraceId = '22222222222222222222222222222222';
+
+    for (const [sessionId, sessionTraceId, input] of [
+      ['session-a', traceId, 'alpha'],
+      ['session-b', otherTraceId, 'beta'],
+    ] as const) {
+      await exporter.publish({
+        id: `turn-${sessionId}`,
+        traceId: sessionTraceId,
+        type: 'chat_turn_started',
+        sessionId,
+        conversationId: sessionId,
+        createdAt: '2026-05-02T00:00:00.000Z',
+      });
+      await exporter.publish({
+        id: `start-${sessionId}`,
+        traceId: sessionTraceId,
+        sessionId,
+        conversationId: sessionId,
+        llmGenerationId: 'call-1',
+        status: 'started',
+        createdAt: '2026-05-02T00:00:00.100Z',
+        model: { provider: 'anthropic-compatible', model: 'kimi-k2.5' },
+        input,
+      });
+    }
+
+    for (const [sessionId, sessionTraceId, output] of [
+      ['session-b', otherTraceId, 'beta-result'],
+      ['session-a', traceId, 'alpha-result'],
+    ] as const) {
+      await exporter.publish({
+        id: `complete-${sessionId}`,
+        traceId: sessionTraceId,
+        sessionId,
+        conversationId: sessionId,
+        llmGenerationId: 'call-1',
+        status: 'completed',
+        createdAt: '2026-05-02T00:00:01.000Z',
+        model: { provider: 'anthropic-compatible', model: 'kimi-k2.5' },
+        output,
+        usage: { input: 10, output: 2, totalTokens: 12 },
+      });
+    }
+
+    const generationBySession = new Map(
+      client.traces.map((candidate) => [
+        candidate.body.sessionId,
+        candidate.spans[0]?.generations[0],
+      ]),
+    );
+    expect(generationBySession.get('session-a')?.body).toMatchObject({
+      input: 'alpha',
+      output: 'alpha-result',
+      endTime: '2026-05-02T00:00:01.000Z',
+    });
+    expect(generationBySession.get('session-b')?.body).toMatchObject({
+      input: 'beta',
+      output: 'beta-result',
+      endTime: '2026-05-02T00:00:01.000Z',
+    });
+    expect(generationBySession.get('session-a')?.updates).toHaveLength(0);
+    expect(generationBySession.get('session-b')?.updates).toHaveLength(0);
+  });
+
+  it('creates one closed error generation when the provider request fails', async () => {
+    const client = new FakeLangfuseSdkClient();
+    const exporter = new LangfuseSdkRuntimeEventExporter(
+      {
+        enabled: true,
+        publicKey: 'public',
+        secretKey: 'secret',
+        baseUrl: 'https://langfuse.example.com',
+        flushAt: 20,
+        flushIntervalMs: 5_000,
+        includePayloads: true,
+      },
+      client,
+    );
+
+    await exporter.publish({
+      id: 'turn-start',
+      traceId,
+      type: 'chat_turn_started',
+      sessionId: 'session-1',
+      conversationId: 'conversation-1',
+      createdAt: '2026-05-02T00:00:00.000Z',
+    });
+    await exporter.publish({
+      id: 'generation-start',
+      traceId,
+      sessionId: 'session-1',
+      conversationId: 'conversation-1',
+      llmGenerationId: 'call-1',
+      status: 'started',
+      createdAt: '2026-05-02T00:00:00.100Z',
+      model: { provider: 'anthropic-compatible', model: 'kimi-k2.5' },
+      input: 'hello',
+    });
+    await exporter.publish({
+      id: 'generation-failed',
+      traceId,
+      sessionId: 'session-1',
+      conversationId: 'conversation-1',
+      llmGenerationId: 'call-1',
+      status: 'failed',
+      createdAt: '2026-05-02T00:00:01.000Z',
+      model: { provider: 'anthropic-compatible', model: 'kimi-k2.5' },
+      error: 'HTTP 503',
+    });
+
+    const generation = client.traces[0]?.spans[0]?.generations[0];
+    expect(generation?.body).toMatchObject({
+      startTime: '2026-05-02T00:00:00.100Z',
+      endTime: '2026-05-02T00:00:01.000Z',
+      input: 'hello',
+      output: { error: 'HTTP 503' },
+      level: 'ERROR',
+      statusMessage: 'HTTP 503',
+      metadata: { llmGenerationId: 'call-1', status: 'failed' },
+    });
+    expect(generation?.updates).toHaveLength(0);
   });
 
   it('nests subagent model and tool observations under the subagent span', async () => {

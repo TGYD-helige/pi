@@ -88,7 +88,10 @@ export class LangfuseSdkRuntimeEventExporter implements RuntimeEventExporter {
   private readonly client: LangfuseSdkClient;
   private readonly traces = new Map<string, LangfuseSdkTraceClient>();
   private readonly spans = new Map<string, LangfuseSdkSpanClient>();
-  private readonly generations = new Map<string, LangfuseSdkGenerationClient>();
+  // Keep each start local until its terminal event so Langfuse receives one complete
+  // generation-create instead of separate create/update batches that can be merged out of order.
+  // A call that never reaches a terminal event is intentionally absent rather than permanently open.
+  private readonly pendingGenerations = new Map<string, RuntimeLlmGenerationEvent>();
 
   constructor(
     private readonly config: LangfuseExporterConfig,
@@ -321,47 +324,22 @@ export class LangfuseSdkRuntimeEventExporter implements RuntimeEventExporter {
 
   private publishLlmGenerationEvent(event: RuntimeLlmGenerationEvent): void {
     const traceId = requireTraceId(event.traceId);
-    const trace = this.getOrCreateSdkTrace(event);
-    const rootKey = chatSpanKey(event);
-    const parent = this.getSdkEventParent(trace, rootKey, event);
     const key = llmGenerationKey(event);
-    const id = langfuseSpanId(traceId, key);
 
     if (event.status === 'started') {
-      const body = {
-        id,
-        name: llmGenerationObservationName(event),
-        startTime: event.createdAt,
-        model: event.model.model,
-        modelParameters: {
-          provider: event.model.provider,
-          ...(event.model.thinkingLevel ? { thinkingLevel: event.model.thinkingLevel } : {}),
-        },
-        input: event.input,
-        metadata: llmGenerationMetadata(event),
-      };
-      const generation = this.generations.get(key);
-      if (generation) {
-        generation.update({
-          input: event.input,
-          metadata: llmGenerationMetadata(event),
-        });
-      } else {
-        this.generations.set(key, parent.generation(body));
-      }
+      this.pendingGenerations.set(key, event);
       return;
     }
 
-    const generation =
-      this.generations.get(key) ??
-      parent.generation({
-        id,
-        name: llmGenerationObservationName(event),
-        startTime: event.createdAt,
-        model: event.model.model,
-        metadata: llmGenerationMetadata(event),
-      });
-    generation.update({
+    const started = this.pendingGenerations.get(key);
+    const trace = this.getOrCreateSdkTrace(event);
+    const rootKey = chatSpanKey(event);
+    const parent = this.getSdkEventParent(trace, rootKey, event);
+    parent.generation({
+      id: langfuseSpanId(traceId, key),
+      name: llmGenerationObservationName(started ?? event),
+      startTime: started?.createdAt ?? event.createdAt,
+      input: started?.input,
       output: event.output ?? (event.error ? { error: event.error } : undefined),
       endTime: event.createdAt,
       level: event.error ? 'ERROR' : 'DEFAULT',
@@ -376,7 +354,7 @@ export class LangfuseSdkRuntimeEventExporter implements RuntimeEventExporter {
       },
       metadata: llmGenerationMetadata(event),
     });
-    this.generations.delete(key);
+    this.pendingGenerations.delete(key);
   }
 
   private getOrCreateSdkTrace(event: RuntimeTelemetryEvent): LangfuseSdkTraceClient {
