@@ -21,6 +21,7 @@
  */
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { BUILT_IN_VIDEO_MODELS } from '../../../packages/pi-video-gen/src/providers/models.js';
 import { getFlag } from '../src/judge-client.js';
 import {
   type DriveResult,
@@ -50,16 +51,33 @@ function parseVideoArgs(): VideoArgs {
   const durationSecRaw = getFlag(argv, '--duration-sec', '5');
   const durationSec = Number(durationSecRaw);
   // Reject malformed input at t=0 — a NaN/negative would otherwise surface only
-  // after paid frame generation. The model's range check stays with the extension.
+  // after paid frame generation.
   if (!Number.isInteger(durationSec) || durationSec <= 0) {
     throw new Error(`--duration-sec must be a positive integer, got "${durationSecRaw}".`);
+  }
+  const videoModel = getFlag(
+    argv,
+    '--video-model',
+    process.env.PI_EVAL_VIDEO_MODEL || 'doubao-seedance-2-0-260128',
+  );
+  // Deterministic range preflight for built-in ids — an out-of-range duration
+  // must die here, not after the paid image stage. Unknown custom ids defer to
+  // the extension's video_render check.
+  const known = BUILT_IN_VIDEO_MODELS.find(
+    (m) => m.id === videoModel || m.aliases.includes(videoModel),
+  );
+  if (known) {
+    const [min, max] = known.capabilities.durations;
+    if (durationSec < min || durationSec > max) {
+      throw new Error(`--duration-sec ${durationSec} is outside ${min}-${max}s for ${known.id}.`);
+    }
   }
   return {
     samples: Number(getFlag(argv, '--samples', '2')),
     tier: getFlag(argv, '--tier', 'medium') as VideoArgs['tier'],
     storyId: getFlag(argv, '--story', ''),
     // CI-proven ids from integration.yml; override for other gateways.
-    videoModel: getFlag(argv, '--video-model', process.env.PI_EVAL_VIDEO_MODEL || 'doubao-seedance-2-0-260128'),
+    videoModel,
     imageModel: getFlag(argv, '--image-model', process.env.PI_EVAL_IMAGE_MODEL || ''),
     // Per-shot clip length. 5 keeps smoke cheap; use 10-15 for scored runs —
     // longer clips expose within-shot motion drift.

@@ -280,6 +280,32 @@ describe('pi-video-gen extension', () => {
     expect(notifiedText(ctx2)).toMatch(/--duration must be an integer/);
   });
 
+  it('/video-gen generate rejects an unterminated quoted value before any submit', async () => {
+    const ctx = fakeCtx(cwd);
+    await commands.get('video-gen')!.handler('generate --visuals "wide --action waves', ctx);
+    expect(notifiedText(ctx)).toMatch(/Unterminated quoted value/);
+  });
+
+  it('video_generate rejects an empty-string aspectRatio instead of fingerprinting it', async () => {
+    mkdirSync(join(home, '.pi', 'agent'), { recursive: true });
+    writeFileSync(
+      join(home, '.pi', 'agent', 'settings.json'),
+      JSON.stringify({ 'pi-video-gen': { providers: { ark: { apiKey: 'k' } } } }),
+    );
+    await startSession(cwd);
+    const result = await tools
+      .get('video_generate')!
+      .execute(
+        'c1',
+        { ...VALID_GENERATE_PARAMS, aspectRatio: '' },
+        undefined,
+        undefined,
+        fakeCtx(cwd),
+      );
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toMatch(/aspectRatio must be a non-empty string/);
+  });
+
   it('/video-gen generate surfaces structured-prompt validation errors', async () => {
     mkdirSync(join(home, '.pi', 'agent'), { recursive: true });
     writeFileSync(

@@ -135,7 +135,16 @@ function parseGenerateFlags(text: string): { flags: Record<string, string> } | {
       return { error: `Unrecognized text "${gap}" — use --key "value" flags.` };
     }
     const quoted = m[3] ?? m[4];
-    flags[m[1]!] = quoted !== undefined ? quoted.replace(/\\(["'\\])/g, '$1') : (m[5] ?? '');
+    const bare = m[5];
+    // A bare value starting with a quote char means an unterminated quote — the
+    // quoted alternative needed a closer, so `--visuals "wide` must not slide
+    // through as the literal value `"wide` into a paid request.
+    if (bare !== undefined && (bare.startsWith('"') || bare.startsWith("'"))) {
+      return {
+        error: `Unterminated quoted value for --${m[1]} (${bare}…). Close the quote, or escape it as \\${bare[0]}.`,
+      };
+    }
+    flags[m[1]!] = quoted !== undefined ? quoted.replace(/\\(["'\\])/g, '$1') : (bare ?? '');
     covered = m.index + m[0].length;
   }
   const tail = text.slice(covered).trim();
@@ -384,6 +393,11 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
       return errResult(
         `durationSec must be ${caps.durations[0]}-${caps.durations[1]}s for ${resolved.entry.id} (got ${toolParams.durationSec}).`,
       );
+    }
+    // Reject empty-string ratio before the truthy capability check — "" would
+    // skip the check yet survive `??` into the fingerprint and paid request.
+    if (toolParams.aspectRatio !== undefined && toolParams.aspectRatio.trim() === '') {
+      return errResult('aspectRatio must be a non-empty string when passed (e.g. "16:9").');
     }
     if (toolParams.aspectRatio && !caps.aspectRatios.includes(toolParams.aspectRatio)) {
       return errResult(
