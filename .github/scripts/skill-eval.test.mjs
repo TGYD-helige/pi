@@ -345,7 +345,7 @@ it('uses trusted base code, comments before enforcing, and never executes PR cod
   assert.match(workflow, /ref: \$\{\{ github\.event\.pull_request\.base\.sha \}\}/);
   assert.match(workflow, /pull-requests: write/);
   assert.match(workflow, /continue-on-error: true/);
-  assert.match(workflow, /peter-evans\/create-or-update-comment@v4/);
+  assert.match(workflow, /peter-evans\/create-or-update-comment@v5/);
   assert.match(workflow, /skill-eval\.mjs --detect/);
   assert.match(workflow, /timeout-minutes: 120/);
   assert.ok(workflow.indexOf('Post PR comment') < workflow.indexOf('Enforce gate outcome'));

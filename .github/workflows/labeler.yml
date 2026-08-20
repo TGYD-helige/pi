@@ -41,10 +41,7 @@ permissions:
 jobs:
   label:
     name: Sync PR labels
-    runs-on:
-      - instance-hnpsq9go
-      - linux
-      - x64
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
       PI_INTEGRATION_BASE_URL: ${{ secrets.PI_INTEGRATION_BASE_URL }}

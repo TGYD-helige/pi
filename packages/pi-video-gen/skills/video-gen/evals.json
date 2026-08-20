@@ -17,7 +17,7 @@
         {
           "text": "Treats the operation as local rather than paid generation",
           "includes": ["local"],
-          "includes_any": ["no paid", "does not need paid", "no paid-model"]
+          "includes_any": ["no paid", "does not need paid", "no paid-model", "not needed"]
         }
       ]
     },

@@ -20,10 +20,7 @@ jobs:
     if: >
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
-    runs-on:
-      - instance-hnpsq9go
-      - linux
-      - x64
+    runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.select.outputs.matrix }}
       has_extensions: ${{ steps.select.outputs.has_extensions }}
@@ -48,10 +45,7 @@ jobs:
     if: >
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
-    runs-on:
-      - instance-hnpsq9go
-      - linux
-      - x64
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
       PI_INTEGRATION_BASE_URL: ${{ secrets.PI_INTEGRATION_BASE_URL }}
@@ -108,10 +102,7 @@ jobs:
     if: >
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
-    runs-on:
-      - instance-hnpsq9go
-      - linux
-      - x64
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
       PI_INTEGRATION_BASE_URL: ${{ secrets.PI_INTEGRATION_BASE_URL }}
@@ -212,7 +203,7 @@ jobs:
   # instead so local composition never needs a model call.
   #
   # Skipped on fork PRs (secrets unavailable). Each job duplicates Stage A
-  # setup because self-hosted matrix jobs don't share workspace state.
+  # setup because matrix jobs don't share workspace state.
   # ──────────────────────────────────────────────────────────────────────
   extension-tool-matrix:
     name: Extension E2E (${{ matrix.extension }}${{ matrix.provider && format('-{0}', matrix.provider) || '' }}${{ matrix.scenario && format('-{0}', matrix.scenario) || '' }})
@@ -222,10 +213,7 @@ jobs:
        github.event.pull_request.head.repo.full_name == github.repository) &&
       needs.detect-extension-matrix.outputs.has_extensions == 'true' &&
       vars.PI_INTEGRATION_SKIP_STAGE_C != 'true'
-    runs-on:
-      - instance-hnpsq9go
-      - linux
-      - x64
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -413,9 +401,9 @@ jobs:
           # 2. settings.json — extension-specific configuration. Every matrix
           #    entry carries any keys it needs; absent extensions ignore them.
           #    pi-memory-mem0's historyDbPath MUST stay on the per-job temp dir:
-          #    its default (~/.pi/agent/memories/) is shared by every matrix job
-          #    on this self-hosted host, and concurrent better-sqlite3 writers
-          #    on one file segfault the pi process (exit 139).
+          #    concurrent better-sqlite3 writers on one shared file segfault
+          #    the pi process (exit 139), so nothing may point at a default
+          #    location like ~/.pi/agent/memories/.
           cat > "$PI_CODING_AGENT_DIR/settings.json" <<EOF
           {
             "pi-teamwork": {
@@ -675,19 +663,13 @@ jobs:
           retention-days: 7
 
       - name: Bootstrap multica CLI (pi-teamwork only)
-        # pi-teamwork's autoInstall path is broken on this self-hosted runner:
-        # multica's upstream install.sh tries `sudo mv ...` to /usr/local/bin
-        # before falling back to ~/.local/bin, but our runner user has sudo
-        # configured to require a password — so the install silently fails.
-        # We bootstrap the binary ourselves with MULTICA_BIN_DIR forcing the
-        # user-bin path, then put it on $GITHUB_PATH so pi-teamwork's
-        # session_start spawn(multica) finds it. Driving login + daemon up
-        # front means the LLM's workspace_list call returns real data
+        # Install + authenticate the multica CLI up front instead of relying
+        # on pi-teamwork's autoInstall at session_start: driving login and the
+        # daemon here means the LLM's workspace_list call returns real data
         # instead of `Exit code 1`, cutting the job from ~12min to ~1min.
         if: matrix.extension == 'pi-teamwork'
         env:
           MULTICA_TOKEN: ${{ secrets.PI_INTEGRATION_MULTICA_TOKEN }}
-          MULTICA_BIN_DIR: /home/work/.local/bin
         run: |
           set -euo pipefail
           mkdir -p "$HOME/.local/bin"
@@ -703,7 +685,7 @@ jobs:
           chmod 0755 "$HOME/.local/bin/multica"
           multica --version
           multica config set server_url https://multica.ai
-          multica daemon start || true   # may already be running on this runner
+          multica daemon start || true   # tolerate an already-running daemon
           multica login --token "$MULTICA_TOKEN"
           # Smoke-test the auth before handing off to pi-teamwork.
           multica workspace list --output json

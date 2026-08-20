@@ -51,10 +51,7 @@ jobs:
   browser-eval:
     name: Browser eval (task completion)
     if: inputs.target == 'browser' || inputs.target == 'both'
-    runs-on:
-      - instance-hnpsq9go
-      - linux
-      - x64
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
       PI_INTEGRATION_BASE_URL: ${{ secrets.PI_INTEGRATION_BASE_URL }}
@@ -169,10 +166,7 @@ jobs:
     # runs-on at it (the runner needs Accessibility + Screen Recording grants).
     # Until then this job is a placeholder that documents the requirement; the
     # runner itself skips gracefully on non-macOS, so a Linux fallback no-ops.
-    runs-on:
-      - instance-hnpsq9go
-      - linux
-      - x64
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
       PI_INTEGRATION_BASE_URL: ${{ secrets.PI_INTEGRATION_BASE_URL }}
@@ -231,10 +225,7 @@ jobs:
   video-eval:
     name: Video eval (ViMax-Bench render quality)
     if: inputs.target == 'video'
-    runs-on:
-      - instance-hnpsq9go
-      - linux
-      - x64
+    runs-on: ubuntu-latest
     # One Medium story ≈ 9 paid clips + frames — tens of minutes per story.
     timeout-minutes: 120
     env:
@@ -244,7 +235,7 @@ jobs:
       PI_EVAL_IMAGE_MODEL: doubao-seedream-5-0-lite-260128
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup pi build environment
         uses: ./.github/actions/setup-pi-build
@@ -328,7 +319,7 @@ jobs:
 
       - name: Upload results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: video-eval-results
           path: tests/eval/results/video-vimax.json
