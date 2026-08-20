@@ -21,7 +21,8 @@
  */
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { BUILT_IN_VIDEO_MODELS } from '../../../packages/pi-video-gen/src/providers/models.js';
+import { loadVideoGenSettings, resolveModel } from '../../../packages/pi-video-gen/src/config.js';
+import type { VideoGenSettings } from '../../../packages/pi-video-gen/src/types.js';
 import { getFlag } from '../src/judge-client.js';
 import {
   type DriveResult,
@@ -51,33 +52,17 @@ function parseVideoArgs(): VideoArgs {
   const durationSecRaw = getFlag(argv, '--duration-sec', '5');
   const durationSec = Number(durationSecRaw);
   // Reject malformed input at t=0 — a NaN/negative would otherwise surface only
-  // after paid frame generation.
+  // after paid frame generation. The model range check runs later in main()
+  // against the actually-resolved active model (mode-dependent).
   if (!Number.isInteger(durationSec) || durationSec <= 0) {
     throw new Error(`--duration-sec must be a positive integer, got "${durationSecRaw}".`);
-  }
-  const videoModel = getFlag(
-    argv,
-    '--video-model',
-    process.env.PI_EVAL_VIDEO_MODEL || 'doubao-seedance-2-0-260128',
-  );
-  // Deterministic range preflight for built-in ids — an out-of-range duration
-  // must die here, not after the paid image stage. Unknown custom ids defer to
-  // the extension's video_render check.
-  const known = BUILT_IN_VIDEO_MODELS.find(
-    (m) => m.id === videoModel || m.aliases.includes(videoModel),
-  );
-  if (known) {
-    const [min, max] = known.capabilities.durations;
-    if (durationSec < min || durationSec > max) {
-      throw new Error(`--duration-sec ${durationSec} is outside ${min}-${max}s for ${known.id}.`);
-    }
   }
   return {
     samples: Number(getFlag(argv, '--samples', '2')),
     tier: getFlag(argv, '--tier', 'medium') as VideoArgs['tier'],
     storyId: getFlag(argv, '--story', ''),
     // CI-proven ids from integration.yml; override for other gateways.
-    videoModel,
+    videoModel: getFlag(argv, '--video-model', process.env.PI_EVAL_VIDEO_MODEL || 'doubao-seedance-2-0-260128'),
     imageModel: getFlag(argv, '--image-model', process.env.PI_EVAL_IMAGE_MODEL || ''),
     // Per-shot clip length. 5 keeps smoke cheap; use 10-15 for scored runs —
     // longer clips expose within-shot motion drift.
@@ -309,6 +294,25 @@ async function main() {
     // useDefaultPi mode writes no settings — the user's own config drives.
     settings: hcfg.useDefaultPi ? {} : buildSettings(args, vargs),
   });
+
+  // Duration preflight against the ACTIVE model's real capabilities — isolated
+  // mode resolves the harness-written settings; --use-default-pi resolves the
+  // user's own config. Fail closed before any paid frame generation.
+  const videoSettings = hcfg.useDefaultPi
+    ? loadVideoGenSettings(process.cwd(), false)
+    : (buildSettings(args, vargs)['pi-video-gen'] as VideoGenSettings);
+  const activeVideo = resolveModel(videoSettings);
+  if (!activeVideo) {
+    throw new Error(
+      'Cannot resolve the active video model for the duration preflight — refusing to start paid generation.',
+    );
+  }
+  const [minD, maxD] = activeVideo.entry.capabilities.durations;
+  if (vargs.durationSec < minD || vargs.durationSec > maxD) {
+    throw new Error(
+      `--duration-sec ${vargs.durationSec} is outside ${minD}-${maxD}s for the active video model (${activeVideo.entry.id}).`,
+    );
+  }
 
   const shotBooksDir = path.join(ARTIFACTS_DIR, 'shotbooks');
   mkdirSync(shotBooksDir, { recursive: true });
