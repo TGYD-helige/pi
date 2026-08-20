@@ -235,7 +235,7 @@ jobs:
       PI_EVAL_IMAGE_MODEL: doubao-seedream-5-0-lite-260128
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup pi build environment
         uses: ./.github/actions/setup-pi-build
@@ -319,7 +319,7 @@ jobs:
 
       - name: Upload results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: video-eval-results
           path: tests/eval/results/video-vimax.json
