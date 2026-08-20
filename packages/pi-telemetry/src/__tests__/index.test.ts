@@ -646,11 +646,15 @@ describe('telemetry', () => {
       id: 'generation-start',
       traceId,
       sessionId: 'session-1',
-      conversationId: 'conversation-1',
+      conversationId: 'session-1',
       llmGenerationId: 'call-1',
       status: 'started',
       createdAt: '2026-05-02T00:00:00.100Z',
-      model: { provider: 'anthropic-compatible', model: 'kimi-k2.5' },
+      model: {
+        provider: 'anthropic-compatible',
+        model: 'kimi-k2.5',
+        thinkingLevel: 'off',
+      },
       input: { messages: [{ role: 'user', content: 'hello' }] },
     });
 
@@ -664,7 +668,7 @@ describe('telemetry', () => {
       llmGenerationId: 'call-1',
       status: 'completed',
       createdAt: '2026-05-02T00:00:01.000Z',
-      model: { provider: 'anthropic-compatible', model: 'kimi-k2.5' },
+      model: { provider: 'fallback-provider', model: 'fallback-model' },
       output: 'world',
       usage: { input: 10, output: 3, totalTokens: 13 },
     });
@@ -676,7 +680,14 @@ describe('telemetry', () => {
       input: { messages: [{ role: 'user', content: 'hello' }] },
       output: 'world',
       usage: { input: 10, output: 3, total: 13, unit: 'TOKENS' },
-      metadata: { llmGenerationId: 'call-1', status: 'completed' },
+      model: 'kimi-k2.5',
+      modelParameters: { provider: 'anthropic-compatible', thinkingLevel: 'off' },
+      metadata: {
+        llmGenerationId: 'call-1',
+        status: 'completed',
+        model: 'anthropic-compatible/kimi-k2.5',
+        thinkingLevel: 'off',
+      },
     });
     expect(generation?.updates).toHaveLength(0);
   });
@@ -787,7 +798,7 @@ describe('telemetry', () => {
       id: 'generation-start',
       traceId,
       sessionId: 'session-1',
-      conversationId: 'conversation-1',
+      conversationId: 'session-1',
       llmGenerationId: 'call-1',
       status: 'started',
       createdAt: '2026-05-02T00:00:00.100Z',
@@ -817,6 +828,171 @@ describe('telemetry', () => {
       metadata: { llmGenerationId: 'call-1', status: 'failed' },
     });
     expect(generation?.updates).toHaveLength(0);
+  });
+
+  it('drops abandoned starts when their chat turn closes', async () => {
+    const client = new FakeLangfuseSdkClient();
+    const exporter = new LangfuseSdkRuntimeEventExporter(
+      {
+        enabled: true,
+        publicKey: 'public',
+        secretKey: 'secret',
+        baseUrl: 'https://langfuse.example.com',
+        flushAt: 20,
+        flushIntervalMs: 5_000,
+        includePayloads: true,
+      },
+      client,
+    );
+
+    await exporter.publish({
+      id: 'turn-start',
+      traceId,
+      type: 'chat_turn_started',
+      sessionId: 'session-1',
+      createdAt: '2026-05-02T00:00:00.000Z',
+    });
+    await exporter.publish({
+      id: 'generation-start',
+      traceId,
+      sessionId: 'session-1',
+      conversationId: 'conversation-1',
+      llmGenerationId: 'call-1',
+      status: 'started',
+      createdAt: '2026-05-02T00:00:00.100Z',
+      model: { provider: 'anthropic-compatible', model: 'kimi-k2.5' },
+      input: 'abandoned input',
+    });
+    await exporter.publish({
+      id: 'turn-failed',
+      traceId,
+      type: 'chat_turn_failed',
+      sessionId: 'session-1',
+      createdAt: '2026-05-02T00:00:00.500Z',
+      error: 'cancelled',
+    });
+    await exporter.publish({
+      id: 'late-generation-terminal',
+      traceId,
+      sessionId: 'session-1',
+      conversationId: 'session-1',
+      llmGenerationId: 'call-1',
+      status: 'failed',
+      createdAt: '2026-05-02T00:00:01.000Z',
+      model: { provider: 'anthropic-compatible', model: 'kimi-k2.5' },
+      error: 'cancelled',
+    });
+
+    const generation = client.traces[0]?.spans[0]?.generations[0];
+    expect(generation?.body).toMatchObject({
+      startTime: '2026-05-02T00:00:01.000Z',
+      endTime: '2026-05-02T00:00:01.000Z',
+      output: { error: 'cancelled' },
+    });
+    expect(generation?.body.input).toBeUndefined();
+  });
+
+  it('clears abandoned starts when the exporter closes', async () => {
+    const client = new FakeLangfuseSdkClient();
+    const exporter = new LangfuseSdkRuntimeEventExporter(
+      {
+        enabled: true,
+        publicKey: 'public',
+        secretKey: 'secret',
+        baseUrl: 'https://langfuse.example.com',
+        flushAt: 20,
+        flushIntervalMs: 5_000,
+        includePayloads: true,
+      },
+      client,
+    );
+
+    await exporter.publish({
+      id: 'turn-start',
+      traceId,
+      type: 'chat_turn_started',
+      sessionId: 'session-1',
+      createdAt: '2026-05-02T00:00:00.000Z',
+    });
+    await exporter.publish({
+      id: 'generation-start',
+      traceId,
+      sessionId: 'session-1',
+      conversationId: 'session-1',
+      llmGenerationId: 'call-1',
+      status: 'started',
+      createdAt: '2026-05-02T00:00:00.100Z',
+      model: { provider: 'anthropic-compatible', model: 'kimi-k2.5' },
+      input: 'abandoned input',
+    });
+
+    const pendingGenerations = (
+      exporter as unknown as {
+        pendingGenerations: Map<string, unknown>;
+      }
+    ).pendingGenerations;
+    expect(pendingGenerations).toHaveLength(1);
+    await exporter.close();
+
+    expect(client.closed).toBe(1);
+    expect(pendingGenerations).toHaveLength(0);
+  });
+
+  it('bounds abandoned starts and degrades evicted terminals to closed output-only records', async () => {
+    const client = new FakeLangfuseSdkClient();
+    const exporter = new LangfuseSdkRuntimeEventExporter(
+      {
+        enabled: true,
+        publicKey: 'public',
+        secretKey: 'secret',
+        baseUrl: 'https://langfuse.example.com',
+        flushAt: 20,
+        flushIntervalMs: 5_000,
+        includePayloads: true,
+      },
+      client,
+    );
+
+    await exporter.publish({
+      id: 'turn-start',
+      traceId,
+      type: 'chat_turn_started',
+      sessionId: 'session-0',
+      createdAt: '2026-05-02T00:00:00.000Z',
+    });
+    for (let index = 0; index <= 128; index += 1) {
+      await exporter.publish({
+        id: `generation-start-${index}`,
+        traceId,
+        sessionId: `session-${index}`,
+        conversationId: `session-${index}`,
+        llmGenerationId: 'call-1',
+        status: 'started',
+        createdAt: '2026-05-02T00:00:00.100Z',
+        model: { provider: 'anthropic-compatible', model: 'kimi-k2.5' },
+        input: `input-${index}`,
+      });
+    }
+    await exporter.publish({
+      id: 'evicted-generation-terminal',
+      traceId,
+      sessionId: 'session-0',
+      conversationId: 'session-0',
+      llmGenerationId: 'call-1',
+      status: 'completed',
+      createdAt: '2026-05-02T00:00:01.000Z',
+      model: { provider: 'anthropic-compatible', model: 'kimi-k2.5' },
+      output: 'completed after eviction',
+      usage: { input: 1, output: 1, totalTokens: 2 },
+    });
+
+    const generation = client.traces[0]?.spans[0]?.generations[0];
+    expect(generation?.body).toMatchObject({
+      startTime: '2026-05-02T00:00:01.000Z',
+      endTime: '2026-05-02T00:00:01.000Z',
+      output: 'completed after eviction',
+    });
+    expect(generation?.body.input).toBeUndefined();
   });
 
   it('nests subagent model and tool observations under the subagent span', async () => {

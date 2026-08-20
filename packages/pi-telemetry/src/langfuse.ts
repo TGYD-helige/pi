@@ -83,6 +83,7 @@ type OtelAttributeValue =
 const DEFAULT_LANGFUSE_BASE_URL = 'https://cloud.langfuse.com';
 const DEFAULT_FLUSH_AT = 20;
 const DEFAULT_FLUSH_INTERVAL_MS = 5000;
+const MAX_PENDING_GENERATIONS = 128;
 
 export class LangfuseSdkRuntimeEventExporter implements RuntimeEventExporter {
   private readonly client: LangfuseSdkClient;
@@ -133,6 +134,7 @@ export class LangfuseSdkRuntimeEventExporter implements RuntimeEventExporter {
   }
 
   async close(): Promise<void> {
+    this.pendingGenerations.clear();
     await this.client.shutdownAsync();
   }
 
@@ -179,6 +181,7 @@ export class LangfuseSdkRuntimeEventExporter implements RuntimeEventExporter {
       }
       case 'chat_turn_completed':
       case 'chat_turn_failed': {
+        this.clearPendingGenerationsForLifecycle(event);
         const output = event.details?.output ?? (event.error ? { error: event.error } : undefined);
         this.closeSdkSubagentBatchSpans(traceId, event);
         trace.update({
@@ -248,6 +251,7 @@ export class LangfuseSdkRuntimeEventExporter implements RuntimeEventExporter {
       case 'subagent_completed':
       case 'subagent_failed':
       case 'subagent_cancelled': {
+        this.clearPendingGenerationsForLifecycle(event);
         const key = subagentSpanKey(event);
         const output = event.details?.output ?? (event.error ? { error: event.error } : undefined);
         this.ensureSdkRootSpan(trace, rootKey, event);
@@ -327,34 +331,64 @@ export class LangfuseSdkRuntimeEventExporter implements RuntimeEventExporter {
     const key = llmGenerationKey(event);
 
     if (event.status === 'started') {
-      this.pendingGenerations.set(key, event);
+      this.rememberPendingGeneration(key, event);
       return;
     }
 
     const started = this.pendingGenerations.get(key);
+    const source = started ?? event;
+    const model = source.model;
     const trace = this.getOrCreateSdkTrace(event);
     const rootKey = chatSpanKey(event);
     const parent = this.getSdkEventParent(trace, rootKey, event);
-    parent.generation({
-      id: langfuseSpanId(traceId, key),
-      name: llmGenerationObservationName(started ?? event),
-      startTime: started?.createdAt ?? event.createdAt,
-      input: started?.input,
-      output: event.output ?? (event.error ? { error: event.error } : undefined),
-      endTime: event.createdAt,
-      level: event.error ? 'ERROR' : 'DEFAULT',
-      ...(event.error ? { statusMessage: event.error } : {}),
-      ...(event.usage
-        ? { usage: toLangfuseUsage(event.usage), usageDetails: toLangfuseUsageDetails(event.usage) }
-        : {}),
-      model: event.model.model,
-      modelParameters: {
-        provider: event.model.provider,
-        ...(event.model.thinkingLevel ? { thinkingLevel: event.model.thinkingLevel } : {}),
-      },
-      metadata: llmGenerationMetadata(event),
-    });
-    this.pendingGenerations.delete(key);
+    try {
+      parent.generation({
+        id: langfuseSpanId(traceId, key),
+        name: llmGenerationObservationName(source),
+        startTime: source.createdAt,
+        input: source.input,
+        output: event.output ?? (event.error ? { error: event.error } : undefined),
+        endTime: event.createdAt,
+        level: event.error ? 'ERROR' : 'DEFAULT',
+        ...(event.error ? { statusMessage: event.error } : {}),
+        ...(event.usage
+          ? {
+              usage: toLangfuseUsage(event.usage),
+              usageDetails: toLangfuseUsageDetails(event.usage),
+            }
+          : {}),
+        model: model.model,
+        modelParameters: {
+          provider: model.provider,
+          ...(model.thinkingLevel ? { thinkingLevel: model.thinkingLevel } : {}),
+        },
+        metadata: llmGenerationMetadata({ ...event, model }),
+      });
+    } finally {
+      this.pendingGenerations.delete(key);
+    }
+  }
+
+  private rememberPendingGeneration(key: string, event: RuntimeLlmGenerationEvent): void {
+    if (
+      !this.pendingGenerations.has(key) &&
+      this.pendingGenerations.size >= MAX_PENDING_GENERATIONS
+    ) {
+      const oldestKey = this.pendingGenerations.keys().next().value;
+      if (oldestKey !== undefined) {
+        this.pendingGenerations.delete(oldestKey);
+      }
+    }
+    this.pendingGenerations.set(key, event);
+  }
+
+  private clearPendingGenerationsForLifecycle(event: RuntimeLifecycleEvent): void {
+    const generationSessionId = event.childSessionId ?? event.sessionId;
+    for (const [key, pending] of this.pendingGenerations) {
+      if (pending.traceId === event.traceId && pending.sessionId === generationSessionId) {
+        this.pendingGenerations.delete(key);
+      }
+    }
   }
 
   private getOrCreateSdkTrace(event: RuntimeTelemetryEvent): LangfuseSdkTraceClient {
