@@ -24,17 +24,14 @@ jobs:
   evaluate:
     name: skill eval
     if: github.event.pull_request.draft == false
-    runs-on:
-      - instance-hnpsq9go
-      - linux
-      - x64
+    runs-on: ubuntu-latest
     timeout-minutes: 120
 
     steps:
       # Secrets are available to pull_request_target, so only trusted base code
       # is checked out and executed. PR skill files are read later as git blobs.
       - name: Check out trusted base revision
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 1
@@ -64,7 +61,7 @@ jobs:
 
       - name: Set up Node.js
         if: steps.changes.outputs.has_skills == 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 24
 
@@ -205,14 +202,14 @@ jobs:
 
       - name: Post PR comment
         if: always() && steps.changes.outputs.has_skills == 'true'
-        uses: peter-evans/create-or-update-comment@v4
+        uses: peter-evans/create-or-update-comment@v5
         with:
           issue-number: ${{ github.event.pull_request.number }}
           body: ${{ env.BODY }}
 
       - name: Upload eval artifacts
         if: always() && steps.changes.outputs.has_skills == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: skill-eval-${{ github.run_id }}
           path: skill-eval-results

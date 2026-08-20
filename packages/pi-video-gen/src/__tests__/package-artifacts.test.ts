@@ -82,9 +82,7 @@ describe('pi-video-gen package artifacts', () => {
   it('builds against declared platform baselines and verifies release binaries', () => {
     expect(ffmpegBuildWorkflow).toContain('fail-fast: false');
     expect(ffmpegBuildWorkflow).toContain('runner: ubuntu-22.04');
-    expect(ffmpegBuildWorkflow).toMatch(
-      /- target: win32-x64\n\s+runner: \[instance-hnpsq9go, linux, x64\]/,
-    );
+    expect(ffmpegBuildWorkflow).toMatch(/- target: win32-x64\n\s+runner: ubuntu-22\.04/);
     expect(ffmpegBuildWorkflow).not.toContain('sudo -n');
     expect(ffmpegBuildWorkflow).toContain('docker run --detach');
     expect(ffmpegBuildWorkflow).toContain('ubuntu:22.04 sleep infinity');
