@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   CompositeRuntimeEventExporter,
   NoopRuntimeEventExporter,
@@ -20,6 +20,10 @@ import {
 } from '../otel.js';
 
 const traceId = '11111111111111111111111111111111';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe('telemetry', () => {
   it('keeps root exporters resilient when one delegate fails', async () => {
@@ -646,7 +650,7 @@ describe('telemetry', () => {
       id: 'generation-start',
       traceId,
       sessionId: 'session-1',
-      conversationId: 'session-1',
+      conversationId: 'conversation-1',
       llmGenerationId: 'call-1',
       status: 'started',
       createdAt: '2026-05-02T00:00:00.100Z',
@@ -831,6 +835,7 @@ describe('telemetry', () => {
   });
 
   it('drops abandoned starts when their chat turn closes', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const client = new FakeLangfuseSdkClient();
     const exporter = new LangfuseSdkRuntimeEventExporter(
       {
@@ -890,9 +895,103 @@ describe('telemetry', () => {
       output: { error: 'cancelled' },
     });
     expect(generation?.body.input).toBeUndefined();
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[pi-telemetry] dropped 1 pending Langfuse generation start during lifecycle cleanup; late terminal events will be output-only',
+    );
+  });
+
+  it('drops abandoned starts when their subagent lifecycle closes', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const client = new FakeLangfuseSdkClient();
+    const exporter = new LangfuseSdkRuntimeEventExporter(
+      {
+        enabled: true,
+        publicKey: 'public',
+        secretKey: 'secret',
+        baseUrl: 'https://langfuse.example.com',
+        flushAt: 20,
+        flushIntervalMs: 5_000,
+        includePayloads: true,
+      },
+      client,
+    );
+
+    await exporter.publish({
+      id: 'turn-start',
+      traceId,
+      type: 'chat_turn_started',
+      sessionId: 'parent',
+      conversationId: 'parent',
+      createdAt: '2026-05-02T00:00:00.000Z',
+    });
+    await exporter.publish({
+      id: 'subagent-start',
+      traceId,
+      type: 'subagent_started',
+      sessionId: 'parent:subagent:1',
+      conversationId: 'parent:subagent:1',
+      parentSessionId: 'parent',
+      childSessionId: 'parent:subagent:1',
+      runId: 'run-1',
+      createdAt: '2026-05-02T00:00:00.050Z',
+    });
+    await exporter.publish({
+      id: 'generation-start',
+      traceId,
+      sessionId: 'parent:subagent:1',
+      conversationId: 'parent:subagent:1',
+      parentSessionId: 'parent',
+      childSessionId: 'parent:subagent:1',
+      runId: 'run-1',
+      llmGenerationId: 'call-1',
+      status: 'started',
+      createdAt: '2026-05-02T00:00:00.100Z',
+      model: { provider: 'anthropic-compatible', model: 'kimi-k2.5' },
+      input: 'abandoned subagent input',
+    });
+    await exporter.publish({
+      id: 'subagent-cancelled',
+      traceId,
+      type: 'subagent_cancelled',
+      sessionId: 'parent:subagent:1',
+      conversationId: 'parent:subagent:1',
+      parentSessionId: 'parent',
+      childSessionId: 'parent:subagent:1',
+      runId: 'run-1',
+      createdAt: '2026-05-02T00:00:00.500Z',
+      error: 'cancelled',
+    });
+    await exporter.publish({
+      id: 'late-generation-terminal',
+      traceId,
+      sessionId: 'parent:subagent:1',
+      conversationId: 'parent:subagent:1',
+      parentSessionId: 'parent',
+      childSessionId: 'parent:subagent:1',
+      runId: 'run-1',
+      llmGenerationId: 'call-1',
+      status: 'failed',
+      createdAt: '2026-05-02T00:00:01.000Z',
+      model: { provider: 'anthropic-compatible', model: 'kimi-k2.5' },
+      error: 'cancelled',
+    });
+
+    const rootSpan = client.traces[0]?.spans[0];
+    const subagentSpan = rootSpan?.spans.find((span) => span.body.name === 'subagent');
+    const generation = subagentSpan?.generations[0];
+    expect(generation?.body).toMatchObject({
+      startTime: '2026-05-02T00:00:01.000Z',
+      endTime: '2026-05-02T00:00:01.000Z',
+      output: { error: 'cancelled' },
+    });
+    expect(generation?.body.input).toBeUndefined();
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[pi-telemetry] dropped 1 pending Langfuse generation start during lifecycle cleanup; late terminal events will be output-only',
+    );
   });
 
   it('clears abandoned starts when the exporter closes', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const client = new FakeLangfuseSdkClient();
     const exporter = new LangfuseSdkRuntimeEventExporter(
       {
@@ -936,9 +1035,13 @@ describe('telemetry', () => {
 
     expect(client.closed).toBe(1);
     expect(pendingGenerations).toHaveLength(0);
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[pi-telemetry] dropped 1 pending Langfuse generation start during exporter close; late terminal events will be output-only',
+    );
   });
 
   it('bounds abandoned starts and degrades evicted terminals to closed output-only records', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const client = new FakeLangfuseSdkClient();
     const exporter = new LangfuseSdkRuntimeEventExporter(
       {
@@ -993,6 +1096,9 @@ describe('telemetry', () => {
       output: 'completed after eviction',
     });
     expect(generation?.body.input).toBeUndefined();
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[pi-telemetry] dropped 1 pending Langfuse generation start during capacity eviction; late terminal events will be output-only',
+    );
   });
 
   it('nests subagent model and tool observations under the subagent span', async () => {

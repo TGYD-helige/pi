@@ -134,6 +134,7 @@ export class LangfuseSdkRuntimeEventExporter implements RuntimeEventExporter {
   }
 
   async close(): Promise<void> {
+    this.reportPendingGenerationDrops('exporter close', this.pendingGenerations.size);
     this.pendingGenerations.clear();
     await this.client.shutdownAsync();
   }
@@ -377,6 +378,7 @@ export class LangfuseSdkRuntimeEventExporter implements RuntimeEventExporter {
       const oldestKey = this.pendingGenerations.keys().next().value;
       if (oldestKey !== undefined) {
         this.pendingGenerations.delete(oldestKey);
+        this.reportPendingGenerationDrops('capacity eviction', 1);
       }
     }
     this.pendingGenerations.set(key, event);
@@ -384,11 +386,23 @@ export class LangfuseSdkRuntimeEventExporter implements RuntimeEventExporter {
 
   private clearPendingGenerationsForLifecycle(event: RuntimeLifecycleEvent): void {
     const generationSessionId = event.childSessionId ?? event.sessionId;
+    let dropped = 0;
     for (const [key, pending] of this.pendingGenerations) {
       if (pending.traceId === event.traceId && pending.sessionId === generationSessionId) {
         this.pendingGenerations.delete(key);
+        dropped += 1;
       }
     }
+    this.reportPendingGenerationDrops('lifecycle cleanup', dropped);
+  }
+
+  private reportPendingGenerationDrops(reason: string, count: number): void {
+    if (count === 0) {
+      return;
+    }
+    console.error(
+      `[pi-telemetry] dropped ${count} pending Langfuse generation start${count === 1 ? '' : 's'} during ${reason}; late terminal events will be output-only`,
+    );
   }
 
   private getOrCreateSdkTrace(event: RuntimeTelemetryEvent): LangfuseSdkTraceClient {
