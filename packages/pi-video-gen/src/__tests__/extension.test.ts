@@ -15,7 +15,7 @@ const suiteDir = join(tmpdir(), 'pi-video-gen-extension');
 
 type ToolDef = {
   name: string;
-  parameters: { properties?: Record<string, unknown> };
+  parameters: { properties?: Record<string, unknown>; required?: string[] };
   promptGuidelines?: string[];
   execute: (...args: unknown[]) => Promise<{
     isError?: true;
@@ -59,6 +59,12 @@ function notifiedText(ctx: ReturnType<typeof fakeCtx>): string {
   return ctx.ui.notify.mock.calls.map((c: unknown[]) => String(c[0])).join('\n');
 }
 
+/** Valid text-only generate params (style+scene are required without a frame). */
+const VALID_GENERATE_PARAMS = {
+  style: 'cinematic',
+  prompt: { scene: 'open sea', visuals: 'static wide shot', action: 'waves rolling' },
+};
+
 async function startSession(cwd: string, trusted = false) {
   await handlers.get('session_start')?.(undefined, fakeCtx(cwd, trusted));
 }
@@ -98,10 +104,28 @@ describe('pi-video-gen extension', () => {
   });
 
   it('exposes lastFrame in the schema for Seedance 2.0 (supportsFirstLastFrame)', () => {
-    const params = tools.get('video_generate')!.parameters.properties ?? {};
-    expect(Object.keys(params)).toContain('lastFrame');
-    expect(Object.keys(params)).toContain('prompt');
-    expect(Object.keys(params)).toContain('jobId');
+    const params = tools.get('video_generate')!.parameters;
+    const props = params.properties ?? {};
+    expect(Object.keys(props)).toContain('lastFrame');
+    expect(Object.keys(props)).toContain('prompt');
+    expect(Object.keys(props)).toContain('jobId');
+    expect(Object.keys(props)).toContain('style');
+    expect(Object.keys(props)).toContain('characters');
+    // prompt is optional at the schema level so a resume call may pass only jobId;
+    // fresh-submit validation enforces it inside execute().
+    expect(params.required ?? []).not.toContain('prompt');
+    const promptProps =
+      (props.prompt as { properties?: Record<string, unknown> } | undefined)?.properties ?? {};
+    expect(Object.keys(promptProps)).toEqual(
+      expect.arrayContaining([
+        'scene',
+        'visuals',
+        'action',
+        'effects',
+        'audio',
+        'visibleCharacters',
+      ]),
+    );
   });
 
   it('keeps compose identity entirely in the immutable spec path', () => {
@@ -150,7 +174,7 @@ describe('pi-video-gen extension', () => {
   it('video_generate fails with key guidance when no api key is configured', async () => {
     const result = await tools
       .get('video_generate')!
-      .execute('call-1', { prompt: 'waves' }, undefined, undefined, fakeCtx(cwd));
+      .execute('call-1', VALID_GENERATE_PARAMS, undefined, undefined, fakeCtx(cwd));
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toMatch(/api key/i);
   });
@@ -177,7 +201,7 @@ describe('pi-video-gen extension', () => {
     try {
       const first = await tools
         .get('video_generate')!
-        .execute('c1', { prompt: 'waves' }, undefined, undefined, fakeCtx(cwd));
+        .execute('c1', VALID_GENERATE_PARAMS, undefined, undefined, fakeCtx(cwd));
       expect(first.isError).toBe(true);
       const jobId = String(first.details?.jobId);
       expect(jobId).toMatch(/^gen-/);
@@ -192,7 +216,7 @@ describe('pi-video-gen extension', () => {
 
       const resumed = await tools
         .get('video_generate')!
-        .execute('c2', { prompt: 'waves', jobId }, undefined, undefined, fakeCtx(cwd));
+        .execute('c2', { ...VALID_GENERATE_PARAMS, jobId }, undefined, undefined, fakeCtx(cwd));
       expect(resumed.isError).toBe(true);
       expect(resumed.content[0]!.text).toMatch(/ambiguous|MAY exist/i);
       expect(submits).toBe(1);
@@ -213,7 +237,13 @@ describe('pi-video-gen extension', () => {
 
     const result = await tools
       .get('video_generate')!
-      .execute('call-1', { prompt: 'waves', durationSec: 99 }, undefined, undefined, fakeCtx(cwd));
+      .execute(
+        'call-1',
+        { ...VALID_GENERATE_PARAMS, durationSec: 99 },
+        undefined,
+        undefined,
+        fakeCtx(cwd),
+      );
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toMatch(/durationSec must be 4-15s/);
   });
@@ -229,6 +259,121 @@ describe('pi-video-gen extension', () => {
     expect(text).toMatch(/image_generate/);
     expect(text).toMatch(/CJK font/);
     expect(text).toMatch(/not trusted/);
+  });
+
+  it('/video-gen generate rejects freeform text and points at flag usage', async () => {
+    const ctx = fakeCtx(cwd);
+    await commands.get('video-gen')!.handler('generate a cat in the rain', ctx);
+    expect(notifiedText(ctx)).toMatch(/Unrecognized text/);
+    expect(notifiedText(ctx)).toMatch(/--visuals/);
+  });
+
+  it('/video-gen generate rejects unknown flags and non-integer durations', async () => {
+    const ctx = fakeCtx(cwd);
+    await commands.get('video-gen')!.handler('generate --visuals "v" --action "a" --bogus x', ctx);
+    expect(notifiedText(ctx)).toMatch(/Unknown flag\(s\): --bogus/);
+
+    const ctx2 = fakeCtx(cwd);
+    await commands
+      .get('video-gen')!
+      .handler('generate --visuals "v" --action "a" --duration 4.5', ctx2);
+    expect(notifiedText(ctx2)).toMatch(/--duration must be an integer/);
+  });
+
+  it('/video-gen generate rejects an unterminated quoted value before any submit', async () => {
+    const ctx = fakeCtx(cwd);
+    await commands.get('video-gen')!.handler('generate --visuals "wide --action waves', ctx);
+    expect(notifiedText(ctx)).toMatch(/Unterminated quoted value/);
+  });
+
+  it('video_generate rejects an empty-string aspectRatio instead of fingerprinting it', async () => {
+    mkdirSync(join(home, '.pi', 'agent'), { recursive: true });
+    writeFileSync(
+      join(home, '.pi', 'agent', 'settings.json'),
+      JSON.stringify({ 'pi-video-gen': { providers: { ark: { apiKey: 'k' } } } }),
+    );
+    await startSession(cwd);
+    const result = await tools
+      .get('video_generate')!
+      .execute(
+        'c1',
+        { ...VALID_GENERATE_PARAMS, aspectRatio: '' },
+        undefined,
+        undefined,
+        fakeCtx(cwd),
+      );
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toMatch(/aspectRatio must be a non-empty string/);
+  });
+
+  it('/video-gen generate surfaces structured-prompt validation errors', async () => {
+    mkdirSync(join(home, '.pi', 'agent'), { recursive: true });
+    writeFileSync(
+      join(home, '.pi', 'agent', 'settings.json'),
+      JSON.stringify({ 'pi-video-gen': { providers: { ark: { apiKey: 'k' } } } }),
+    );
+    await startSession(cwd);
+
+    const ctx = fakeCtx(cwd);
+    await commands.get('video-gen')!.handler('generate --action "waves rolling"', ctx);
+    expect(notifiedText(ctx)).toMatch(/visuals is required/);
+
+    const ctx2 = fakeCtx(cwd);
+    await commands
+      .get('video-gen')!
+      .handler('generate --visuals "static wide shot" --action "waves rolling"', ctx2);
+    expect(notifiedText(ctx2)).toMatch(/style.*required for text-to-video/);
+  });
+
+  it('/video-gen generate assembles the flags into the submitted prompt', async () => {
+    mkdirSync(join(home, '.pi', 'agent'), { recursive: true });
+    writeFileSync(
+      join(home, '.pi', 'agent', 'settings.json'),
+      JSON.stringify({ 'pi-video-gen': { providers: { ark: { apiKey: 'k' } } } }),
+    );
+    await startSession(cwd);
+
+    let submitted: Record<string, unknown> | undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: unknown, init?: RequestInit) => {
+        const u = String(url);
+        if (init?.method === 'POST') {
+          submitted = JSON.parse(String(init.body));
+          return new Response(JSON.stringify({ id: 'task-1' }), { status: 200 });
+        }
+        if (u.includes('/contents/generations/tasks/')) {
+          return new Response(
+            JSON.stringify({
+              status: 'succeeded',
+              content: { video_url: 'https://93.184.216.34/v.mp4' },
+            }),
+            { status: 200 },
+          );
+        }
+        const header = Buffer.alloc(16);
+        header.write('ftyp', 4, 'ascii');
+        return new Response(new Uint8Array(header), { status: 200 });
+      }),
+    );
+    try {
+      const ctx = fakeCtx(cwd);
+      // escaped quotes inside --audio: dialogue lines carry them by convention
+      await commands
+        .get('video-gen')!
+        .handler(
+          'generate --style "cinematic" --scene "open sea" --visuals "static wide shot" --action "waves rolling" --audio "[Speaker] Alice (soft): \\"We\'re here.\\"" --negative "no text" --duration 5',
+          ctx,
+        );
+      expect(notifiedText(ctx)).toMatch(/Video clip ready/);
+      const content = (submitted!.content as { type: string; text: string }[])[0]!;
+      expect(content.text).toBe(
+        '[Style] cinematic\n[Scene] open sea\n[Visuals] static wide shot\n[Action] waves rolling\n[Audio] [Speaker] Alice (soft): "We\'re here."\nNegative: no text',
+      );
+      expect(submitted!.duration).toBe(5);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('/video-gen doctor reports the active custom provider and its key', async () => {
@@ -271,7 +416,7 @@ describe('pi-video-gen extension', () => {
 
     const result = await tools
       .get('video_generate')!
-      .execute('call-1', { prompt: 'waves' }, undefined, undefined, fakeCtx(cwd));
+      .execute('call-1', VALID_GENERATE_PARAMS, undefined, undefined, fakeCtx(cwd));
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toContain('pi-video-gen.customProviders.proxy.apiKey');
     expect(result.content[0]!.text).not.toContain('pi-video-gen.providers.kling.apiKey');
@@ -314,15 +459,16 @@ describe('pi-video-gen extension', () => {
       }),
     );
     try {
-      const result = await tools
-        .get('video_generate')!
-        .execute(
-          'c1',
-          { prompt: 'waves', firstFrame: framePath },
-          undefined,
-          undefined,
-          fakeCtx(cwd),
-        );
+      const result = await tools.get('video_generate')!.execute(
+        'c1',
+        {
+          prompt: { visuals: 'static wide shot', action: 'waves rolling' },
+          firstFrame: framePath,
+        },
+        undefined,
+        undefined,
+        fakeCtx(cwd),
+      );
       expect(result.isError).toBeUndefined();
       const submit = seen[0]!.body!;
       const content = submit.content as { type: string; role?: string }[];
@@ -374,15 +520,16 @@ describe('pi-video-gen extension', () => {
       }),
     );
     try {
-      const result = await tools
-        .get('video_generate')!
-        .execute(
-          'c1',
-          { prompt: 'waves', firstFrame: 'frame.png' },
-          undefined,
-          undefined,
-          fakeCtx(cwd),
-        );
+      const result = await tools.get('video_generate')!.execute(
+        'c1',
+        {
+          prompt: { visuals: 'static wide shot', action: 'waves rolling' },
+          firstFrame: 'frame.png',
+        },
+        undefined,
+        undefined,
+        fakeCtx(cwd),
+      );
       expect(result.isError).toBeUndefined(); // would fail with unreadable image if not resolved
       expect((submitted!.content as { role?: string }[])[1]?.role).toBe('first_frame');
     } finally {
@@ -420,7 +567,7 @@ describe('pi-video-gen extension', () => {
 
     const result = await tools
       .get('video_generate')!
-      .execute('c1', { prompt: 'waves', jobId }, undefined, undefined, fakeCtx(cwd));
+      .execute('c1', { ...VALID_GENERATE_PARAMS, jobId }, undefined, undefined, fakeCtx(cwd));
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toMatch(/Restore the previous settings/);
     expect(result.content[0]!.text).toContain('https://old-endpoint.example/v3');
@@ -454,9 +601,26 @@ describe('pi-video-gen extension', () => {
 
     const result = await tools
       .get('video_generate')!
-      .execute('c1', { prompt: 'waves', jobId }, undefined, undefined, fakeCtx(cwd));
+      .execute('c1', { ...VALID_GENERATE_PARAMS, jobId }, undefined, undefined, fakeCtx(cwd));
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toMatch(/before task-identity freezing/);
+  });
+
+  it('resume accepts a call carrying only jobId (no prompt)', async () => {
+    mkdirSync(join(home, '.pi', 'agent'), { recursive: true });
+    writeFileSync(
+      join(home, '.pi', 'agent', 'settings.json'),
+      JSON.stringify({ 'pi-video-gen': { providers: { ark: { apiKey: 'k' } } } }),
+    );
+    await startSession(cwd);
+
+    // No manifest on disk — reaching the "no resumable job" error proves the
+    // prompt-less call passed structured-prompt validation into the resume path.
+    const result = await tools
+      .get('video_generate')!
+      .execute('c1', { jobId: 'gen-nonexistent' }, undefined, undefined, fakeCtx(cwd));
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toMatch(/No resumable job found/);
   });
 
   it('single-job resume refuses a job symlink that escapes the output directory', async () => {
@@ -489,7 +653,7 @@ describe('pi-video-gen extension', () => {
     ac.abort();
     const result = await tools
       .get('video_generate')!
-      .execute('c1', { prompt: 'waves', jobId }, ac.signal, undefined, fakeCtx(cwd));
+      .execute('c1', { ...VALID_GENERATE_PARAMS, jobId }, ac.signal, undefined, fakeCtx(cwd));
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toMatch(/outside|refus/i);
     expect(JSON.parse(readFileSync(join(outside, 'manifest.json'), 'utf-8'))).toEqual(original);
@@ -526,7 +690,9 @@ describe('pi-video-gen extension', () => {
     mkdirSync(jobDir, { recursive: true });
     writeFileSync(
       join(jobDir, 'render-input.json'),
-      JSON.stringify({ shots: [{ id: 's1', videoPrompt: 'm1', firstFramePath: frame }] }),
+      JSON.stringify({
+        shots: [{ id: 's1', prompt: { visuals: 'v1', action: 'm1' }, firstFramePath: frame }],
+      }),
     );
 
     vi.stubGlobal(
@@ -638,7 +804,13 @@ describe('pi-video-gen extension', () => {
     await startSession(cwd);
     const result = await tools
       .get('video_generate')!
-      .execute('c1', { prompt: 'waves', durationSec: 4.5 }, undefined, undefined, fakeCtx(cwd));
+      .execute(
+        'c1',
+        { ...VALID_GENERATE_PARAMS, durationSec: 4.5 },
+        undefined,
+        undefined,
+        fakeCtx(cwd),
+      );
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toMatch(/whole number of seconds|integer number/);
   });
@@ -682,7 +854,13 @@ describe('pi-video-gen extension', () => {
     try {
       const result = await tools
         .get('video_generate')!
-        .execute('c1', { prompt: 'waves', firstFrame: frame }, undefined, undefined, fakeCtx(cwd));
+        .execute(
+          'c1',
+          { prompt: { visuals: 'static wide shot', action: 'waves rolling' }, firstFrame: frame },
+          undefined,
+          undefined,
+          fakeCtx(cwd),
+        );
       expect(result.isError).toBeUndefined();
 
       // find the job dir created under .video-gen/single/
@@ -710,7 +888,7 @@ describe('pi-video-gen extension', () => {
       writeFileSync(snap, 'tampered');
       const resume = await tools
         .get('video_generate')!
-        .execute('c2', { prompt: 'waves', jobId }, undefined, undefined, fakeCtx(cwd));
+        .execute('c2', { ...VALID_GENERATE_PARAMS, jobId }, undefined, undefined, fakeCtx(cwd));
       expect(resume.isError).toBe(true);
       expect(resume.content[0]!.text).toMatch(/no longer trustworthy/);
     } finally {
@@ -738,7 +916,7 @@ describe('pi-video-gen extension', () => {
     );
     const first = await tools
       .get('video_generate')!
-      .execute('c1', { prompt: 'waves' }, interrupted.signal, undefined, fakeCtx(cwd));
+      .execute('c1', VALID_GENERATE_PARAMS, interrupted.signal, undefined, fakeCtx(cwd));
     const jobId = String(first.details?.jobId);
     const inputPath = join(cwd, '.video-gen', 'single', jobId, 'input.json');
     const input = JSON.parse(readFileSync(inputPath, 'utf-8'));
@@ -758,7 +936,7 @@ describe('pi-video-gen extension', () => {
     try {
       const resumed = await tools
         .get('video_generate')!
-        .execute('c2', { prompt: 'waves', jobId }, undefined, undefined, fakeCtx(cwd));
+        .execute('c2', { ...VALID_GENERATE_PARAMS, jobId }, undefined, undefined, fakeCtx(cwd));
 
       expect(resumed.isError).toBe(true);
       expect(resumed.content[0]!.text).toMatch(/frozen input|request identity/i);
@@ -806,7 +984,7 @@ describe('pi-video-gen extension', () => {
     try {
       const result = await tools
         .get('video_generate')!
-        .execute('c1', { prompt: 'waves', jobId }, undefined, undefined, fakeCtx(cwd));
+        .execute('c1', { ...VALID_GENERATE_PARAMS, jobId }, undefined, undefined, fakeCtx(cwd));
       expect(result.isError).toBeUndefined();
       expect(result.content[0]!.text).toContain('already rendered');
     } finally {
@@ -830,7 +1008,7 @@ describe('pi-video-gen extension', () => {
     );
     const failed = await tools
       .get('video_generate')!
-      .execute('c2', { prompt: 'waves', jobId }, undefined, undefined, fakeCtx(cwd));
+      .execute('c2', { ...VALID_GENERATE_PARAMS, jobId }, undefined, undefined, fakeCtx(cwd));
     expect(failed.isError).toBe(true);
     expect(failed.content[0]!.text).toMatch(/failed permanently/);
   });
@@ -863,7 +1041,7 @@ describe('pi-video-gen extension', () => {
     try {
       const first = await tools
         .get('video_generate')!
-        .execute('c1', { prompt: 'waves' }, undefined, undefined, fakeCtx(cwd));
+        .execute('c1', VALID_GENERATE_PARAMS, undefined, undefined, fakeCtx(cwd));
       expect(first.isError).toBe(true);
       const jobId = String(first.details?.jobId);
       const manifestPath = join(cwd, '.video-gen', 'single', jobId, 'manifest.json');
@@ -874,7 +1052,7 @@ describe('pi-video-gen extension', () => {
 
       const resumed = await tools
         .get('video_generate')!
-        .execute('c2', { prompt: 'waves', jobId }, undefined, undefined, fakeCtx(cwd));
+        .execute('c2', { ...VALID_GENERATE_PARAMS, jobId }, undefined, undefined, fakeCtx(cwd));
       expect(resumed.isError).toBeUndefined();
       expect(resumed.content[0]!.text).toContain('Video clip ready');
     } finally {
@@ -900,7 +1078,7 @@ describe('pi-video-gen extension', () => {
     try {
       const result = await tools
         .get('video_generate')!
-        .execute('c1', { prompt: 'waves' }, undefined, undefined, fakeCtx(cwd));
+        .execute('c1', VALID_GENERATE_PARAMS, undefined, undefined, fakeCtx(cwd));
       const jobId = String(result.details?.jobId);
       const manifest = JSON.parse(
         readFileSync(join(cwd, '.video-gen', 'single', jobId, 'manifest.json'), 'utf-8'),
@@ -942,7 +1120,7 @@ describe('pi-video-gen extension', () => {
     try {
       const result = await tools
         .get('video_generate')!
-        .execute('c1', { prompt: 'waves' }, undefined, undefined, fakeCtx(cwd));
+        .execute('c1', VALID_GENERATE_PARAMS, undefined, undefined, fakeCtx(cwd));
       expect(Buffer.byteLength(JSON.stringify(result.details))).toBeLessThanOrEqual(2 * 1024);
       expect(result.details).toEqual({ truncated: true });
     } finally {
@@ -979,7 +1157,7 @@ describe('pi-video-gen extension', () => {
     try {
       const result = await tools
         .get('video_generate')!
-        .execute('c1', { prompt: 'waves' }, controller.signal, undefined, fakeCtx(cwd));
+        .execute('c1', VALID_GENERATE_PARAMS, controller.signal, undefined, fakeCtx(cwd));
       expect(result.isError).toBe(true);
       expect(result.content[0]!.text).toContain('was cancelled');
       expect(cancelSignal?.aborted).toBe(false);
@@ -1016,7 +1194,7 @@ describe('pi-video-gen extension', () => {
     try {
       const result = await tools
         .get('video_generate')!
-        .execute('c1', { prompt: 'waves' }, undefined, undefined, fakeCtx(cwd));
+        .execute('c1', VALID_GENERATE_PARAMS, undefined, undefined, fakeCtx(cwd));
       const surface = `${result.content[0]!.text}\n${stderr.mock.calls.flat().join('\n')}`;
       expect(surface).not.toContain('secret-prompt');
       expect(surface).not.toContain('token=abc');
@@ -1185,8 +1363,8 @@ describe('pi-video-gen extension', () => {
       specPath,
       JSON.stringify({
         shots: [
-          { id: 's1', videoPrompt: 'one', firstFramePath: f1 },
-          { id: 's2', videoPrompt: 'two', firstFramePath: f2 },
+          { id: 's1', prompt: { visuals: 'v1', action: 'one' }, firstFramePath: f1 },
+          { id: 's2', prompt: { visuals: 'v2', action: 'two' }, firstFramePath: f2 },
         ],
       }),
     );

@@ -183,9 +183,12 @@ Author as JSON in conversation; save to `<jobDir>/project.json` for the record.
   "shots": [{
     "id": "s1",
     "intent": "Wide shot, rainy alley. <Alice> enters from the left, stops under the streetlamp…",
+    "scene": "Rainy alley at night, neon signs, wet pavement",   // optional: the shot's setting
     "firstFrame": "…pure static description of the FIRST frame…",
     "lastFrame": "…(optional) pure static description of the LAST frame…",
-    "motion": "Static camera. A woman with long blonde hair and a red scarf walks in from the left…",
+    "visuals": "Static camera, wide shot from across the street…",   // camera + framing only
+    "action": "A woman with long blonde hair and a red scarf walks in from the left…",
+    "effects": "…(optional) time-varying visuals: rain picks up, neon reflections intensify…",
     "audio": "[Sound Effect] rain, distant traffic. [Speaker] Alice (soft): \"We're here.\"",
     "visibleCharacters": ["alice"],
     "durationSec": 5,
@@ -205,8 +208,16 @@ Field rules:
 - **firstFrame / lastFrame are pure static snapshots** — no ongoing actions
   ("he is sitting, leaning forward", NOT "he is about to stand"). Include shot
   size, angle, composition, who is where and facing which way.
-- **motion = camera movement + in-frame movement**, named separately. Refer to
-  characters by visible traits ("the woman in the red scarf"), never by name.
+- **visuals = camera + framing only** (movement, shot size, angle, focus);
+  **action = in-frame movement only**. Split them — they become separate
+  labeled sections in the assembled prompt. Refer to characters by visible
+  traits ("the woman in the red scarf"), never by name.
+- **scene is the shot's setting**, copied verbatim into the render spec's
+  `prompt.scene`. Optional when the first frame fully anchors the setting;
+  write it when the setting carries mood/lighting the frame may not convey.
+- **effects is for what a static frame cannot carry**: transformations,
+  lighting/atmosphere shifts, particles, slow motion. Omit when the shot is
+  visually static.
 - **lastFrame needed when**: composition/focus changes drastically, a character
   enters or turns to face camera, a major reveal happens. Otherwise omit it.
 - **Few camera positions.** Default: one `continuityGroup` for everything. New
@@ -273,15 +284,38 @@ Write `<outputDir>/<jobId>/render-input.json` (jobId: letters/digits/dash/unders
 ```jsonc
 {
   "title": "…", "aspectRatio": "16:9",
+  "style": "Cartoon, warm palette, soft shading",        // film-level look — from the shot book's style
+  "characters": [                                        // film-level registry — id + appearance/outfit merged
+    { "id": "alice", "description": "long blonde hair, blue eyes, slender; red scarf, black leather jacket" }
+  ],
+  "consistency": "Faces, hair and outfits stay identical across the shot, no morphing or drift.",
+  "negative": "no text, watermarks, or subtitles",
   "shots": [{
     "id": "s1",
-    "videoPrompt": "<motion> + <audio cues>",
+    "prompt": {                                          // from the shot book's fields, verbatim
+      "scene": "Rainy alley at night, neon signs, wet pavement",   // omit when the first frame says it all
+      "visuals": "Static camera, wide shot from across the street",
+      "action": "The woman in the red scarf walks in from the left, stops under the streetlamp",
+      "effects": "Rain picks up halfway through; neon reflections ripple in puddles",
+      "audio": "[Sound Effect] rain, distant traffic. [Speaker] Alice (soft): \"We're here.\"",
+      "visibleCharacters": ["alice"]
+    },
     "firstFramePath": "<project>/path/from/assets.json.png",
     "lastFramePath": "<project>/optional.png",
     "durationSec": 5
   }]
 }
 ```
+
+The plugin assembles each shot's labeled prompt (`[Style]` / `[Character]` /
+`[Scene]` / `[Visuals]` / `[Action]` / `[Effects]` / `[Audio]` + consistency and
+negative directives) — never pre-join a prompt string yourself. Validation
+fails the run before any paid call when: `visuals`/`action` are empty,
+`visibleCharacters` references an id missing from `characters`, or a shot
+without `firstFramePath` lacks `style`/`scene` (text-to-video must not go out
+action-only). Film-level `style`/`consistency`/`negative` apply to every shot —
+write them once; shot-level `scene` repeats per shot even when consecutive
+shots share a location (each shot is submitted independently).
 
 Every reference-frame path must resolve to a regular png/jpg/webp file inside
 the session cwd. Absolute paths are accepted only when they remain inside that

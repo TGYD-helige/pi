@@ -23,12 +23,15 @@ import {
   saveRenderJob,
   writeJsonAtomic,
 } from './jobs/store.js';
+import { assemblePrompt, validateFilmPrompt, validateShotPrompt } from './prompt.js';
 import { requestFingerprint } from './providers/request.js';
 import { CancelledError, pollTask, type RateLimiter } from './providers/task.js';
 import type {
+  FilmPrompt,
   GenerateVideoParams,
   RemoteTaskHandle,
   ResolvedModel,
+  ShotPrompt,
   VideoGenSettings,
   VideoProviderAdapter,
 } from './types.js';
@@ -50,13 +53,14 @@ import type {
 
 export type RenderShotInput = {
   id: string;
-  videoPrompt: string;
+  /** Structured per-shot prompt fields — assembled via assemblePrompt before submit. */
+  prompt: ShotPrompt;
   firstFramePath: string;
   lastFramePath?: string | undefined;
   durationSec?: number | undefined;
 };
 
-export type RenderInput = {
+export type RenderInput = FilmPrompt & {
   title?: string | undefined;
   aspectRatio?: string | undefined;
   shots: RenderShotInput[];
@@ -127,13 +131,31 @@ function parseRenderSpec(raw: string): RenderInput {
       'render: no shots',
     );
   }
+  const charactersError = validateFilmPrompt(spec, 'render-input.json');
+  if (charactersError) {
+    throw new VideoGenError(charactersError, 'render: bad characters');
+  }
+  // Type-check, not truthiness: 0/false/"" would skip the capability check but
+  // still flow through `??` into the fingerprint and paid request.
+  if (
+    spec.aspectRatio !== undefined &&
+    (typeof spec.aspectRatio !== 'string' || spec.aspectRatio.trim() === '')
+  ) {
+    throw new VideoGenError(
+      'render-input.json aspectRatio must be a non-empty string (e.g. "16:9").',
+      'render: bad ratio type',
+    );
+  }
   const seen = new Set<string>();
   spec.shots.forEach((shot, i) => {
     const where = `shots[${i}]${shot?.id ? ` ("${shot.id}")` : ''}`;
     if (!shot || typeof shot !== 'object') {
       throw new VideoGenError(`${where} is not an object.`, 'render: bad shot');
     }
-    assertSafeId(String(shot.id ?? ''), 'shot');
+    if (typeof shot.id !== 'string' || shot.id.trim() === '') {
+      throw new VideoGenError(`${where}.id must be a non-empty string.`, 'render: bad id type');
+    }
+    assertSafeId(shot.id, 'shot');
     if (seen.has(shot.id)) {
       throw new VideoGenError(
         `Duplicate shot id "${shot.id}" — ids must be unique.`,
@@ -141,17 +163,31 @@ function parseRenderSpec(raw: string): RenderInput {
       );
     }
     seen.add(shot.id);
-    if (typeof shot.videoPrompt !== 'string' || shot.videoPrompt.trim() === '') {
-      throw new VideoGenError(
-        `${where}.videoPrompt is required (motion + optional audio cues).`,
-        'render: no prompt',
-      );
-    }
     if (typeof shot.firstFramePath !== 'string' || shot.firstFramePath.trim() === '') {
       throw new VideoGenError(
         `${where}.firstFramePath is required — generate the frame via image_generate first and point at its returned path.`,
         'render: no frame',
       );
+    }
+    if (
+      shot.lastFramePath !== undefined &&
+      (typeof shot.lastFramePath !== 'string' || shot.lastFramePath.trim() === '')
+    ) {
+      throw new VideoGenError(
+        `${where}.lastFramePath must be a path string when present.`,
+        'render: bad last frame type',
+      );
+    }
+    // Derive, don't hardcode: firstFramePath is required above, but if it ever
+    // becomes optional the frameless style/scene rule must stay live.
+    const promptError = validateShotPrompt(
+      spec,
+      shot.prompt,
+      { hasFirstFrame: Boolean(shot.firstFramePath?.trim()) },
+      `${where}.prompt`,
+    );
+    if (promptError) {
+      throw new VideoGenError(promptError, 'render: bad prompt');
     }
     if (
       shot.durationSec !== undefined &&
@@ -463,7 +499,7 @@ export async function runRender(opts: {
         : undefined;
       const attempt = shotState.attempt ?? 1;
       const params: GenerateVideoParams = {
-        prompt: shot.videoPrompt,
+        prompt: assemblePrompt(spec, shot.prompt),
         requestId: `${jobId}:${shot.id}:${attempt}`,
         firstFramePath: firstSnap,
         lastFramePath: lastSnap,

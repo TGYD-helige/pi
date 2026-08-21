@@ -56,7 +56,9 @@ describe('snapshot hash is of the SNAPSHOT bytes (not a pre-copy source read)', 
     );
     writeFileSync(
       join(jobDir, 'render-input.json'),
-      JSON.stringify({ shots: [{ id: 's1', videoPrompt: 'm1', firstFramePath: frame }] }),
+      JSON.stringify({
+        shots: [{ id: 's1', prompt: { visuals: 'v1', action: 'm1' }, firstFramePath: frame }],
+      }),
     );
 
     const adapter: VideoProviderAdapter = {
