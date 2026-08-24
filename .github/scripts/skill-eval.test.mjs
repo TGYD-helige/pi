@@ -137,6 +137,24 @@ it('grades declarative expectations without executing eval-controlled code', () 
   );
 });
 
+it('normalizes contractions and Markdown emphasis before grading', () => {
+  assert.deepEqual(
+    gradeExpectations('Don’t use raster generation; it should **not** use raster assets.', [
+      { text: 'rejects raster generation', includes: ['do not use raster'] },
+      { text: 'keeps the explicit boundary', includes: ['should not use raster'] },
+    ]),
+    {
+      passed: 2,
+      total: 2,
+      score: 1,
+      expectations: [
+        { text: 'rejects raster generation', passed: true, evidence: 'included: do not use raster' },
+        { text: 'keeps the explicit boundary', passed: true, evidence: 'included: should not use raster' },
+      ],
+    },
+  );
+});
+
 it('requires new skills to clear both the absolute score and improvement delta', () => {
   const runs = [
     { configuration: 'candidate', eval_id: 'a', score: 1, failure_mode: 'ok' },
