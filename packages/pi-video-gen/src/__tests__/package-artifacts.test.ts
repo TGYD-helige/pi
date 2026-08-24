@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -33,6 +34,69 @@ const targets = [
 ] as const;
 
 describe('pi-video-gen package artifacts', () => {
+  it('ships the Seedance public material Asset ID catalog', () => {
+    const catalog = readFileSync(
+      join(packageRoot, 'skills', 'video-gen', 'references', 'seedance-public-material-library.md'),
+      'utf-8',
+    );
+    const assetIds = catalog.match(/asset-[0-9]{14}-[a-z0-9]+/g) ?? [];
+
+    expect(assetIds).toHaveLength(187);
+    expect(new Set(assetIds).size).toBe(assetIds.length);
+    expect(catalog).toContain('| 东北大花袄 | `asset-');
+    expect(catalog).toContain('| 华尔兹 | `asset-');
+    expect(catalog).toContain('| 少年_少女-女-少儿故事 | 11.4s | `asset-');
+    expect(catalog).toContain('search it through the persona workflow');
+  });
+
+  it('ships the complete structured Seedance persona catalog', () => {
+    const personas = JSON.parse(
+      readFileSync(
+        join(packageRoot, 'skills', 'video-gen', 'references', 'seedance-personas.json'),
+        'utf8',
+      ),
+    ) as Array<{
+      group_id: string;
+      人物标签: string;
+      人物小传: string;
+      assets: { 半身像?: string; 全身照?: string };
+    }>;
+
+    expect(personas).toHaveLength(8741);
+    expect(new Set(personas.map((persona) => persona.group_id)).size).toBe(8741);
+    expect(personas.filter((persona) => persona.assets.半身像).length).toBe(8741);
+    expect(personas.filter((persona) => persona.assets.全身照).length).toBe(2696);
+  });
+
+  it('searches the bundled Seedance persona catalog with bounded output', () => {
+    const script = join(
+      packageRoot,
+      'skills',
+      'video-gen',
+      'scripts',
+      'search-seedance-personas.mjs',
+    );
+    const result = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [script, '--query', '尼泊尔 青训营教练', '--framing', 'full', '--limit', '1'],
+        { encoding: 'utf8' },
+      ),
+    ) as {
+      totalMatches: number;
+      returned: number;
+      results: Array<{ label: string; selectedFraming: string; selectedAssetId: string }>;
+    };
+
+    expect(result.totalMatches).toBeGreaterThan(0);
+    expect(result.returned).toBe(1);
+    expect(result.results[0]).toMatchObject({
+      label: '尼泊尔 53岁 男 青训营教练',
+      selectedFraming: 'full',
+      selectedAssetId: 'asset-20260804202332-vxhpn',
+    });
+  });
+
   it('installs FFmpeg through platform-specific optional packages', () => {
     const gitignore = readFileSync(join(packageRoot, '..', '..', '.gitignore'), 'utf-8');
     expect(mainPackage.files).not.toContain('bin');

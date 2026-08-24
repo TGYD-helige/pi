@@ -13,9 +13,22 @@
 /** Wire format, NOT vendor — the same model via official or proxy endpoints differs only in baseUrl. */
 export type VideoApiStyle = 'ark' | 'kling' | 'dashscope' | 'openrouter' | 'newapi' | 'minimax';
 
+export type ReferenceAssetModality = 'image' | 'video' | 'audio';
+
+/** A provider-managed trusted asset selected in the caller's current account/project. */
+export type ReferenceAsset = {
+  modality: ReferenceAssetModality;
+  /** Canonical id only (`asset-...`); public inputs may also use `asset://asset-...`. */
+  assetId: string;
+};
+
 export type VideoModelCapabilities = {
   /** Max reference images a request may carry (0 = text-to-video only). */
   maxReferenceImages: number;
+  /** Max provider-managed reference videos a request may carry. */
+  maxReferenceVideos?: number | undefined;
+  /** Max provider-managed reference audio clips a request may carry. */
+  maxReferenceAudios?: number | undefined;
   /** Inclusive [min, max] clip duration in seconds. */
   durations: [number, number];
   resolutions: string[];
@@ -24,6 +37,8 @@ export type VideoModelCapabilities = {
   nativeAudio: boolean;
   /** First+last frame interpolation is actually honored by this endpoint. */
   supportsFirstLastFrame: boolean;
+  /** Provider-managed trusted asset modalities accepted by this model. */
+  referenceAssetModalities?: ReferenceAssetModality[] | undefined;
 };
 
 export type BuiltInVideoModel = {
@@ -166,6 +181,8 @@ export type GenerateVideoParams = {
   lastFramePath?: string | undefined;
   /** Additional reference images (subject/style), roles mapped per provider. */
   referenceImagePaths?: string[] | undefined;
+  /** Provider-managed trusted assets, kept in caller order for prompt numbering. */
+  referenceAssets?: ReferenceAsset[] | undefined;
   durationSec?: number | undefined;
   aspectRatio?: string | undefined;
   resolution?: string | undefined;

@@ -210,6 +210,30 @@ describe('config validation & loud project read', () => {
       },
     ],
     [
+      'customProviders.bad.models[0].capabilities.referenceAssetModalities',
+      {
+        customProviders: {
+          bad: {
+            api: 'ark',
+            models: [
+              { id: 'm', capabilities: { referenceAssetModalities: ['image', 'document'] } },
+            ],
+          },
+        },
+      },
+    ],
+    [
+      'customProviders.bad.models[0].capabilities.maxReferenceVideos',
+      {
+        customProviders: {
+          bad: {
+            api: 'ark',
+            models: [{ id: 'm', capabilities: { maxReferenceVideos: -1 } }],
+          },
+        },
+      },
+    ],
+    [
       'customProviders.bad.models[0].defaultDurationSec',
       {
         customProviders: { bad: { api: 'ark', models: [{ id: 'm', defaultDurationSec: 1.5 }] } },
@@ -334,7 +358,10 @@ describe('resolveModel', () => {
               {
                 id: 'MiniMax-H3',
                 alias: 'h3x',
-                capabilities: { resolutions: ['768P'] },
+                capabilities: {
+                  resolutions: ['768P'],
+                  referenceAssetModalities: ['image', 'audio'],
+                },
                 defaultDurationSec: 10,
               },
             ],
@@ -347,6 +374,7 @@ describe('resolveModel', () => {
     // built-in 2K default is skipped because the override dropped it.
     expect(resolved?.entry.capabilities.resolutions).toEqual(['768P']);
     expect(resolved?.entry.capabilities.aspectRatios).toContain('21:9');
+    expect(resolved?.entry.capabilities.referenceAssetModalities).toEqual(['image', 'audio']);
     expect(resolved?.entry.defaultResolution).toBe('768P');
     expect(resolved?.entry.defaultDurationSec).toBe(10);
   });

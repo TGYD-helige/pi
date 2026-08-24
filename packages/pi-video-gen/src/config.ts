@@ -136,6 +136,8 @@ function validateCapabilities(value: unknown, path: string): void {
   if (value === undefined) return;
   const caps = settingsSection(value, path)!;
   nonNegativeInteger(caps.maxReferenceImages, `${path}.maxReferenceImages`);
+  nonNegativeInteger(caps.maxReferenceVideos, `${path}.maxReferenceVideos`);
+  nonNegativeInteger(caps.maxReferenceAudios, `${path}.maxReferenceAudios`);
   if (caps.durations !== undefined) {
     if (
       !Array.isArray(caps.durations) ||
@@ -152,6 +154,16 @@ function validateCapabilities(value: unknown, path: string): void {
   }
   if (caps.resolutions !== undefined) stringArray(caps.resolutions, `${path}.resolutions`);
   if (caps.aspectRatios !== undefined) stringArray(caps.aspectRatios, `${path}.aspectRatios`);
+  if (caps.referenceAssetModalities !== undefined) {
+    stringArray(caps.referenceAssetModalities, `${path}.referenceAssetModalities`);
+    const valid = ['image', 'video', 'audio'];
+    if ((caps.referenceAssetModalities as string[]).some((item) => !valid.includes(item))) {
+      throw new VideoGenError(
+        `${path}.referenceAssetModalities may contain only image, video, and audio.`,
+        `config: invalid ${path}.referenceAssetModalities`,
+      );
+    }
+  }
   for (const key of ['nativeAudio', 'supportsFirstLastFrame']) {
     if (caps[key] !== undefined && typeof caps[key] !== 'boolean') {
       throw new VideoGenError(

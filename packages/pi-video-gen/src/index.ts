@@ -52,7 +52,11 @@ import { klingAdapter } from './providers/kling.js';
 import { minimaxAdapter } from './providers/minimax.js';
 import { newapiAdapter } from './providers/newapi.js';
 import { openrouterAdapter } from './providers/openrouter.js';
-import { requestFingerprint } from './providers/request.js';
+import {
+  normalizeReferenceAssets,
+  referenceAssetPreflightError,
+  requestFingerprint,
+} from './providers/request.js';
 import { CancelledError, pollTask, RateLimiter } from './providers/task.js';
 import { runRender } from './render.js';
 import { hasCjkFont } from './text-layer.js';
@@ -60,6 +64,7 @@ import { runTimeline } from './timeline-render.js';
 import type {
   FilmPrompt,
   GenerateVideoParams,
+  ReferenceAsset,
   RemoteTaskHandle,
   ResolvedProvider,
   ShotPrompt,
@@ -240,6 +245,25 @@ function buildGenerateParams(caps: VideoModelCapabilities | null) {
           ),
         }
       : {}),
+    ...(caps?.referenceAssetModalities?.length
+      ? {
+          referenceAssets: Type.Optional(
+            Type.Array(
+              Type.Object({
+                modality: StringEnum(caps.referenceAssetModalities),
+                assetId: Type.String({
+                  description:
+                    'Asset ID from the current provider account/project. Accepts asset-... or asset://asset-....',
+                }),
+              }),
+              {
+                description:
+                  'Provider-managed trusted assets in prompt-numbering order. In the prompt refer to Image 1, Video 1, or Audio 1; never write the Asset ID.',
+              },
+            ),
+          ),
+        }
+      : {}),
     durationSec: Type.Optional(
       Type.Integer({
         ...(caps ? { minimum: caps.durations[0], maximum: caps.durations[1] } : {}),
@@ -321,6 +345,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
     firstFrame?: string | undefined;
     lastFrame?: string | undefined;
     referenceImages?: string[] | undefined;
+    referenceAssets?: ReferenceAsset[] | undefined;
     durationSec?: number | undefined;
     aspectRatio?: string | undefined;
     jobId?: string | undefined;
@@ -359,6 +384,12 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
     // mapping must all agree on whether a frame is present.
     const firstFrame = toolParams.firstFrame?.trim();
     const lastFrame = toolParams.lastFrame?.trim();
+    let referenceAssets: ReferenceAsset[] = [];
+    try {
+      referenceAssets = normalizeReferenceAssets(toolParams.referenceAssets);
+    } catch (error) {
+      return errResult(errorMessageForUser(error));
+    }
     // Structured prompt validation happens only on fresh submits — the resume
     // path (jobId) re-polls a frozen request and never re-reads the prompt.
     if (!toolParams.jobId) {
@@ -404,13 +435,15 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
         `aspectRatio must be one of ${caps.aspectRatios.join(', ')} for ${resolved.entry.id} (got ${toolParams.aspectRatio}).`,
       );
     }
-    const totalRefs =
-      (firstFrame ? 1 : 0) + (lastFrame ? 1 : 0) + (toolParams.referenceImages?.length ?? 0);
-    if (totalRefs > caps.maxReferenceImages) {
-      return errResult(
-        `Too many reference images (${totalRefs}) — ${resolved.entry.id} accepts at most ${caps.maxReferenceImages} total (frames + references).`,
-      );
-    }
+    const referenceError = referenceAssetPreflightError({
+      providerStyle: resolved.provider.style,
+      modelId: resolved.entry.id,
+      capabilities: caps,
+      referenceAssets,
+      localImageReferences:
+        (firstFrame ? 1 : 0) + (lastFrame ? 1 : 0) + (toolParams.referenceImages?.length ?? 0),
+    });
+    if (referenceError) return errResult(referenceError);
 
     const outputDir = resolveOutputDir(settings, ctx.cwd);
 
@@ -528,6 +561,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
       firstFramePath: firstFrame ? resolve(ctx.cwd, firstFrame) : undefined,
       lastFramePath: lastFrame ? resolve(ctx.cwd, lastFrame) : undefined,
       referenceImagePaths: toolParams.referenceImages?.map((p) => resolve(ctx.cwd, p)),
+      referenceAssets,
       durationSec: toolParams.durationSec ?? resolved.entry.defaultDurationSec,
       aspectRatio: toolParams.aspectRatio ?? resolved.entry.defaultAspectRatio,
       resolution: resolved.entry.defaultResolution,
@@ -861,6 +895,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
         `Provider: ${resolved.provider.style} (key ${resolved.provider.apiKey ? 'ready' : 'MISSING'})`,
         `Durations: ${c.durations[0]}-${c.durations[1]}s; Resolutions: ${c.resolutions.join('/')}; Aspect ratios: ${c.aspectRatios.join(', ')}`,
         `Native audio: ${c.nativeAudio ? 'yes' : 'no'}; First+last frame: ${c.supportsFirstLastFrame ? 'yes' : 'no'}; Max reference images: ${c.maxReferenceImages}`,
+        `Trusted asset references: ${resolved.provider.style === 'ark' ? c.referenceAssetModalities?.join(', ') || 'none' : 'none'}; Max videos: ${c.maxReferenceVideos ?? 0}; Max audios: ${c.maxReferenceAudios ?? 0}`,
       );
     }
     lines.push('Registered models:');
@@ -873,14 +908,19 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
   };
 
   const registerTools = () => {
-    const caps = resolveModel(settings)?.entry.capabilities ?? null;
+    const active = resolveModel(settings);
+    const caps = active?.entry.capabilities ?? null;
+    const schemaCaps =
+      caps && active?.provider.style !== 'ark'
+        ? { ...caps, referenceAssetModalities: undefined }
+        : caps;
 
     pi.registerTool({
       name: 'video_generate',
       label: 'Generate Video Clip',
       description:
-        'Generate a single short video clip (one shot) from a structured prompt (style/scene/visuals/action/effects/audio), optionally anchored by first/last frame images. Paid, slow (minutes per clip). For multi-shot videos, use the video-gen skill workflow instead of calling this repeatedly.',
-      parameters: buildGenerateParams(caps),
+        'Generate a single short video clip (one shot) from a structured prompt, optionally anchored by first/last frames or provider-managed trusted assets. Paid, slow (minutes per clip). For multi-shot videos, use the video-gen skill workflow instead of calling this repeatedly.',
+      parameters: buildGenerateParams(schemaCaps),
       promptSnippet:
         'Generate one short video clip (paid, minutes) from a structured prompt via the active video model',
       promptGuidelines: [
@@ -888,6 +928,8 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
         'Fill the structured prompt fields; never a pre-joined string. visuals + action are always required; style + scene are required when no firstFrame anchors the clip; use effects for transformations or lighting shifts a static frame cannot carry.',
         'Video generation is paid and slow. State the expected clip count and duration to the user and get explicit confirmation before the first call.',
         'Only pass lastFrame when the user needs first+last-frame interpolation and the active model supports it.',
+        'For Seedance references containing recognizable real people, use a preset-avatar or authorized-person Asset ID from the current account/project. Pass it through referenceAssets and refer to it in the prompt as Image 1, Video 1, or Audio 1 — never as the Asset ID.',
+        'Treat user approval as scoped to the exact asset list, provider/account context, model, clip count, and duration; ask again when any of those change.',
         'If a call is interrupted, resume with the returned jobId instead of submitting a new task (avoids double billing); prompt is not needed on resume.',
         'If submit is reported as ambiguous, do not start another generation until the provider console confirms that no paid task exists.',
       ],
@@ -933,7 +975,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
       name: 'video_render',
       label: 'Render Multi-Shot Video',
       description:
-        'Render a multi-shot video from <jobDir>/render-input.json: submits one paid video task per shot (resuming persisted handles on rerun — finished shots never re-bill), downloads clips, and concatenates them into final_video.mp4. Foreground, reports progress; cancelling stops locally (remote tasks may keep billing). Frames must already exist (generate them with image_generate first).',
+        'Render a multi-shot video from <jobDir>/render-input.json: each shot requires a local first frame or at least one provider-managed trusted asset. Submits one paid task per shot (resuming persisted handles on rerun), downloads clips, and concatenates them into final_video.mp4.',
       parameters: Type.Object({
         renderSpecPath: Type.String({
           description:
@@ -948,8 +990,8 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
       promptSnippet:
         'Render a prepared multi-shot video spec (paid, long-running) into a final mp4',
       promptGuidelines: [
-        'Call ONLY after the user explicitly confirmed rendering: frames ready, shot count and cost magnitude stated.',
-        'Generate all frames first via image_generate (pi-image-gen) and record their returned absolute paths in the render spec.',
+        'Call ONLY after the user explicitly confirmed rendering: exact local frames/trusted assets ready, shot count, durations, provider/account context, and cost magnitude stated.',
+        'For each shot, either generate required local frames via image_generate and record their returned paths, or pass current-account provider assets in referenceAssets. Recognizable real-person references sent to Seedance must use preset-avatar or authorized-person assets.',
         'render-input.json carries structured prompts: film-level style/characters/consistency/negative, per-shot prompt.{scene,visuals,action,effects,audio,visibleCharacters} — the plugin assembles the labeled prompt text; never pre-join a prompt string.',
         'The spec is immutable per job directory: rerunning the same path resumes identical input; revisions go in a NEW job directory.',
         'Interrupting stops locally only — remote tasks may keep billing; rerun the same spec path to resume after they finish.',
@@ -968,7 +1010,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
       name: 'video_capabilities',
       label: 'Video Model Capabilities',
       description:
-        "Read-only: list the active video model's capabilities (duration range, resolutions, aspect ratios, native audio, first/last-frame support) and the registered models. Call before composing video prompts or shot books.",
+        "Read-only: list the active video model's capabilities (duration range, resolutions, aspect ratios, native audio, first/last-frame support, trusted asset modalities) and the registered models. Call before composing video prompts or shot books.",
       parameters: Type.Object({}),
       promptSnippet: 'Show active video model capabilities and registered models',
       async execute() {
@@ -984,7 +1026,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
 
   pi.registerCommand('video-gen', {
     description:
-      'pi-video-gen: /video-gen [generate --visuals ".." --action ".." [--style .. --scene ..]|render <spec>|compose <spec>|recover <jobId>|models|reload|doctor]',
+      'pi-video-gen: /video-gen [generate --visuals ".." --action ".." [--style .. --scene .. --asset-images asset-...]|render <spec>|compose <spec>|recover <jobId>|models|reload|doctor]',
     handler: async (args: string | undefined, ctx: ExtensionContext) => {
       const tokens = (args ?? '').trim().split(/\s+/).filter(Boolean);
       const sub = tokens[0];
@@ -993,7 +1035,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
         const parsed = parseGenerateFlags((args ?? '').trim().slice('generate'.length));
         if ('error' in parsed || Object.keys(parsed.flags).length === 0) {
           ctx.ui.notify(
-            `${'error' in parsed ? `${parsed.error} ` : ''}Usage: /video-gen generate --visuals "..." --action "..." [--style "..."] [--scene "..."] [--effects "..."] [--audio "..."] [--consistency "..."] [--negative "..."] [--first-frame <path>] [--last-frame <path>] [--duration <sec>] [--ratio <ratio>]`,
+            `${'error' in parsed ? `${parsed.error} ` : ''}Usage: /video-gen generate --visuals "..." --action "..." [--style "..."] [--scene "..."] [--effects "..."] [--audio "..."] [--consistency "..."] [--negative "..."] [--first-frame <path>] [--last-frame <path>] [--asset-images <id,id>] [--asset-videos <id,id>] [--asset-audios <id,id>] [--duration <sec>] [--ratio <ratio>]`,
             'error',
           );
           return;
@@ -1010,6 +1052,9 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
           'negative',
           'first-frame',
           'last-frame',
+          'asset-images',
+          'asset-videos',
+          'asset-audios',
           'duration',
           'ratio',
         ]);
@@ -1026,6 +1071,22 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
           );
           return;
         }
+        const referenceAssets: ReferenceAsset[] = [];
+        for (const [flag, modality] of [
+          ['asset-images', 'image'],
+          ['asset-videos', 'video'],
+          ['asset-audios', 'audio'],
+        ] as const) {
+          if (f[flag] === undefined) continue;
+          const ids = f[flag]!.split(',')
+            .map((id) => id.trim())
+            .filter(Boolean);
+          if (ids.length === 0) {
+            ctx.ui.notify(`--${flag} must contain at least one Asset ID.`, 'error');
+            return;
+          }
+          referenceAssets.push(...ids.map((assetId) => ({ modality, assetId })));
+        }
         const result = await runGenerate(
           {
             style: f.style,
@@ -1040,6 +1101,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
             },
             firstFrame: f['first-frame'],
             lastFrame: f['last-frame'],
+            referenceAssets,
             durationSec,
             aspectRatio: f.ratio,
           },
