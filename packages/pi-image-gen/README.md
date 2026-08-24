@@ -109,6 +109,15 @@ In global and agent settings, `apiKey`, `baseUrl`, and `headers` values support
 form (for example, `${FOO:-default}`); `$FOO:-default` is not supported.
 Project settings keep all of these placeholders literal.
 
+## DeepSeek Harness
+
+| Host | `pi-image-gen` status |
+| --- | --- |
+| [pi2dsh](https://github.com/weijiafu14/pi2dsh) | `@amaster.ai/pi-image-gen@0.1.8` was exercised against a controlled OpenAI-compatible endpoint ([scope and evidence](https://github.com/TGYD-helige/pi/issues/159)). |
+| [dsh-pi-host](https://github.com/TGYD-helige/dsh-pi) | Loads `@amaster.ai/pi-image-gen` when selected in its `extensions` list. |
+
+Follow the selected host's documentation for installation and current compatibility details.
+
 ## Built-in setup walkthrough
 
 ### 1. OpenAI (`gpt-image-2`)

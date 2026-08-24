@@ -138,6 +138,15 @@ during setup.
 
 See each package README for package-specific examples and public API notes.
 
+## DeepSeek Harness
+
+Compatibility depends on the host, DSH, Pi, and extension versions. Follow the selected host's documentation for installation and current support.
+
+| Host | Loading model |
+| --- | --- |
+| [pi2dsh](https://github.com/weijiafu14/pi2dsh) | Discovers explicitly installed Pi packages in a DSH profile. |
+| [dsh-pi-host](https://github.com/TGYD-helige/dsh-pi) | Loads package names configured in its `extensions` list. |
+
 ## License
 
 Apache-2.0
