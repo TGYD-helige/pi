@@ -345,8 +345,8 @@ Rules:
 
 - Before drafting or opening an issue, read and follow `.github/ISSUE_TEMPLATE/issue.md`; before drafting or opening a pull request, read and follow `.github/pull_request_template.md`.
 - Keep titles specific and bodies brief. Include only the context needed to understand, reproduce, or review the work; link to longer logs or design notes instead of copying them.
-- Issues should identify the affected package and version, then state the problem, expected outcome, and minimal reproduction or context. Omit sections that do not apply.
-- Pull requests should list affected packages and their current and resulting versions, summarize what changed and why, list verification performed, and reference the related issue when one exists. Mark unchanged versions explicitly; write `none` only when the change is not package-scoped. Use the conventional-commit title prefix recognized by `.github/workflows/labeler.yml`.
+- Issues should identify the affected package and version when applicable, then state the problem or motivation, expected outcome, and minimal reproduction or context. Omit sections that do not apply.
+- Pull requests should summarize what changed and why, list verification performed, and reference the related issue when one exists. Use the conventional-commit title prefix recognized by `.github/workflows/labeler.yml`.
 
 ---
 

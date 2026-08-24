@@ -1,6 +1,5 @@
-## Packages and versions
-
-<!-- Example: @amaster.ai/pi-memory: 1.2.3 -> 1.2.4, or 1.2.3 (unchanged). Write "none" only when not package-scoped. -->
+> [!IMPORTANT]
+> Link the related issue with `Fixes #123` when this PR resolves it, or `Refs #123` when it only provides context.
 
 ## Summary
 
@@ -12,7 +11,7 @@
 
 ## Related issue
 
-<!-- Fixes #123. Omit this section when there is no related issue. -->
+<!-- Fixes #123 or Refs #123. Omit this section when there is no related issue. -->
 
 ## Checklist
 
