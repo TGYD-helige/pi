@@ -257,6 +257,11 @@ test('prepares the review prompt outside the workflow', async () => {
     assert.match(prompt, /structured_output/);
     assert.match(prompt, /"const":"Standards"/);
     assert.match(prompt, /"const":"Spec"/);
+    assert.match(prompt, /Reviewer children have no tools and inherit no context/);
+    assert.match(prompt, /Copy the supplied review data directly into each child task/);
+    assert.match(prompt, /Never tell a child to run git, execute the diff command, read files, or fetch context/);
+    assert.match(prompt, /Make exactly one synchronous subagent workflow call/);
+    assert.match(prompt, /Do not call emit, subagent_wait, status, or list, and do not retry/);
     assert.doesNotMatch(prompt, /file-only/);
   } finally {
     await rm(directory, { recursive: true, force: true });

@@ -209,6 +209,12 @@ it('runs changed skills through Pi and preserves completed results on a later fa
       path.join(skillDir, 'evals.json'),
       JSON.stringify({ skill_name: 'demo', evals: [evalCase('a'), evalCase('b'), evalCase('c')] }),
     );
+    const referencesDir = path.join(skillDir, 'references');
+    mkdirSync(referencesDir);
+    writeFileSync(
+      path.join(referencesDir, 'catalog.json'),
+      JSON.stringify({ padding: 'x'.repeat(1024 * 1024) }),
+    );
     const incompleteSkillDir = path.join(root, 'packages/pi-demo/skills/zzz-incomplete');
     mkdirSync(incompleteSkillDir, { recursive: true });
     writeFileSync(

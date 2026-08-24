@@ -248,9 +248,7 @@ function materializeSkill(revision, skillRoot, destination) {
       throw new Error(`unsafe skill path: ${file}`);
     }
     const size = Number(git(['cat-file', '-s', oid]));
-    if (!Number.isSafeInteger(size) || size > 1024 * 1024) {
-      throw new Error(`${file} exceeds the 1 MiB skill-eval file limit`);
-    }
+    if (!Number.isSafeInteger(size) || size < 0) throw new Error(`${file} has an invalid size`);
     total += size;
     if (total > 5 * 1024 * 1024) throw new Error(`${skillRoot} exceeds the 5 MiB skill-eval limit`);
     const target = path.join(destination, relative);
