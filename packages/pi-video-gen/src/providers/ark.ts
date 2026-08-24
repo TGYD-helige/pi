@@ -26,8 +26,8 @@ import { downloadFile } from './task.js';
  *
  * Seedance 2.0 takes structured params (resolution/ratio/duration/
  * generate_audio/watermark) alongside the content array.
- * Reference images ride in the content array with a `role` of
- * `first_frame` / `last_frame` / `reference_image`.
+ * Local reference images and provider-managed image/video/audio assets ride
+ * in the content array with their modality-specific URL field and role.
  *
  * Docs: https://www.volcengine.com/docs/82379/1520757
  *
@@ -82,6 +82,26 @@ function ambiguousSubmitError(): AmbiguousSubmitError {
   );
 }
 
+async function portraitPrivacyError(res: Response): Promise<VideoGenError | undefined> {
+  let code: unknown;
+  try {
+    const json = (await res.json()) as { error?: { code?: unknown }; code?: unknown };
+    code = json.error?.code ?? json.code;
+  } catch {
+    return undefined;
+  }
+  if (
+    code !== 'InputImageSensitiveContentDetected.PrivacyInformation' &&
+    code !== 'InputVideoSensitiveContentDetected.PrivacyInformation'
+  ) {
+    return undefined;
+  }
+  return new VideoGenError(
+    'Seedance rejected an ordinary reference containing a recognizable real person. Select a preset avatar or an Active authorized-person Asset ID in the current Volcengine account/project, then pass it through referenceAssets.',
+    `ark submit: ${code}`,
+  );
+}
+
 export const arkAdapter: VideoProviderAdapter = {
   async submit(provider, remoteModelId, params, fetchImpl, signal): Promise<RemoteTaskHandle> {
     if (!provider.apiKey) throw missingKeyError('ark', 'ARK_API_KEY', provider.apiKeyPath);
@@ -108,6 +128,27 @@ export const arkAdapter: VideoProviderAdapter = {
         role: 'reference_image',
       });
     }
+    for (const asset of params.referenceAssets ?? []) {
+      if (asset.modality === 'image') {
+        content.push({
+          type: 'image_url',
+          image_url: { url: `asset://${asset.assetId}` },
+          role: 'reference_image',
+        });
+      } else if (asset.modality === 'video') {
+        content.push({
+          type: 'video_url',
+          video_url: { url: `asset://${asset.assetId}` },
+          role: 'reference_video',
+        });
+      } else {
+        content.push({
+          type: 'audio_url',
+          audio_url: { url: `asset://${asset.assetId}` },
+          role: 'reference_audio',
+        });
+      }
+    }
 
     const body: Record<string, unknown> = {
       model: remoteModelId,
@@ -133,6 +174,10 @@ export const arkAdapter: VideoProviderAdapter = {
 
     if (!res.ok) {
       if (res.status >= 500) throw ambiguousSubmitError();
+      if (res.status === 400) {
+        const privacyError = await portraitPrivacyError(res);
+        if (privacyError) throw privacyError;
+      }
       throw httpStatusError('ark', 'submit', res.status);
     }
 

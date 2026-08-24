@@ -126,6 +126,7 @@ describe('pi-video-gen extension', () => {
         'visibleCharacters',
       ]),
     );
+    expect(Object.keys(props)).toContain('referenceAssets');
   });
 
   it('keeps compose identity entirely in the immutable spec path', () => {
@@ -147,6 +148,7 @@ describe('pi-video-gen extension', () => {
     const text = result.content[0]!.text;
     expect(text).toContain('doubao-seedance-2-0-260128');
     expect(text).toContain('Native audio: yes');
+    expect(text).toContain('Trusted asset references: image, video, audio');
     expect(result.isError).toBeUndefined();
   });
 
@@ -246,6 +248,33 @@ describe('pi-video-gen extension', () => {
       );
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toMatch(/durationSec must be 4-15s/);
+  });
+
+  it('video_generate rejects too many Seedance video assets before any network call', async () => {
+    mkdirSync(join(home, '.pi', 'agent'), { recursive: true });
+    writeFileSync(
+      join(home, '.pi', 'agent', 'settings.json'),
+      JSON.stringify({ 'pi-video-gen': { providers: { ark: { apiKey: 'k' } } } }),
+    );
+    await startSession(cwd);
+
+    const result = await tools.get('video_generate')!.execute(
+      'call-1',
+      {
+        ...VALID_GENERATE_PARAMS,
+        referenceAssets: Array.from({ length: 4 }, (_, index) => ({
+          modality: 'video',
+          assetId: `asset-video-${index}`,
+        })),
+      },
+      undefined,
+      undefined,
+      fakeCtx(cwd),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toMatch(/video references \(4\).*at most 3/i);
+    expect(safeFetchMock).not.toHaveBeenCalled();
   });
 
   it('/video-gen doctor reports key/ffmpeg/image_generate/trust status', async () => {
@@ -376,6 +405,69 @@ describe('pi-video-gen extension', () => {
     }
   });
 
+  it('/video-gen generate sends current-account trusted assets in modality order', async () => {
+    mkdirSync(join(home, '.pi', 'agent'), { recursive: true });
+    writeFileSync(
+      join(home, '.pi', 'agent', 'settings.json'),
+      JSON.stringify({ 'pi-video-gen': { providers: { ark: { apiKey: 'k' } } } }),
+    );
+    await startSession(cwd);
+
+    let submitted: Record<string, unknown> | undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: unknown, init?: RequestInit) => {
+        if (init?.method === 'POST') {
+          submitted = JSON.parse(String(init.body));
+          return Response.json({ id: 'task-assets' });
+        }
+        if (String(url).includes('/contents/generations/tasks/')) {
+          return Response.json({
+            status: 'succeeded',
+            content: { video_url: 'https://93.184.216.34/v.mp4' },
+          });
+        }
+        const header = Buffer.alloc(16);
+        header.write('ftyp', 4, 'ascii');
+        return new Response(new Uint8Array(header));
+      }),
+    );
+    try {
+      const ctx = fakeCtx(cwd);
+      await commands
+        .get('video-gen')!
+        .handler(
+          'generate --style cinematic --scene studio --visuals portrait --action speaks --asset-images asset://asset-avatar-1,asset-avatar-2 --asset-videos asset-motion-1 --asset-audios asset-voice-1',
+          ctx,
+        );
+      expect(notifiedText(ctx)).toMatch(/Video clip ready/);
+      expect((submitted!.content as Record<string, unknown>[]).slice(1)).toEqual([
+        {
+          type: 'image_url',
+          image_url: { url: 'asset://asset-avatar-1' },
+          role: 'reference_image',
+        },
+        {
+          type: 'image_url',
+          image_url: { url: 'asset://asset-avatar-2' },
+          role: 'reference_image',
+        },
+        {
+          type: 'video_url',
+          video_url: { url: 'asset://asset-motion-1' },
+          role: 'reference_video',
+        },
+        {
+          type: 'audio_url',
+          audio_url: { url: 'asset://asset-voice-1' },
+          role: 'reference_audio',
+        },
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('/video-gen doctor reports the active custom provider and its key', async () => {
     mkdirSync(join(home, '.pi', 'agent'), { recursive: true });
     writeFileSync(
@@ -420,6 +512,48 @@ describe('pi-video-gen extension', () => {
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toContain('pi-video-gen.customProviders.proxy.apiKey');
     expect(result.content[0]!.text).not.toContain('pi-video-gen.providers.kling.apiKey');
+  });
+
+  it('hides and rejects trusted assets when the active wire adapter does not support them', async () => {
+    mkdirSync(join(home, '.pi', 'agent'), { recursive: true });
+    writeFileSync(
+      join(home, '.pi', 'agent', 'settings.json'),
+      JSON.stringify({
+        'pi-video-gen': {
+          defaultModel: 'seedance-relay',
+          customProviders: {
+            relay: {
+              api: 'newapi',
+              baseUrl: 'https://relay.example',
+              apiKey: 'k',
+              models: [
+                {
+                  id: 'doubao-seedance-2-0-260128',
+                  alias: 'seedance-relay',
+                },
+              ],
+            },
+          },
+        },
+      }),
+    );
+    await startSession(cwd);
+
+    expect(tools.get('video_generate')!.parameters.properties).not.toHaveProperty(
+      'referenceAssets',
+    );
+    const result = await tools.get('video_generate')!.execute(
+      'c1',
+      {
+        ...VALID_GENERATE_PARAMS,
+        referenceAssets: [{ modality: 'image', assetId: 'asset-avatar-1' }],
+      },
+      undefined,
+      undefined,
+      fakeCtx(cwd),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toMatch(/newapi.*does not support trusted asset/i);
   });
 
   it('video_generate maps firstFrame→firstFramePath and applies model defaults', async () => {

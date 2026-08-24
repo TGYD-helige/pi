@@ -26,6 +26,27 @@ accounts — verify with `/video-gen doctor` + one small paid clip before heavy
 use. Seedance 2.5 stays on the roadmap until its official API ID and parameter
 contract are published.
 
+**Seedance trusted portrait assets**: Seedance may reject ordinary image/video
+references containing recognizable real people. For those shots, select a
+preset avatar or an Active authorized-person asset in the same Volcengine Ark
+account/project used for generation, then pass its `asset-...` ID (or
+`asset://asset-...` URI) through `referenceAssets`. The extension supports
+trusted `image`, `video`, and `audio` assets for the built-in Seedance 2.0
+models and maps them to Ark's `asset://` request format. Prompt text refers to
+their order as `Image 1`, `Video 1`, and `Audio 1` — never by Asset ID.
+
+This package ships dated snapshots of the public material cards and preset
+persona library under `skills/video-gen/references/`, including the Asset IDs
+needed by `referenceAssets`. Volcengine does not document those IDs as
+permanent or cross-account, so retry with an ID copied from the active
+account's library if a snapshot ID is rejected. Private or authorized-person
+assets always require the user to provide the current account/project's actual
+ID. Identity verification, authorization H5 flows, activation, uploading, and
+asset-library management remain outside this package. See Volcengine's
+[preset-avatar guide](https://docs.volcengine.com/docs/82379/2608626?lang=zh#preset-avatar),
+[authorized-person asset guide](https://docs.volcengine.com/docs/82379/2223965?lang=zh),
+and [Seedance request format](https://console.volcengine.com/ark/region:cn-beijing/docs/82379/2333589?projectName=default&lang=zh#d9a7d853).
+
 ## Setup
 
 Global settings (`~/.pi/agent/settings.json`):
@@ -64,9 +85,11 @@ field you do declare overrides the inherited one:
         "models": [
           "seedance-lite-x",
           { "id": "remote-model-9", "alias": "fast9",
-            "capabilities": { "maxReferenceImages": 2, "durations": [2, 30],
+            "capabilities": { "maxReferenceImages": 9,
+              "maxReferenceVideos": 3, "maxReferenceAudios": 3, "durations": [2, 30],
               "resolutions": ["480p", "720p", "1080p"], "aspectRatios": ["16:9", "9:16"],
-              "nativeAudio": true, "supportsFirstLastFrame": true } }
+              "nativeAudio": true, "supportsFirstLastFrame": true,
+              "referenceAssetModalities": ["image", "video", "audio"] } }
         ]
       }
     }
@@ -165,9 +188,9 @@ the binaries.
 | Tool | What it does |
 |---|---|
 | `video_compose` | **Local video assembly, no paid video models.** C0 (`compose-input.json`) concatenates compatible clips. Timeline media, overlays, transitions, subtitles, source audio, and BGM render locally. Narration is an explicit network feature: setting `voice` to `edge-tts:<voice-name>` sends narration text to Microsoft Edge TTS. |
-| `video_generate` | One short clip from a structured prompt (style/scene/visuals/action/effects/audio + optional first/last frame images). Paid, minutes per clip. Interrupted after receiving a task id? Resume with the returned `jobId`; an ambiguous submit is parked and never resubmitted automatically. |
-| `video_render` | Multi-shot film from `<jobDir>/render-input.json`: snapshots + hashes all frames, submits one paid task per shot (resume-aware, finished shots never re-bill), downloads clips, ffmpeg-concats into `final_video.mp4`. |
-| `video_capabilities` | Read-only: active model's capability table + registered models. Call before composing prompts or shot books. |
+| `video_generate` | One short clip from a structured prompt plus optional first/last frames or current-account trusted `referenceAssets`. Paid, minutes per clip. Interrupted after receiving a task id? Resume with the returned `jobId`; an ambiguous submit is parked and never resubmitted automatically. |
+| `video_render` | Multi-shot film from `<jobDir>/render-input.json`: every shot requires a local first frame or at least one trusted asset; snapshots + hashes local frames, submits one paid task per shot (resume-aware, finished shots never re-bill), downloads clips, ffmpeg-concats into `final_video.mp4`. |
+| `video_capabilities` | Read-only: active model's capability table, trusted asset modalities, and registered models. Call before composing prompts or shot books. |
 
 ## Structured prompts
 
@@ -186,13 +209,20 @@ directives), so every shot reliably carries the film-level directives:
   (transformations, lighting shifts, atmosphere); `audio` takes
   `[Sound Effect] … / [Speaker] …` cues; `visibleCharacters` inlines the
   referenced character descriptions.
+- **Trusted asset references** — `referenceAssets` is an ordered array of
+  `{modality: "image"|"video"|"audio", assetId: "asset-..."}`. The public API
+  also accepts `asset://asset-...` and normalizes it. Only models declaring the
+  requested modality accept it; unsupported inputs fail before a paid submit.
+  Built-in Seedance 2.0 models enforce separate request maxima: 9 image
+  references total (local frames plus image assets), 3 video assets, and 3
+  audio assets.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
 | `/video-gen compose <spec>` | Same as the `video_compose` tool |
-| `/video-gen generate --visuals ".." --action ".." [--style ".." --scene ".."]` | Structured-prompt flags for the `video_generate` tool (also `--effects/--audio/--consistency/--negative/--first-frame/--last-frame/--duration/--ratio`; quote values may escape their delimiter as `\"`). The `characters` registry is tool/render-spec only — not available via flags |
+| `/video-gen generate --visuals ".." --action ".." [--style ".." --scene ".."]` | Structured-prompt flags for `video_generate` (also `--effects/--audio/--consistency/--negative/--first-frame/--last-frame/--asset-images/--asset-videos/--asset-audios/--duration/--ratio`). Asset flags take comma-separated current-account IDs; request order is images, videos, then audios. The `characters` registry is tool/render-spec only. |
 | `/video-gen render <spec>` | Same as the `video_render` tool |
 | `/video-gen recover <jobId>` | List ambiguous render shots; explicitly `reset` a confirmed-absent task or `adopt <taskId>` found in the provider console |
 | `/video-gen models` | List registered models + key readiness |
@@ -206,9 +236,10 @@ Driven by the `video-gen` skill in conversation:
 1. **Shot book** — the agent authors a shot book (characters + shots with
    first/last-frame descriptions, visuals+action, effects, audio, continuity)
    and you review it in chat. Default small: 1 scene, 3–5 shots.
-2. **Frames** — the agent generates character portraits and per-shot frames via
-   `image_generate` (pi-image-gen), tracking real returned paths in
-   `assets.json`.
+2. **Sources** — the agent uses current-account trusted portrait assets when
+   Seedance will receive recognizable real people; otherwise it generates
+   character portraits and per-shot frames via `image_generate`, tracking local
+   returned paths in `assets.json`.
 3. **Render** — after explicit confirmation, ONE `video_render` call pays for
    and stitches everything.
 
@@ -219,7 +250,7 @@ Driven by the `video-gen` skill in conversation:
 ├── render-input.json   # immutable spec (revisions = new job dir)
 ├── assets.json         # semantic assets ↔ image_generate's real returned paths
 ├── manifest.json       # state + per-shot remote handles + frame SHA-256 (atomic, single writer)
-├── shots/<shotId>/first_frame.png|last_frame.png|video.mp4
+├── shots/<shotId>/first_frame.png|last_frame.png|video.mp4  # frames optional for asset-only shots
 └── final_video.mp4
 ```
 

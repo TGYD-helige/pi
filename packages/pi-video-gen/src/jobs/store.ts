@@ -309,17 +309,16 @@ function validateRenderManifest(raw: unknown, path: string): RenderJobManifest {
       'store: manifest shape invalid',
     );
   }
-  // frameHashes must actually COVER the shots: an empty or sparse map lets
-  // resume skip every frozen-frame check and run paid requests on untrusted
-  // input. Every shot has at least a first frame.
+  // Every recorded hash must be valid. Exact coverage cannot be inferred from
+  // the manifest alone because asset-only shots have no local frames;
+  // runRender compares this map with the immutable spec before any submit.
   const frameHashEntries = Object.entries(m.frameHashes!);
-  const shotsCount = Object.keys(m.shots as object).length;
-  const hashesInvalid =
-    frameHashEntries.length < shotsCount ||
-    frameHashEntries.some(([, hash]) => typeof hash !== 'string' || !/^[0-9a-f]{64}$/.test(hash));
+  const hashesInvalid = frameHashEntries.some(
+    ([, hash]) => typeof hash !== 'string' || !/^[0-9a-f]{64}$/.test(hash),
+  );
   if (hashesInvalid) {
     throw new VideoGenError(
-      `${safeBasename(path)} has incomplete frame hashes (${frameHashEntries.length} for ${shotsCount} shots). Refusing to resume — the frozen frames cannot be verified.`,
+      `${safeBasename(path)} has an invalid frame hash. Refusing to resume — the frozen frames cannot be verified.`,
       'store: frameHashes invalid',
     );
   }

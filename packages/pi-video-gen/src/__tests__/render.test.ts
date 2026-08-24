@@ -119,6 +119,158 @@ describe('runRender', () => {
     concatCalls = { inputs: [] };
   });
 
+  it('renders an asset-only shot without a first frame and normalizes asset URIs', async () => {
+    const jobDir = makeJob(cwd, {
+      style: 'cinematic',
+      shots: [
+        {
+          id: 's1',
+          prompt: { scene: 'studio', visuals: 'medium shot', action: 'speaks to camera' },
+          referenceAssets: [
+            { modality: 'image', assetId: 'asset://asset-avatar-1' },
+            { modality: 'audio', assetId: 'asset-voice-1' },
+          ],
+        },
+      ],
+    });
+
+    await runRender({
+      renderSpecPath: join(jobDir, 'render-input.json'),
+      ...baseOpts(cwd, mockAdapter(calls), concatCalls),
+    });
+
+    expect(calls.submit).toBe(1);
+    expect(calls.params[0]!.firstFramePath).toBeUndefined();
+    expect(calls.params[0]!.referenceAssets).toEqual([
+      { modality: 'image', assetId: 'asset-avatar-1' },
+      { modality: 'audio', assetId: 'asset-voice-1' },
+    ]);
+    expect(loadRenderJob(jobDir)!.frameHashes).toEqual({});
+  });
+
+  it('applies Seedance reference limits per modality before a paid submit', async () => {
+    const firstFrame = makeFrame(cwd, 'first.png');
+    const lastFrame = makeFrame(cwd, 'last.png');
+    const jobDir = makeJob(cwd, {
+      style: 'cinematic',
+      shots: [
+        {
+          id: 's1',
+          prompt: { visuals: 'medium shot', action: 'speaks to camera' },
+          firstFramePath: firstFrame,
+          lastFramePath: lastFrame,
+          referenceAssets: [
+            ...Array.from({ length: 7 }, (_, index) => ({
+              modality: 'image' as const,
+              assetId: `asset-image-${index}`,
+            })),
+            ...Array.from({ length: 3 }, (_, index) => ({
+              modality: 'video' as const,
+              assetId: `asset-video-${index}`,
+            })),
+            ...Array.from({ length: 3 }, (_, index) => ({
+              modality: 'audio' as const,
+              assetId: `asset-audio-${index}`,
+            })),
+          ],
+        },
+      ],
+    });
+
+    await runRender({
+      renderSpecPath: join(jobDir, 'render-input.json'),
+      ...baseOpts(cwd, mockAdapter(calls), concatCalls),
+    });
+
+    expect(calls.submit).toBe(1);
+    expect(calls.params[0]!.referenceAssets).toHaveLength(13);
+  });
+
+  it('rejects too many Seedance video assets before a paid submit', async () => {
+    const jobDir = makeJob(cwd, {
+      style: 'cinematic',
+      shots: [
+        {
+          id: 's1',
+          prompt: { scene: 'studio', visuals: 'medium shot', action: 'speaks to camera' },
+          referenceAssets: Array.from({ length: 4 }, (_, index) => ({
+            modality: 'video' as const,
+            assetId: `asset-video-${index}`,
+          })),
+        },
+      ],
+    });
+
+    await expect(
+      runRender({
+        renderSpecPath: join(jobDir, 'render-input.json'),
+        ...baseOpts(cwd, mockAdapter(calls), concatCalls),
+      }),
+    ).rejects.toThrow(/video references \(4\).*at most 3/i);
+    expect(calls.submit).toBe(0);
+  });
+
+  it('rejects a shot without a local frame or trusted asset before a paid submit', async () => {
+    const jobDir = makeJob(cwd, {
+      style: 'cinematic',
+      shots: [
+        {
+          id: 's1',
+          prompt: { scene: 'studio', visuals: 'medium shot', action: 'speaks to camera' },
+        },
+      ],
+    });
+
+    await expect(
+      runRender({
+        renderSpecPath: join(jobDir, 'render-input.json'),
+        ...baseOpts(cwd, mockAdapter(calls), concatCalls),
+      }),
+    ).rejects.toThrow(/firstFramePath or at least one referenceAsset/i);
+    expect(calls.submit).toBe(0);
+  });
+
+  it('rejects malformed or unsupported trusted assets before a paid submit', async () => {
+    const malformedDir = makeJob(cwd, {
+      style: 'cinematic',
+      shots: [
+        {
+          id: 's1',
+          prompt: { scene: 'studio', visuals: 'medium shot', action: 'speaks' },
+          referenceAssets: [{ modality: 'image', assetId: 'not-an-asset' }],
+        },
+      ],
+    } as RenderInput);
+    await expect(
+      runRender({
+        renderSpecPath: join(malformedDir, 'render-input.json'),
+        ...baseOpts(cwd, mockAdapter(calls), concatCalls),
+      }),
+    ).rejects.toThrow(/assetId.*asset-/i);
+    expect(calls.submit).toBe(0);
+
+    rmSync(malformedDir, { recursive: true, force: true });
+    const unsupportedDir = makeJob(cwd, {
+      style: 'cinematic',
+      shots: [
+        {
+          id: 's1',
+          prompt: { scene: 'studio', visuals: 'medium shot', action: 'speaks' },
+          referenceAssets: [{ modality: 'image', assetId: 'asset-avatar-1' }],
+        },
+      ],
+    });
+    const unsupported = noFlfResolved();
+    unsupported.entry.capabilities.referenceAssetModalities = undefined;
+    await expect(
+      runRender({
+        renderSpecPath: join(unsupportedDir, 'render-input.json'),
+        ...baseOpts(cwd, mockAdapter(calls), concatCalls, unsupported),
+      }),
+    ).rejects.toThrow(/does not support trusted asset references/i);
+    expect(calls.submit).toBe(0);
+  });
+
   it.each([
     ['numeric string', '5'],
     ['fraction', 4.5],
@@ -817,6 +969,57 @@ describe('runRender', () => {
     saveRenderJob(jobDir, legacy);
 
     await runRender({ renderSpecPath: join(jobDir, 'render-input.json'), ...opts });
+    expect(loadRenderJob(jobDir)!.shots.s1).toMatchObject({ state: 'done' });
+  });
+
+  it('resumes a submitted shot whose legacy fingerprint omitted referenceAssets', async () => {
+    const frame = makeFrame(cwd, 'legacy-assets.png');
+    const jobDir = makeJob(cwd, {
+      shots: [{ id: 's1', prompt: { visuals: 'v1', action: 'm1' }, firstFramePath: frame }],
+    });
+    let submits = 0;
+    let cancelled = false;
+    let submittedModel = '';
+    let submittedParams: GenerateVideoParams | undefined;
+    const adapter: VideoProviderAdapter = {
+      async submit(_provider, model, params) {
+        submits++;
+        submittedModel = model;
+        submittedParams = structuredClone(params);
+        return {
+          taskId: 'task-legacy-assets',
+          submittedAt: 'x',
+          requestFingerprint: requestFingerprint(model, params),
+        };
+      },
+      async inspect() {
+        if (!cancelled) {
+          cancelled = true;
+          throw new CancelledError();
+        }
+        return { phase: 'succeeded', videoUrl: 'https://cdn.example/v.mp4' };
+      },
+      async downloadTo(_provider, _handle, _url, destPath) {
+        writeFileSync(destPath, fakeMp4());
+        return { path: destPath, bytes: 32 };
+      },
+    };
+    const opts = baseOpts(cwd, adapter, concatCalls);
+    await expect(
+      runRender({ renderSpecPath: join(jobDir, 'render-input.json'), ...opts }),
+    ).rejects.toThrow(/Stopped locally/);
+
+    const legacyFingerprint = requestFingerprint(submittedModel, {
+      ...submittedParams!,
+      referenceAssets: undefined,
+    });
+    const legacy = loadRenderJob(jobDir)!;
+    legacy.shots.s1!.requestFingerprint = legacyFingerprint;
+    legacy.shots.s1!.handle!.requestFingerprint = legacyFingerprint;
+    saveRenderJob(jobDir, legacy);
+
+    await runRender({ renderSpecPath: join(jobDir, 'render-input.json'), ...opts });
+    expect(submits).toBe(1);
     expect(loadRenderJob(jobDir)!.shots.s1).toMatchObject({ state: 'done' });
   });
 

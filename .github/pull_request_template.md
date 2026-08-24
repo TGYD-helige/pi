@@ -1,14 +1,19 @@
+## Packages and versions
+
+<!-- Example: @amaster.ai/pi-memory: 1.2.3 -> 1.2.4, or 1.2.3 (unchanged). Write "none" only when not package-scoped. -->
+
 ## Summary
 
-<!-- What changed, and why is this the smallest change that solves the problem? -->
+<!-- In 1-3 bullets: what changed and why? -->
 
 ## Verification
 
-<!-- List the commands or manual checks you ran. If none, explain why. -->
+<!-- Commands or manual checks. -->
+
+## Related issue
+
+<!-- Fixes #123. Omit this section when there is no related issue. -->
 
 ## Checklist
 
-- [ ] I read the applicable `AGENTS.md` files for every changed path.
-- [ ] This PR contains no unrelated refactors or generated files.
-- [ ] Behavior and configuration changes include relevant tests, or the reason they do not is explained above.
-- [ ] Public tool, command, setting, or user-facing behavior changes include the corresponding documentation and prompt guidance.
+- [ ] This PR is focused; tests and docs are updated where applicable.

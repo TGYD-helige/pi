@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { httpStatusError, networkError, safeBasename, VideoGenError } from '../errors.js';
 import { arkAdapter } from '../providers/ark.js';
+import { requestFingerprint } from '../providers/request.js';
 import { pollTask, sanitizeProviderMessage } from '../providers/task.js';
 import type { RemoteTaskStatus, ResolvedProvider } from '../types.js';
 
@@ -95,11 +96,101 @@ describe('arkAdapter.submit', () => {
     expect((body?.content as unknown[]).length).toBe(1);
   });
 
+  it('maps trusted asset ids to Ark asset URLs in caller order', async () => {
+    let body: Record<string, unknown> | undefined;
+    const fetchImpl = mockFetch((_url, init) => {
+      body = JSON.parse(String(init?.body));
+      return jsonResponse(200, { id: 'task-assets' });
+    });
+
+    await arkAdapter.submit(
+      provider,
+      'm',
+      {
+        prompt: 'Image 1 speaks while Video 1 sets the motion and Audio 1 sets the voice.',
+        referenceAssets: [
+          { modality: 'image', assetId: 'asset-image-1' },
+          { modality: 'video', assetId: 'asset-video-1' },
+          { modality: 'audio', assetId: 'asset-audio-1' },
+        ],
+      },
+      fetchImpl,
+    );
+
+    expect(body?.content).toEqual([
+      {
+        type: 'text',
+        text: 'Image 1 speaks while Video 1 sets the motion and Audio 1 sets the voice.',
+      },
+      {
+        type: 'image_url',
+        image_url: { url: 'asset://asset-image-1' },
+        role: 'reference_image',
+      },
+      {
+        type: 'video_url',
+        video_url: { url: 'asset://asset-video-1' },
+        role: 'reference_video',
+      },
+      {
+        type: 'audio_url',
+        audio_url: { url: 'asset://asset-audio-1' },
+        role: 'reference_audio',
+      },
+    ]);
+  });
+
+  it('maps Ark portrait privacy rejection codes to safe actionable guidance', async () => {
+    const fetchImpl = mockFetch(() =>
+      jsonResponse(400, {
+        error: {
+          code: 'InputImageSensitiveContentDetected.PrivacyInformation',
+          message: 'raw provider body must not escape',
+        },
+      }),
+    );
+    await expect(arkAdapter.submit(provider, 'm', { prompt: 'x' }, fetchImpl)).rejects.toThrow(
+      /preset avatar|authorized-person Asset ID/i,
+    );
+    await expect(arkAdapter.submit(provider, 'm', { prompt: 'x' }, fetchImpl)).rejects.not.toThrow(
+      /raw provider body/i,
+    );
+  });
+
   it('fails fast on 4xx without retrying', async () => {
     const fetchImpl = mockFetch(() => jsonResponse(400, { error: 'bad' }));
     await expect(arkAdapter.submit(provider, 'm', { prompt: 'x' }, fetchImpl)).rejects.toThrow(
       /HTTP 400/,
     );
+  });
+
+  it('includes trusted asset identity and ordering in the request fingerprint', () => {
+    const base = { prompt: 'x' };
+    const image = {
+      ...base,
+      referenceAssets: [{ modality: 'image' as const, assetId: 'asset-1' }],
+    };
+    const video = {
+      ...base,
+      referenceAssets: [{ modality: 'video' as const, assetId: 'asset-1' }],
+    };
+    const reordered = {
+      ...base,
+      referenceAssets: [
+        { modality: 'image' as const, assetId: 'asset-2' },
+        { modality: 'image' as const, assetId: 'asset-1' },
+      ],
+    };
+    const original = {
+      ...base,
+      referenceAssets: [
+        { modality: 'image' as const, assetId: 'asset-1' },
+        { modality: 'image' as const, assetId: 'asset-2' },
+      ],
+    };
+
+    expect(requestFingerprint('m', image)).not.toBe(requestFingerprint('m', video));
+    expect(requestFingerprint('m', original)).not.toBe(requestFingerprint('m', reordered));
   });
 
   it('treats 5xx and network errors as ambiguous (no blind retry)', async () => {

@@ -311,7 +311,7 @@ describe('manifest validation', () => {
     expect(() => loadSingleJob(suiteDir, jobId)).toThrow(/jobId "gen-foreign"/);
   });
 
-  it('refuses manifests whose frameHashes do not cover the shots', () => {
+  it('accepts frameless shots but refuses malformed frame hashes', () => {
     const jobDir = join(suiteDir, 'render-job');
     mkdirSync(jobDir, { recursive: true });
     const base = {
@@ -323,18 +323,19 @@ describe('manifest validation', () => {
     };
     const h64 = 'a'.repeat(64);
     const shots = { s1: { state: 'pending' }, s2: { state: 'pending' } };
-    // empty hashes
+    // Asset-only shots legitimately have no local frame hashes. Exact
+    // spec coverage is checked by runRender before a paid submit.
     writeFileSync(
       join(jobDir, 'manifest.json'),
       JSON.stringify({ ...base, frameHashes: {}, shots }),
     );
-    expect(() => loadRenderJob(jobDir)).toThrow(/incomplete frame hashes/);
-    // sparse: 1 hash for 2 shots
+    expect(loadRenderJob(jobDir)?.frameHashes).toEqual({});
+    // A mix of framed and frameless shots may have fewer hashes than shots.
     writeFileSync(
       join(jobDir, 'manifest.json'),
       JSON.stringify({ ...base, frameHashes: { 'shots/s1/first_frame.png': h64 }, shots }),
     );
-    expect(() => loadRenderJob(jobDir)).toThrow(/incomplete frame hashes/);
+    expect(loadRenderJob(jobDir)?.frameHashes).toEqual({ 'shots/s1/first_frame.png': h64 });
     // non-hex value
     writeFileSync(
       join(jobDir, 'manifest.json'),
@@ -344,7 +345,7 @@ describe('manifest validation', () => {
         shots,
       }),
     );
-    expect(() => loadRenderJob(jobDir)).toThrow(/incomplete frame hashes/);
+    expect(() => loadRenderJob(jobDir)).toThrow(/invalid frame hash/);
     // arrays are not a hash map
     writeFileSync(
       join(jobDir, 'manifest.json'),

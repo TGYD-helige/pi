@@ -24,11 +24,16 @@ import {
   writeJsonAtomic,
 } from './jobs/store.js';
 import { assemblePrompt, validateFilmPrompt, validateShotPrompt } from './prompt.js';
-import { requestFingerprint } from './providers/request.js';
+import {
+  normalizeReferenceAssets,
+  referenceAssetPreflightError,
+  requestFingerprint,
+} from './providers/request.js';
 import { CancelledError, pollTask, type RateLimiter } from './providers/task.js';
 import type {
   FilmPrompt,
   GenerateVideoParams,
+  ReferenceAsset,
   RemoteTaskHandle,
   ResolvedModel,
   ShotPrompt,
@@ -55,8 +60,9 @@ export type RenderShotInput = {
   id: string;
   /** Structured per-shot prompt fields — assembled via assemblePrompt before submit. */
   prompt: ShotPrompt;
-  firstFramePath: string;
+  firstFramePath?: string | undefined;
   lastFramePath?: string | undefined;
+  referenceAssets?: ReferenceAsset[] | undefined;
   durationSec?: number | undefined;
 };
 
@@ -98,9 +104,16 @@ function specFingerprint(specRaw: string, resolved: ResolvedModel): string {
 
 function expectedSnapshotKeys(spec: RenderInput, cwd: string): string[] {
   return spec.shots.flatMap((shot) => {
-    const keys = [
-      join('shots', shot.id, `first_frame${extname(resolve(cwd, shot.firstFramePath)) || '.png'}`),
-    ];
+    const keys: string[] = [];
+    if (shot.firstFramePath) {
+      keys.push(
+        join(
+          'shots',
+          shot.id,
+          `first_frame${extname(resolve(cwd, shot.firstFramePath)) || '.png'}`,
+        ),
+      );
+    }
     if (shot.lastFramePath) {
       keys.push(
         join('shots', shot.id, `last_frame${extname(resolve(cwd, shot.lastFramePath)) || '.png'}`),
@@ -163,10 +176,13 @@ function parseRenderSpec(raw: string): RenderInput {
       );
     }
     seen.add(shot.id);
-    if (typeof shot.firstFramePath !== 'string' || shot.firstFramePath.trim() === '') {
+    if (
+      shot.firstFramePath !== undefined &&
+      (typeof shot.firstFramePath !== 'string' || shot.firstFramePath.trim() === '')
+    ) {
       throw new VideoGenError(
-        `${where}.firstFramePath is required — generate the frame via image_generate first and point at its returned path.`,
-        'render: no frame',
+        `${where}.firstFramePath must be a path string when present.`,
+        'render: bad first frame type',
       );
     }
     if (
@@ -178,8 +194,23 @@ function parseRenderSpec(raw: string): RenderInput {
         'render: bad last frame type',
       );
     }
-    // Derive, don't hardcode: firstFramePath is required above, but if it ever
-    // becomes optional the frameless style/scene rule must stay live.
+    if (shot.lastFramePath && !shot.firstFramePath) {
+      throw new VideoGenError(
+        `${where}.lastFramePath requires firstFramePath.`,
+        'render: last frame without first',
+      );
+    }
+    const referenceAssets = normalizeReferenceAssets(
+      (shot as { referenceAssets?: unknown }).referenceAssets,
+      `${where}.referenceAssets`,
+    );
+    shot.referenceAssets = referenceAssets.length > 0 ? referenceAssets : undefined;
+    if (!shot.firstFramePath && !shot.referenceAssets) {
+      throw new VideoGenError(
+        `${where} requires firstFramePath or at least one referenceAsset.`,
+        'render: missing visual input',
+      );
+    }
     const promptError = validateShotPrompt(
       spec,
       shot.prompt,
@@ -295,6 +326,16 @@ export async function runRender(opts: {
     );
   }
   for (const shot of spec.shots) {
+    const referenceError = referenceAssetPreflightError({
+      providerStyle: resolved.provider.style,
+      modelId: resolved.entry.id,
+      capabilities: caps,
+      referenceAssets: shot.referenceAssets ?? [],
+      localImageReferences: (shot.firstFramePath ? 1 : 0) + (shot.lastFramePath ? 1 : 0),
+    });
+    if (referenceError) {
+      throw new VideoGenError(`Shot "${shot.id}": ${referenceError}`, 'render: invalid references');
+    }
     const d = shot.durationSec ?? resolved.entry.defaultDurationSec;
     if (d < caps.durations[0] || d > caps.durations[1]) {
       throw new VideoGenError(
@@ -488,12 +529,9 @@ export async function runRender(opts: {
       const videoPath = join(realShotsDir, shot.id, 'video.mp4');
       if (shotState.state === 'done' && existsSync(videoPath)) return;
 
-      const firstSnap = join(
-        jobDir,
-        'shots',
-        shot.id,
-        `first_frame${pickExt(manifest!, shot.id, 'firstFrame')}`,
-      );
+      const firstSnap = shot.firstFramePath
+        ? join(jobDir, 'shots', shot.id, `first_frame${pickExt(manifest!, shot.id, 'firstFrame')}`)
+        : undefined;
       const lastSnap = shot.lastFramePath
         ? join(jobDir, 'shots', shot.id, `last_frame${pickExt(manifest!, shot.id, 'lastFrame')}`)
         : undefined;
@@ -503,6 +541,7 @@ export async function runRender(opts: {
         requestId: `${jobId}:${shot.id}:${attempt}`,
         firstFramePath: firstSnap,
         lastFramePath: lastSnap,
+        referenceAssets: shot.referenceAssets,
         durationSec: shot.durationSec ?? resolved.entry.defaultDurationSec,
         aspectRatio: spec.aspectRatio ?? resolved.entry.defaultAspectRatio,
         resolution: resolved.entry.defaultResolution,

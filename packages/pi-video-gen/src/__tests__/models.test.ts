@@ -96,6 +96,19 @@ describe('model registry', () => {
     expect(findBuiltInModel('seedance-2.0-mini')?.id).toBe('doubao-seedance-2-0-mini-260615');
   });
 
+  it('declares current-account trusted image/video/audio assets for Seedance 2.0', () => {
+    for (const id of ['seedance-2.0', 'seedance-2.0-fast', 'seedance-2.0-mini']) {
+      const capabilities = findBuiltInModel(id)!.capabilities;
+      expect(capabilities.referenceAssetModalities).toEqual(['image', 'video', 'audio']);
+      expect(capabilities.maxReferenceImages).toBe(9);
+      expect(capabilities.maxReferenceVideos).toBe(3);
+      expect(capabilities.maxReferenceAudios).toBe(3);
+    }
+    expect(
+      findBuiltInModel('kling-v3-turbo')!.capabilities.referenceAssetModalities,
+    ).toBeUndefined();
+  });
+
   it('fast/mini cap resolution at 720p', () => {
     for (const id of ['seedance-2.0-fast', 'seedance-2.0-mini']) {
       const caps = findBuiltInModel(id)!.capabilities;

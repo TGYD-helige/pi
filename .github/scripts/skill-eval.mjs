@@ -97,15 +97,18 @@ export function selectRegressionEvalSet(base, head) {
   return base;
 }
 
+const normalizeForMatching = (value) =>
+  value.toLowerCase().replace(/\bdon['’]t\b/g, 'do not').replace(/[*_`]+/g, '');
+
 export function gradeExpectations(answer, expectations) {
-  const haystack = answer.toLowerCase();
+  const haystack = normalizeForMatching(answer);
   const graded = expectations.map((expectation) => {
     const includes = expectation.includes ?? [];
     const includesAny = expectation.includes_any ?? [];
     const excludes = expectation.excludes ?? [];
-    const missing = includes.filter((value) => !haystack.includes(value.toLowerCase()));
-    const matchedAny = includesAny.filter((value) => haystack.includes(value.toLowerCase()));
-    const unexpected = excludes.filter((value) => haystack.includes(value.toLowerCase()));
+    const missing = includes.filter((value) => !haystack.includes(normalizeForMatching(value)));
+    const matchedAny = includesAny.filter((value) => haystack.includes(normalizeForMatching(value)));
+    const unexpected = excludes.filter((value) => haystack.includes(normalizeForMatching(value)));
     const passed = missing.length === 0 && (includesAny.length === 0 || matchedAny.length > 0) && unexpected.length === 0;
 
     const evidence = passed
@@ -248,9 +251,7 @@ function materializeSkill(revision, skillRoot, destination) {
       throw new Error(`unsafe skill path: ${file}`);
     }
     const size = Number(git(['cat-file', '-s', oid]));
-    if (!Number.isSafeInteger(size) || size > 1024 * 1024) {
-      throw new Error(`${file} exceeds the 1 MiB skill-eval file limit`);
-    }
+    if (!Number.isSafeInteger(size) || size < 0) throw new Error(`${file} has an invalid size`);
     total += size;
     if (total > 5 * 1024 * 1024) throw new Error(`${skillRoot} exceeds the 5 MiB skill-eval limit`);
     const target = path.join(destination, relative);
