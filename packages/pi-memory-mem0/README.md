@@ -102,6 +102,7 @@ Calls the OSS REST server directly. The server uses `/memories` and `/search`, n
     "baseUrl": "${MEM0_BASE_URL}",
     "apiKey": "${MEM0_API_KEY}",
     "userId": "${PAPERCLIP_COMPANY_ID}",
+    "agentId": "${PAPERCLIP_AGENT_ID}",
     "userIdScope": "exact"
   }
 }
@@ -188,6 +189,7 @@ The configured vector store always owns persistence. To request an intentionally
 | `baseUrl` | string | `https://api.mem0.ai` | Platform override; required for self-hosted mode |
 | `requestTimeoutMs` | number | `30000` | Self-hosted request timeout |
 | `userId` | string | `$USER` or `"default-user"` | Memory scoping identifier |
+| `agentId` | string | — | Optional agent scope. Supports environment interpolation |
 | `userIdScope` | `"project"` \| `"exact"` | `"project"` | Append the cwd hash or use `userId` verbatim |
 | `topK` | number | `5` | Max recalled memories per turn |
 | `useRegistryKeys` | boolean | `true` | Whether OSS mode resolves keys from pi registry |
@@ -197,6 +199,8 @@ The configured vector store always owns persistence. To request an intentionally
 | `oss.historyStore` | object | SQLite at `<home>/memories/mem0-history.db` | Custom mem0 history store config |
 | `oss.historyDbPath` | string | `<home>/memories/mem0-history.db` | Shortcut for SQLite history DB path |
 | `oss.disableHistory` | boolean | `false` | Disable mem0 operation history |
+
+Embedded and self-hosted modes read and write the exact `userId` + `agentId` scope; Platform mode reads the user and agent entity scopes with OR because Mem0 Platform stores them as separate records. Existing memories with a null `agent_id` are not backfilled automatically.
 
 ## Data Storage
 
@@ -261,6 +265,8 @@ Stored content is credential-redacted first; results are returned with the same 
 /mem0 search <query>  # Semantic search
 /mem0 profile         # List all memories
 /mem0 add <text>      # Store a memory manually
+/mem0 dedup           # Preview exact duplicates in the current scope
+/mem0 dedup --apply   # Confirm and remove exact duplicates
 /mem0 delete <id>     # Remove a memory by id
 ```
 
@@ -275,16 +281,18 @@ They do not interfere with each other, and their tool names do not collide. `pi-
 
 ## Dedup API
 
-The package exports a standalone deduplication function used by pi-memory's dreaming job:
+Normal Mem0 writes use inference, so Mem0's own duplicate and conflict handling remains the primary protection. The package also exports a standalone maintenance function for previewing or removing legacy exact duplicates:
 
 ```ts
 import { dedupMemories } from "@amaster.ai/pi-memory-mem0/dedup";
 
 const result = await dedupMemories({
   userId: "my-user",
+  agentId: "my-agent",
   config: { mode: "platform", apiKey: "..." },
+  dryRun: true,
 });
-// result: { total: 42, duplicatesRemoved: 3 }
+// result: { total: 42, duplicatesFound: 3, duplicatesRemoved: 0, deleteFailures: 0 }
 ```
 
-Normalizes entries (case-insensitive, whitespace-collapsed), identifies exact duplicates, and deletes the older ones through the configured provider. In OSS mode those deletes go directly to the vector store.
+Dedup normalizes entries using Unicode NFC, case-insensitive comparison, and collapsed whitespace, then keeps the newest exact match. Platform user and agent entity scopes are processed independently; embedded and self-hosted modes use the exact `userId` + `agentId` scope. Platform and embedded scopes are limited to 10,000 memories; self-hosted dedup requests the server maximum of 1,000 and fails closed when that limit is reached, so it only applies to scopes proven to contain at most 999 memories. Invalid or repeated IDs, empty memory content, missing, invalid, or tied timestamps, incomplete pagination, inconsistent Platform counts, and cancellation all fail closed; individual deletion failures are reported, and no automatic background cleanup is installed.

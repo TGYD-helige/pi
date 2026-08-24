@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const { mockCreateMem0Provider } = vi.hoisted(() => ({
+const { mockCreateMem0Provider, mockDedupProviderMemories } = vi.hoisted(() => ({
   mockCreateMem0Provider: vi.fn(),
+  mockDedupProviderMemories: vi.fn(),
 }));
 
 // Isolate mem0Extension from any settings.json that happens to live on the
@@ -26,6 +27,10 @@ vi.mock('../provider.js', async (importOriginal) => {
   };
 });
 
+vi.mock('../dedup.js', () => ({
+  dedupProviderMemories: mockDedupProviderMemories,
+}));
+
 import { loadPiSettings } from '@amaster.ai/pi-shared/settings';
 import mem0Extension from '../index.js';
 
@@ -33,6 +38,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.mocked(loadPiSettings).mockReturnValue({});
   mockCreateMem0Provider.mockReset();
+  mockDedupProviderMemories.mockReset();
 });
 
 // ---------------------------------------------------------------------------
@@ -242,6 +248,54 @@ describe('memoryMode gating', () => {
     expect(result.content[0]!.text).toContain('disabled');
   });
 
+  it('uses the current session agentId from an earlier tool registration', async () => {
+    const providerA = {
+      add: vi.fn(),
+      search: vi.fn().mockResolvedValue([]),
+      getAll: vi.fn(),
+      delete: vi.fn(),
+    };
+    const providerB = {
+      add: vi.fn(),
+      search: vi.fn().mockResolvedValue([]),
+      getAll: vi.fn(),
+      delete: vi.fn(),
+    };
+    const { pi, handlers, tools } = createMockPi();
+    mem0Extension(pi as never);
+    const ctx = createMockCtx();
+
+    vi.mocked(loadPiSettings).mockReturnValue({
+      mode: 'platform',
+      apiKey: 'm0-test',
+      memoryMode: 'hybrid',
+      agentId: 'agent-a',
+    });
+    mockCreateMem0Provider.mockResolvedValueOnce(providerA);
+    await handlers.session_start![0]!({}, ctx);
+    const earlierTool = tools[0]! as unknown as {
+      execute: (...args: unknown[]) => Promise<unknown>;
+    };
+    await handlers.session_shutdown![0]!({}, ctx);
+
+    vi.mocked(loadPiSettings).mockReturnValue({
+      mode: 'platform',
+      apiKey: 'm0-test',
+      memoryMode: 'hybrid',
+      agentId: 'agent-b',
+    });
+    mockCreateMem0Provider.mockResolvedValueOnce(providerB);
+    await handlers.session_start![0]!({}, ctx);
+
+    await earlierTool.execute('call-1', { action: 'search', query: 'x' }, undefined, undefined, {});
+
+    expect(providerA.search).not.toHaveBeenCalled();
+    expect(providerB.search).toHaveBeenCalledWith(
+      'x',
+      expect.objectContaining({ agentId: 'agent-b' }),
+    );
+  });
+
   it('ignores a superseded session_start that resolves after a newer session', async () => {
     // Session A (hybrid, slow embedded-style init) is still awaiting its
     // provider when session B (passive, fast init) starts and completes.
@@ -431,6 +485,11 @@ describe('passive recall', () => {
 describe('passive capture', () => {
   it('stores the turn with credentials redacted', async () => {
     const provider = mockActiveProvider();
+    vi.mocked(loadPiSettings).mockReturnValue({
+      mode: 'platform',
+      apiKey: 'm0-test',
+      agentId: ' agent-1 ',
+    });
     const { pi, handlers } = createMockPi();
     mem0Extension(pi as never);
     const ctx = createMockCtx();
@@ -451,7 +510,7 @@ describe('passive capture', () => {
     expect(provider.add).toHaveBeenCalledTimes(1);
     const [messages, opts] = provider.add.mock.calls[0] as [
       Array<{ role: string; content: string }>,
-      { userId: string },
+      { userId: string; agentId?: string },
     ];
     expect(messages[0]!.role).toBe('user');
     expect(messages[1]!.role).toBe('assistant');
@@ -459,11 +518,12 @@ describe('passive capture', () => {
     expect(JSON.stringify(messages)).not.toContain('abcdefghijklmnop');
     expect(JSON.stringify(messages)).toContain('[REDACTED]');
     expect(opts.userId).toMatch(/:project:/);
+    expect(opts.agentId).toBe('agent-1');
 
     // The prefetch search query is redacted before it reaches the backend too.
     expect(provider.search).toHaveBeenCalledWith(
       'use api_key=[REDACTED] for the API',
-      expect.objectContaining({ topK: 5 }),
+      expect.objectContaining({ agentId: 'agent-1', topK: 5 }),
     );
   });
 
@@ -529,6 +589,135 @@ describe('/mem0 command — not active', () => {
 });
 
 describe('/mem0 command — active subcommands', () => {
+  it('previews exact duplicates without deleting them', async () => {
+    const provider = mockActiveProvider();
+    mockDedupProviderMemories.mockResolvedValue({
+      total: 3,
+      duplicatesFound: 1,
+      duplicatesRemoved: 0,
+      deleteFailures: 0,
+    });
+    vi.mocked(loadPiSettings).mockReturnValue({
+      mode: 'platform',
+      apiKey: 'm0-test',
+      agentId: 'agent-1',
+    });
+    const { pi, handlers, commands } = createMockPi();
+    mem0Extension(pi as never);
+    const ctx = createMockCtx();
+    await handlers.session_start![0]!({}, ctx);
+
+    await commands.mem0!.handler('dedup', ctx);
+
+    expect(mockDedupProviderMemories).toHaveBeenCalledWith(provider, {
+      userId: expect.any(String),
+      agentId: 'agent-1',
+      dryRun: true,
+    });
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      'Mem0 dedup preview: scanned 3 memories and found 1 exact duplicate. Run /mem0 dedup --apply to remove it.',
+      'info',
+    );
+  });
+
+  it('does not suggest apply when the dedup preview is clean', async () => {
+    mockActiveProvider();
+    mockDedupProviderMemories.mockResolvedValue({
+      total: 3,
+      duplicatesFound: 0,
+      duplicatesRemoved: 0,
+      deleteFailures: 0,
+    });
+    const { pi, handlers, commands } = createMockPi();
+    mem0Extension(pi as never);
+    const ctx = createMockCtx();
+    await handlers.session_start![0]!({}, ctx);
+
+    await commands.mem0!.handler('dedup', ctx);
+
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      'Mem0 dedup preview: scanned 3 memories; no exact duplicates found.',
+      'info',
+    );
+  });
+
+  it('applies exact dedup only after interactive confirmation', async () => {
+    const provider = mockActiveProvider();
+    mockDedupProviderMemories.mockImplementation(
+      async (
+        _provider: unknown,
+        opts: { approve: (preview: Record<string, number>) => Promise<boolean> },
+      ) => {
+        const approved = await opts.approve({
+          total: 3,
+          duplicatesFound: 1,
+          duplicatesRemoved: 0,
+          deleteFailures: 0,
+        });
+        expect(approved).toBe(true);
+        return {
+          total: 3,
+          duplicatesFound: 1,
+          duplicatesRemoved: 1,
+          deleteFailures: 0,
+        };
+      },
+    );
+    const { pi, handlers, commands } = createMockPi();
+    mem0Extension(pi as never);
+    const confirm = vi.fn().mockResolvedValue(true);
+    const ctx = {
+      ...createMockCtx(),
+      hasUI: true,
+      ui: { ...createMockCtx().ui, confirm },
+    };
+    await handlers.session_start![0]!({}, ctx);
+
+    await commands.mem0!.handler('dedup --apply', ctx);
+
+    expect(confirm).toHaveBeenCalledWith(
+      'Remove exact duplicate memories?',
+      '1 duplicate will be permanently deleted.',
+    );
+    expect(mockDedupProviderMemories).toHaveBeenCalledTimes(1);
+    expect(mockDedupProviderMemories).toHaveBeenCalledWith(provider, {
+      userId: expect.any(String),
+      dryRun: false,
+      approve: expect.any(Function),
+    });
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      'Mem0 dedup complete: removed 1 duplicate; 0 deletions failed.',
+      'info',
+    );
+  });
+
+  it('uses the configured agentId for add, search, and profile', async () => {
+    const provider = mockActiveProvider();
+    vi.mocked(loadPiSettings).mockReturnValue({
+      mode: 'platform',
+      apiKey: 'm0-test',
+      agentId: 'agent-1',
+    });
+    const { pi, handlers, commands } = createMockPi();
+    mem0Extension(pi as never);
+    const ctx = createMockCtx();
+    await handlers.session_start![0]!({}, ctx);
+
+    await commands.mem0!.handler('search preferences', ctx);
+    await commands.mem0!.handler('profile', ctx);
+    await commands.mem0!.handler('add remember this', ctx);
+
+    expect(provider.search).toHaveBeenCalledWith(
+      'preferences',
+      expect.objectContaining({ agentId: 'agent-1' }),
+    );
+    expect(provider.getAll).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'agent-1' }));
+    expect(provider.add).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ agentId: 'agent-1' }),
+    );
+  });
+
   it('add stores text with credentials redacted', async () => {
     const provider = mockActiveProvider();
     const { pi, handlers, commands } = createMockPi();

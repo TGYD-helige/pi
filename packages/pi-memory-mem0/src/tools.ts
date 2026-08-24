@@ -34,6 +34,7 @@ export interface Mem0MemoryToolOptions {
    */
   getProvider: () => Mem0Provider | undefined;
   getUserId: () => string;
+  getAgentId: () => string | undefined;
   /**
    * The runtime keeps tool registrations for the life of the extension — a
    * tool registered in a hybrid/active session is still callable after a
@@ -126,20 +127,22 @@ export function createMem0MemoryTool(opts: Mem0MemoryToolOptions): ToolDefinitio
       const provider = opts.getProvider();
       if (!provider) return errorResult('Mem0 is not active.');
       const userId = opts.getUserId();
+      const agentId = opts.getAgentId();
+      const scope = { userId, ...(agentId ? { agentId } : {}) };
 
       try {
         switch (action) {
           case 'search': {
             const query = redactMemoryText(String(params.query ?? '').trim());
             if (!query) return errorResult('query is required for the search action.');
-            const results = await provider.search(query, { userId, topK, ...signalOpts });
+            const results = await provider.search(query, { ...scope, topK, ...signalOpts });
             return formatBlock(`## Memories matching "${query}"`, results);
           }
           case 'add': {
             const content = redactMemoryText(String(params.content ?? '').trim());
             if (!content) return errorResult('content is required for the add action.');
             const result = await provider.add([{ role: 'user', content }], {
-              userId,
+              ...scope,
               ...signalOpts,
             });
             const created = result?.results ?? [];
@@ -149,7 +152,7 @@ export function createMem0MemoryTool(opts: Mem0MemoryToolOptions): ToolDefinitio
             return formatBlock(`Saved ${created.length} memories:`, created);
           }
           case 'get_all': {
-            const results = await provider.getAll({ userId, ...signalOpts });
+            const results = await provider.getAll({ ...scope, ...signalOpts });
             return formatBlock(`## All memories (${results.length})`, results);
           }
           case 'delete': {

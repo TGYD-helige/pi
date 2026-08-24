@@ -26,6 +26,7 @@
 
 import { isProjectTrusted, loadPiSettings } from '@amaster.ai/pi-shared/settings';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { dedupProviderMemories } from './dedup.js';
 import { Prefetch } from './prefetch.js';
 import { formatRecalledMemory, redactMemoryText, scopeMemoryUserId } from './privacy.js';
 import {
@@ -63,6 +64,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
   let provider: Mem0Provider | undefined;
   let prefetch: Prefetch | undefined;
   let userId = '';
+  let agentId: string | undefined;
   let activeMode = '';
   let activeMemoryMode = '';
   let activeToolEnabled = false;
@@ -78,6 +80,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
     const epoch = ++sessionEpoch;
     provider = undefined;
     prefetch = undefined;
+    agentId = undefined;
     activeToolEnabled = false;
     const config = loadConfig(ctx.cwd, isProjectTrusted(ctx));
     try {
@@ -88,6 +91,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
         return;
       }
       const resolvedUserId = resolveUserId(config.userId, config.userIdScope);
+      const resolvedAgentId = config.agentId?.trim() || undefined;
       const newProvider = await createMem0Provider({
         config,
         resolveProvider: async (providerName: string) => {
@@ -118,10 +122,14 @@ export default function mem0Extension(pi: ExtensionAPI): void {
       if (epoch !== sessionEpoch) return;
       provider = newProvider;
       userId = scopeMemoryUserId(resolvedUserId, ctx.cwd, config.userIdScope);
+      agentId = resolvedAgentId;
       activeMode = mode;
       activeMemoryMode = memoryMode;
       if (memoryMode !== 'active') {
-        prefetch = new Prefetch(provider, userId, { topK: config.topK ?? 5 });
+        prefetch = new Prefetch(provider, userId, {
+          ...(agentId ? { agentId } : {}),
+          topK: config.topK ?? 5,
+        });
       }
       if (memoryMode !== 'passive') {
         activeToolEnabled = true;
@@ -129,6 +137,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
           createMem0MemoryTool({
             getProvider: () => provider,
             getUserId: () => userId,
+            getAgentId: () => agentId,
             isEnabled: () => activeToolEnabled,
             topK: config.topK ?? 5,
           }),
@@ -170,6 +179,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
     lastUserText = '';
     const activeProvider = provider;
     const activeUserId = userId;
+    const activeAgentId = agentId;
     pendingWrite = pendingWrite
       .catch(() => {})
       .then(async () => {
@@ -178,7 +188,10 @@ export default function mem0Extension(pi: ExtensionAPI): void {
             { role: 'user', content: redactMemoryText(userText) },
             { role: 'assistant', content: redactMemoryText(text) },
           ],
-          { userId: activeUserId },
+          {
+            userId: activeUserId,
+            ...(activeAgentId ? { agentId: activeAgentId } : {}),
+          },
         );
         // Extraction legitimately finds nothing in many turns, but a totally
         // silent no-op makes a broken pipeline indistinguishable from a quiet
@@ -214,6 +227,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
     await pendingWrite;
     provider = undefined;
     prefetch = undefined;
+    agentId = undefined;
     activeToolEnabled = false;
     lastUserText = '';
     pendingWrite = Promise.resolve();
@@ -221,12 +235,13 @@ export default function mem0Extension(pi: ExtensionAPI): void {
 
   pi.registerCommand('mem0', {
     description:
-      'Mem0 memory commands. Subcommands: status, search <query>, profile, add <text>, delete <id>.',
+      'Mem0 memory commands. Subcommands: status, search <query>, profile, add <text>, dedup [--apply], delete <id>.',
     handler: async (args, ctx) => {
       if (!provider) {
         ctx.ui.notify('Mem0 is not active.', 'warning');
         return;
       }
+      const scope = { userId, ...(agentId ? { agentId } : {}) };
 
       const parts = args.trim().split(/\s+/).filter(Boolean);
       const subcommand = parts[0]?.toLowerCase() ?? 'status';
@@ -243,7 +258,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
             break;
           }
           const results = await provider.search(rest, {
-            userId,
+            ...scope,
             topK: 10,
             ...(ctx.signal ? { signal: ctx.signal } : {}),
           });
@@ -257,7 +272,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
         }
         case 'profile': {
           const all = await provider.getAll({
-            userId,
+            ...scope,
             ...(ctx.signal ? { signal: ctx.signal } : {}),
           });
           if (all.length === 0) {
@@ -274,7 +289,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
             break;
           }
           const result = await provider.add([{ role: 'user', content: redactMemoryText(rest) }], {
-            userId,
+            ...scope,
             ...(ctx.signal ? { signal: ctx.signal } : {}),
           });
           const created = result?.results ?? [];
@@ -284,6 +299,68 @@ export default function mem0Extension(pi: ExtensionAPI): void {
             const lines = created.map((m, i) => `${i + 1}. ${formatRecalledMemory(m.memory)}`);
             ctx.ui.notify(`Mem0 saved ${created.length}:\n${lines.join('\n')}`, 'info');
           }
+          break;
+        }
+        case 'dedup': {
+          if (rest && rest !== '--apply') {
+            ctx.ui.notify('Usage: /mem0 dedup [--apply]', 'warning');
+            break;
+          }
+          if (rest !== '--apply') {
+            const preview = await dedupProviderMemories(provider, {
+              ...scope,
+              dryRun: true,
+              ...(ctx.signal ? { signal: ctx.signal } : {}),
+            });
+            if (preview.duplicatesFound === 0) {
+              ctx.ui.notify(
+                `Mem0 dedup preview: scanned ${preview.total} memories; no exact duplicates found.`,
+                'info',
+              );
+              break;
+            }
+            const noun = preview.duplicatesFound === 1 ? 'duplicate' : 'duplicates';
+            const pronoun = preview.duplicatesFound === 1 ? 'it' : 'them';
+            ctx.ui.notify(
+              `Mem0 dedup preview: scanned ${preview.total} memories and found ${preview.duplicatesFound} exact ${noun}. Run /mem0 dedup --apply to remove ${pronoun}.`,
+              'info',
+            );
+            break;
+          }
+          if (!ctx.hasUI) {
+            ctx.ui.notify('Mem0 dedup --apply requires an interactive confirmation.', 'warning');
+            break;
+          }
+          let preview: Awaited<ReturnType<typeof dedupProviderMemories>> | undefined;
+          let approved = false;
+          const result = await dedupProviderMemories(provider, {
+            ...scope,
+            dryRun: false,
+            ...(ctx.signal ? { signal: ctx.signal } : {}),
+            approve: async (candidate) => {
+              preview = candidate;
+              if (candidate.duplicatesFound === 0) return false;
+              const noun = candidate.duplicatesFound === 1 ? 'duplicate' : 'duplicates';
+              approved = await ctx.ui.confirm(
+                'Remove exact duplicate memories?',
+                `${candidate.duplicatesFound} ${noun} will be permanently deleted.`,
+              );
+              return approved;
+            },
+          });
+          if (preview?.duplicatesFound === 0) {
+            ctx.ui.notify('Mem0 dedup complete: no exact duplicates found.', 'info');
+            break;
+          }
+          if (!approved) {
+            ctx.ui.notify('Mem0 dedup cancelled.', 'info');
+            break;
+          }
+          const removedNoun = result.duplicatesRemoved === 1 ? 'duplicate' : 'duplicates';
+          ctx.ui.notify(
+            `Mem0 dedup complete: removed ${result.duplicatesRemoved} ${removedNoun}; ${result.deleteFailures} deletions failed.`,
+            result.deleteFailures ? 'warning' : 'info',
+          );
           break;
         }
         case 'delete': {
@@ -297,7 +374,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
         }
         default:
           ctx.ui.notify(
-            'Unknown subcommand. Available: status, search, profile, add, delete.',
+            'Unknown subcommand. Available: status, search, profile, add, dedup, delete.',
             'warning',
           );
       }

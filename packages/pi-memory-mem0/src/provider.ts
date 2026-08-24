@@ -27,18 +27,26 @@ import type {
 // Provider Interface
 // ---------------------------------------------------------------------------
 
+type Mem0ScopeOptions = { userId: string; agentId?: string; signal?: AbortSignal };
+type Mem0AddOptions = Mem0ScopeOptions & { infer?: boolean; observedAt?: Date | string };
+type Mem0SearchOptions = Mem0ScopeOptions & { topK?: number };
+const DEDUP_PAGE_SIZE = 200;
+const MAX_DEDUP_ITEMS_PER_SCOPE = 10_000;
+const MAX_DEDUP_PAGES = MAX_DEDUP_ITEMS_PER_SCOPE / DEDUP_PAGE_SIZE;
+const SELF_HOSTED_DEDUP_LIMIT = 1000;
+
 export interface Mem0Provider {
   add(
     messages: Array<{ role: string; content: string }>,
-    opts: { userId: string; infer?: boolean; observedAt?: Date | string; signal?: AbortSignal },
+    opts: Mem0AddOptions,
   ): Promise<AddResult | null>;
 
-  search(
-    query: string,
-    opts: { userId: string; topK?: number; signal?: AbortSignal },
-  ): Promise<MemoryItem[]>;
+  search(query: string, opts: Mem0SearchOptions): Promise<MemoryItem[]>;
 
-  getAll(opts: { userId: string; signal?: AbortSignal }): Promise<MemoryItem[]>;
+  getAll(opts: Mem0ScopeOptions): Promise<MemoryItem[]>;
+
+  /** Enumerate maintenance groups that may be deduplicated independently. */
+  getDedupGroups?(opts: Mem0ScopeOptions): Promise<MemoryItem[][]>;
 
   delete(memoryId: string, opts?: { signal?: AbortSignal }): Promise<void>;
 }
@@ -199,10 +207,13 @@ class PlatformProvider implements Mem0Provider {
 
   async add(
     messages: Array<{ role: string; content: string }>,
-    opts: { userId: string; infer?: boolean; observedAt?: Date | string; signal?: AbortSignal },
+    opts: Mem0AddOptions,
   ): Promise<AddResult | null> {
     await waitWithCancellation(this.ensureClient(), opts.signal);
-    const addOpts: Record<string, unknown> = { userId: opts.userId };
+    const addOpts: Record<string, unknown> = {
+      userId: opts.userId,
+      ...(opts.agentId ? { agentId: opts.agentId } : {}),
+    };
     if (opts.infer === false) addOpts.infer = false;
     // Platform mem0 exposes a `timestamp` field on add(); pass observedAt
     // through as an ISO string. (OSS mode honors observedAt via prompt
@@ -218,14 +229,12 @@ class PlatformProvider implements Mem0Provider {
     return result as AddResult;
   }
 
-  async search(
-    query: string,
-    opts: { userId: string; topK?: number; signal?: AbortSignal },
-  ): Promise<MemoryItem[]> {
+  async search(query: string, opts: Mem0SearchOptions): Promise<MemoryItem[]> {
     await waitWithCancellation(this.ensureClient(), opts.signal);
-    const searchOpts: Record<string, unknown> = {
-      filters: { user_id: opts.userId },
-    };
+    const filters = opts.agentId
+      ? { OR: [{ user_id: opts.userId }, { agent_id: opts.agentId }] }
+      : { user_id: opts.userId };
+    const searchOpts: Record<string, unknown> = { filters };
     if (opts.topK) searchOpts.topK = opts.topK;
     const results = await waitWithCancellation(
       this.runWithSignal(opts.signal, () => this.client!.search(query, searchOpts)),
@@ -234,17 +243,77 @@ class PlatformProvider implements Mem0Provider {
     return normalizeResults(results);
   }
 
-  async getAll(opts: { userId: string; signal?: AbortSignal }): Promise<MemoryItem[]> {
+  async getAll(opts: Mem0ScopeOptions): Promise<MemoryItem[]> {
     await waitWithCancellation(this.ensureClient(), opts.signal);
+    const filters = opts.agentId
+      ? { OR: [{ user_id: opts.userId }, { agent_id: opts.agentId }] }
+      : { user_id: opts.userId };
     const results = await waitWithCancellation(
       this.runWithSignal(opts.signal, () =>
         this.client!.getAll({
-          filters: { user_id: opts.userId },
+          filters,
         }),
       ),
       opts.signal,
     );
     return normalizeResults(results);
+  }
+
+  async getDedupGroups(opts: Mem0ScopeOptions): Promise<MemoryItem[][]> {
+    const groups = [await this.getAllPages({ user_id: opts.userId }, opts.signal)];
+    if (opts.agentId) {
+      groups.push(await this.getAllPages({ agent_id: opts.agentId }, opts.signal));
+    }
+    return groups;
+  }
+
+  private async getAllPages(
+    filters: Record<string, string>,
+    signal?: AbortSignal,
+  ): Promise<MemoryItem[]> {
+    await waitWithCancellation(this.ensureClient(), signal);
+    const memories: MemoryItem[] = [];
+    let expectedCount: number | undefined;
+    for (let page = 1; ; page++) {
+      const result = await waitWithCancellation(
+        this.runWithSignal(signal, () =>
+          this.client!.getAll({ filters, page, pageSize: DEDUP_PAGE_SIZE }),
+        ),
+        signal,
+      );
+      const count = result && typeof result === 'object' && 'count' in result ? result.count : null;
+      if (typeof count !== 'number' || !Number.isInteger(count) || count < 0) {
+        throw new Error('Mem0 dedup pagination returned an invalid count.');
+      }
+      if (count > MAX_DEDUP_ITEMS_PER_SCOPE) {
+        throw new Error(`Mem0 dedup scope exceeds ${MAX_DEDUP_ITEMS_PER_SCOPE} memories.`);
+      }
+      if (expectedCount !== undefined && count !== expectedCount) {
+        throw new Error('Mem0 dedup pagination count changed between pages.');
+      }
+      expectedCount = count;
+      const pageMemories = normalizeResults(result);
+      memories.push(...pageMemories);
+      if (memories.length > MAX_DEDUP_ITEMS_PER_SCOPE) {
+        throw new Error(`Mem0 dedup scope exceeds ${MAX_DEDUP_ITEMS_PER_SCOPE} memories.`);
+      }
+      const hasNext = Boolean(
+        result && typeof result === 'object' && 'next' in result && result.next,
+      );
+      if (!hasNext) {
+        if (expectedCount !== undefined && memories.length !== expectedCount) {
+          throw new Error('Mem0 dedup pagination count does not match the returned memories.');
+        }
+        break;
+      }
+      if (pageMemories.length === 0) {
+        throw new Error('Mem0 dedup pagination returned an empty page with a next link.');
+      }
+      if (page >= MAX_DEDUP_PAGES) {
+        throw new Error(`Mem0 dedup pagination exceeds ${MAX_DEDUP_PAGES} pages.`);
+      }
+    }
+    return memories;
   }
 
   async delete(memoryId: string, opts?: { signal?: AbortSignal }): Promise<void> {
@@ -310,7 +379,7 @@ class SelfHostedProvider implements Mem0Provider {
 
   async add(
     messages: Array<{ role: string; content: string }>,
-    opts: { userId: string; infer?: boolean; observedAt?: Date | string; signal?: AbortSignal },
+    opts: Mem0AddOptions,
   ): Promise<AddResult | null> {
     return (await this.request(
       '/memories',
@@ -319,6 +388,7 @@ class SelfHostedProvider implements Mem0Provider {
         body: JSON.stringify({
           messages,
           user_id: opts.userId,
+          ...(opts.agentId ? { agent_id: opts.agentId } : {}),
           ...(opts.infer === undefined ? {} : { infer: opts.infer }),
         }),
       },
@@ -326,17 +396,17 @@ class SelfHostedProvider implements Mem0Provider {
     )) as AddResult;
   }
 
-  async search(
-    query: string,
-    opts: { userId: string; topK?: number; signal?: AbortSignal },
-  ): Promise<MemoryItem[]> {
+  async search(query: string, opts: Mem0SearchOptions): Promise<MemoryItem[]> {
     const result = await this.request(
       '/search',
       {
         method: 'POST',
         body: JSON.stringify({
           query,
-          filters: { user_id: opts.userId },
+          filters: {
+            user_id: opts.userId,
+            ...(opts.agentId ? { agent_id: opts.agentId } : {}),
+          },
           ...(opts.topK === undefined ? {} : { top_k: opts.topK }),
         }),
       },
@@ -345,13 +415,25 @@ class SelfHostedProvider implements Mem0Provider {
     return normalizeResults(result);
   }
 
-  async getAll(opts: { userId: string; signal?: AbortSignal }): Promise<MemoryItem[]> {
-    const result = await this.request(
-      `/memories?user_id=${encodeURIComponent(opts.userId)}`,
-      { method: 'GET' },
-      opts.signal,
-    );
+  async getAll(opts: Mem0ScopeOptions): Promise<MemoryItem[]> {
+    const params = new URLSearchParams({ user_id: opts.userId });
+    if (opts.agentId) params.set('agent_id', opts.agentId);
+    const result = await this.request(`/memories?${params}`, { method: 'GET' }, opts.signal);
     return normalizeResults(result);
+  }
+
+  async getDedupGroups(opts: Mem0ScopeOptions): Promise<MemoryItem[][]> {
+    const params = new URLSearchParams({ user_id: opts.userId });
+    if (opts.agentId) params.set('agent_id', opts.agentId);
+    params.set('top_k', String(SELF_HOSTED_DEDUP_LIMIT));
+    const result = await this.request(`/memories?${params}`, { method: 'GET' }, opts.signal);
+    const memories = normalizeResults(result);
+    if (memories.length >= SELF_HOSTED_DEDUP_LIMIT) {
+      throw new Error(
+        `Mem0 self-hosted dedup scope may exceed ${SELF_HOSTED_DEDUP_LIMIT - 1} memories.`,
+      );
+    }
+    return [memories];
   }
 
   async delete(memoryId: string, opts?: { signal?: AbortSignal }): Promise<void> {
@@ -562,10 +644,13 @@ class OSSProvider implements Mem0Provider {
 
   async add(
     messages: Array<{ role: string; content: string }>,
-    opts: { userId: string; infer?: boolean; observedAt?: Date | string; signal?: AbortSignal },
+    opts: Mem0AddOptions,
   ): Promise<AddResult | null> {
     await waitWithCancellation(this.ensureMemory(), opts.signal);
-    const addOpts: Record<string, unknown> = { userId: opts.userId };
+    const addOpts: Record<string, unknown> = {
+      userId: opts.userId,
+      ...(opts.agentId ? { agentId: opts.agentId } : {}),
+    };
     if (opts.infer === false) addOpts.infer = false;
 
     // Serialize add() when observedAt is used. mem0 never exposes the
@@ -620,13 +705,13 @@ class OSSProvider implements Mem0Provider {
     }
   }
 
-  async search(
-    query: string,
-    opts: { userId: string; topK?: number; signal?: AbortSignal },
-  ): Promise<MemoryItem[]> {
+  async search(query: string, opts: Mem0SearchOptions): Promise<MemoryItem[]> {
     await waitWithCancellation(this.ensureMemory(), opts.signal);
     const searchOpts: Record<string, unknown> = {
-      filters: { user_id: opts.userId },
+      filters: {
+        user_id: opts.userId,
+        ...(opts.agentId ? { agent_id: opts.agentId } : {}),
+      },
     };
     if (opts.topK) searchOpts.topK = opts.topK;
     const results = await waitWithCancellation(
@@ -637,16 +722,39 @@ class OSSProvider implements Mem0Provider {
     return normalizeResults(results);
   }
 
-  async getAll(opts: { userId: string; signal?: AbortSignal }): Promise<MemoryItem[]> {
+  async getAll(opts: Mem0ScopeOptions): Promise<MemoryItem[]> {
     await waitWithCancellation(this.ensureMemory(), opts.signal);
     const results = await waitWithCancellation(
       // biome-ignore lint/suspicious/noExplicitAny: mem0ai/oss lacks type definitions
       (this.memory as any).getAll({
-        filters: { user_id: opts.userId },
+        filters: {
+          user_id: opts.userId,
+          ...(opts.agentId ? { agent_id: opts.agentId } : {}),
+        },
       }),
       opts.signal,
     );
     return normalizeResults(results);
+  }
+
+  async getDedupGroups(opts: Mem0ScopeOptions): Promise<MemoryItem[][]> {
+    await waitWithCancellation(this.ensureMemory(), opts.signal);
+    const results = await waitWithCancellation(
+      // biome-ignore lint/suspicious/noExplicitAny: mem0ai/oss lacks type definitions
+      (this.memory as any).getAll({
+        filters: {
+          user_id: opts.userId,
+          ...(opts.agentId ? { agent_id: opts.agentId } : {}),
+        },
+        topK: MAX_DEDUP_ITEMS_PER_SCOPE + 1,
+      }),
+      opts.signal,
+    );
+    const memories = normalizeResults(results);
+    if (memories.length > MAX_DEDUP_ITEMS_PER_SCOPE) {
+      throw new Error(`Mem0 dedup scope exceeds ${MAX_DEDUP_ITEMS_PER_SCOPE} memories.`);
+    }
+    return [memories];
   }
 
   async delete(memoryId: string, opts?: { signal?: AbortSignal }): Promise<void> {

@@ -40,6 +40,8 @@ export interface Mem0ExtensionConfig {
   // ── Shared ──────────────────────────────────────────────────────────────
   /** User identifier for memory scoping. Supports ${USER}. */
   userId?: string;
+  /** Optional agent identifier for memory scoping. Supports environment interpolation. */
+  agentId?: string;
   /** Append a cwd hash (default) or use userId verbatim. */
   userIdScope?: MemoryUserIdScope;
   /** Max recalled memories per turn. Default: 5 */
