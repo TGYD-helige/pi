@@ -60,10 +60,7 @@ User ←→ Agent ←→ Mem0 OSS Memory
 
 ## Quick Start
 
-Store configuration in user/agent settings or in a trusted project's
-`.pi/settings.json`. Project settings are ignored when trust is declined and do
-not expand `${ENV_VAR}`; the environment-backed examples below therefore belong
-in user or agent settings.
+Store configuration in user/agent settings or in a trusted project's `.pi/settings.json`. Project settings are ignored when trust is declined and do not expand `${ENV_VAR}`; the environment-backed examples below therefore belong in user or agent settings.
 
 ### Platform Mode
 
@@ -255,9 +252,7 @@ mem0_memory(action="get_all")                    # List every stored memory
 mem0_memory(action="delete", memory_id="...")    # Remove a memory by id
 ```
 
-Stored content is credential-redacted first; results are returned with the same
-`[UNTRUSTED MEMORY DATA]` wrapping as passive recall, including the memory ids
-needed for `delete`.
+Stored content is credential-redacted first; results are returned with the same `[UNTRUSTED MEMORY DATA]` wrapping as passive recall, including the memory ids needed for `delete`.
 
 ## Commands
 
@@ -276,9 +271,7 @@ needed for `delete`.
 - `pi-memory`: Curated memory — the agent explicitly manages memories via the `memory_add` / `memory_replace` / `memory_remove` / `memory_read` tools, local `.md` files, hard char limits
 - `pi-memory-mem0`: Semantic memory — automatic extraction/storage and semantic recall (passive), plus the `mem0_memory` tool for agent-driven semantic lookup (active); no capacity limits
 
-They do not interfere with each other, and their tool names do not collide. `pi-memory-mem0` injects recalled text as a
-custom user-channel message (never the system prompt); `pi-memory` injects its own
-context separately.
+They do not interfere with each other, and their tool names do not collide. `pi-memory-mem0` injects recalled text as a custom user-channel message (never the system prompt); `pi-memory` injects its own context separately.
 
 ## Dedup API
 

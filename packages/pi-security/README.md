@@ -65,8 +65,7 @@ Profiles can be defined in three places. Higher-priority sources override lower-
 3. **User**: `~/.pi/agent/policy/<name>.json`
 4. **Settings**: under `pi-security.security.profiles` in `pi.json`
 
-Each JSON file defines a single profile; the filename (without `.json`) is the profile name.
-Project policies are ignored when project trust is declined or unavailable.
+Each JSON file defines a single profile; the filename (without `.json`) is the profile name. Project policies are ignored when project trust is declined or unavailable.
 
 ### JSON config examples
 

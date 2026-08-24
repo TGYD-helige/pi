@@ -64,9 +64,7 @@ pi.extensions → session_start → initialize store → register tools
 
 Configure via the `pi-memory` settings key:
 
-Project `.pi/settings.json` values are loaded only after project trust is
-accepted and are not environment-interpolated. User and agent settings retain
-environment interpolation.
+Project `.pi/settings.json` values are loaded only after project trust is accepted and are not environment-interpolated. User and agent settings retain environment interpolation.
 
 ```json
 {

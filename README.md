@@ -4,11 +4,7 @@
 
 Shared TypeScript packages for Pi runtime applications.
 
-This repository contains the open-source runtime contracts, adapters, and
-orchestration helpers that are consumed by Pi Agent and related applications.
-The packages are intentionally small and composable: host applications provide
-HTTP routing, authentication, model runtime setup, deployment configuration, and
-product-specific UI.
+This repository contains the open-source runtime contracts, adapters, and orchestration helpers that are consumed by Pi Agent and related applications. The packages are intentionally small and composable: host applications provide HTTP routing, authentication, model runtime setup, deployment configuration, and product-specific UI.
 
 ## Packages
 
@@ -33,9 +29,7 @@ product-specific UI.
 | Extension | `@amaster.ai/pi-wecom` | WeCom workspace integration through wecom-cli, including contacts, messages, meetings, schedules, todos, docs, and smart sheets. |
 | Extension | `@amaster.ai/pi-dingtalk` | DingTalk workspace integration through dws CLI, including calendar, docs, chat, todos, sheets, AI tables, approvals, mail, wiki, and meeting minutes. |
 
-Core packages provide types and persistence used by every host application.
-Extension packages each register Pi runtime extensions via their `./extension`
-subpath entry point and are loaded on demand.
+Core packages provide types and persistence used by every host application. Extension packages each register Pi runtime extensions via their `./extension` subpath entry point and are loaded on demand.
 
 Every package is ESM-only and published under the `@amaster.ai` npm scope.
 
@@ -108,9 +102,7 @@ pnpm test
 pnpm --filter @amaster.ai/pi-storage prisma:generate
 ```
 
-`@amaster.ai/pi-storage` includes a Prisma schema at
-`packages/storage/prisma/schema.prisma`. The root `build` and `typecheck`
-scripts generate the Prisma client before compiling project references.
+`@amaster.ai/pi-storage` includes a Prisma schema at `packages/storage/prisma/schema.prisma`. The root `build` and `typecheck` scripts generate the Prisma client before compiling project references.
 
 ## Consuming Packages
 
@@ -120,8 +112,7 @@ Install only the packages your application needs:
 pnpm add @amaster.ai/pi-shared @amaster.ai/pi-storage
 ```
 
-Most packages expose a root entry point. Some packages also expose focused
-subpath entry points:
+Most packages expose a root entry point. Some packages also expose focused subpath entry points:
 
 ```ts
 import { createRuntimeStorage } from "@amaster.ai/pi-storage";
@@ -132,9 +123,7 @@ import { createOtelExporter } from "@amaster.ai/pi-telemetry/otel";
 import memoryExtension from "@amaster.ai/pi-memory/extension";
 ```
 
-Extension packages register themselves through their `./extension` subpath
-entry point. Host applications import these and pass them to the Pi runtime
-during setup.
+Extension packages register themselves through their `./extension` subpath entry point. Host applications import these and pass them to the Pi runtime during setup.
 
 See each package README for package-specific examples and public API notes.
 

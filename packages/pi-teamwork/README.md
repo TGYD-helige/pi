@@ -12,18 +12,11 @@ Pi extension for team collaboration and project management. Provides LLM-callabl
 
 ### Auto-Install
 
-Runtime auto-installation is disabled because mutable package-manager taps and
-download scripts cannot provide the pinned artifact verification required in a
-credential-bearing agent process. Install a pinned Multica release separately
-and put the verified binary on `$PATH`, or configure `multica.binary`.
+Runtime auto-installation is disabled because mutable package-manager taps and download scripts cannot provide the pinned artifact verification required in a credential-bearing agent process. Install a pinned Multica release separately and put the verified binary on `$PATH`, or configure `multica.binary`.
 
-The deprecated `autoInstall: true` setting no longer executes an installer. It
-only reports a clear error when the binary is missing.
+The deprecated `autoInstall: true` setting no longer executes an installer. It only reports a clear error when the binary is missing.
 
-Configuration may live in user/agent settings or in a trusted project's
-`.pi/settings.json`. Project settings are ignored when trust is declined and do
-not expand `${ENV_VAR}`; keep environment-backed credentials in user or agent
-settings.
+Configuration may live in user/agent settings or in a trusted project's `.pi/settings.json`. Project settings are ignored when trust is declined and do not expand `${ENV_VAR}`; keep environment-backed credentials in user or agent settings.
 
 ### Mode 1 — Self-hosted server
 

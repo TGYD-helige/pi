@@ -20,8 +20,7 @@ Goal state is session-scoped and held in memory (no cross-session persistence), 
 
 ## Pi lifecycle (how the engine hooks in)
 
-The goal engine is driven by Pi's lifecycle events. For one `pi -p '<prompt>'`
-run (non-interactive), events fire in this order:
+The goal engine is driven by Pi's lifecycle events. For one `pi -p '<prompt>'` run (non-interactive), events fire in this order:
 
 ```
 session_start                                 ← session-level, once
@@ -62,13 +61,9 @@ Events pi-goal uses:
 | `agent_end` | If a goal is active, run the engine on `event.messages`: evaluate → mark achieved/impossible or `sendUserMessage` to continue | Engine core. `event.messages` is the full conversation, so no separate buffering is needed |
 | `session_shutdown` | Clear the goal | Cleanup |
 
-The interactive `/goal` command (no argument) derives from the session's own
-history, read via `ctx.sessionManager` — not a buffer this extension maintains.
+The interactive `/goal` command (no argument) derives from the session's own history, read via `ctx.sessionManager` — not a buffer this extension maintains.
 
-Note on derivation timing: a condition can only be derived once there is
-conversation to derive from. `session_start` is too early (no transcript
-yet); `before_agent_start` is the first point that carries the user's prompt
-for the turn, so auto-derivation keys off it rather than firing at startup.
+Note on derivation timing: a condition can only be derived once there is conversation to derive from. `session_start` is too early (no transcript yet); `before_agent_start` is the first point that carries the user's prompt for the turn, so auto-derivation keys off it rather than firing at startup.
 
 ## Usage
 
@@ -79,8 +74,7 @@ for the turn, so auto-derivation keys off it rather than firing at startup.
 /goal clear         Clear the active goal (also: stop, off, reset, none, cancel).
 ```
 
-The slash command is for interactive (TUI) use; print mode can't dispatch it.
-For the CLI / non-interactive runs, use the `--goal` flag instead:
+The slash command is for interactive (TUI) use; print mode can't dispatch it. For the CLI / non-interactive runs, use the `--goal` flag instead:
 
 ```
 pi --goal '<condition>' -p '<prompt>'   Set an explicit goal, then run the prompt.
@@ -89,9 +83,7 @@ pi --goal '' -p '<prompt>'              Derive the goal from the prompt (at befo
 
 ## Configuration
 
-Settings key: `pi-goal` (in `~/.pi/agent/settings.json`, agent dir, or project `.pi/settings.json`).
-Project settings are loaded only after project trust is accepted. Environment-variable
-interpolation is available in user and agent settings, but not in project settings.
+Settings key: `pi-goal` (in `~/.pi/agent/settings.json`, agent dir, or project `.pi/settings.json`). Project settings are loaded only after project trust is accepted. Environment-variable interpolation is available in user and agent settings, but not in project settings.
 
 ```json
 {

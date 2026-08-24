@@ -40,12 +40,7 @@ Langfuse traces include the configured `serviceName` as both a tag and metadata 
 
 ## Configuration
 
-Configuration is read from the `"pi-telemetry"` section of, in increasing
-priority, `~/.pi/agent/settings.json`, the configured agent directory's
-`settings.json` (for example `$PI_CODING_AGENT_DIR/settings.json`), and a trusted
-project's `.pi/settings.json`. Project settings are ignored when project trust
-is declined. Environment variables are expanded only in user and agent-directory
-settings.
+Configuration is read from the `"pi-telemetry"` section of, in increasing priority, `~/.pi/agent/settings.json`, the configured agent directory's `settings.json` (for example `$PI_CODING_AGENT_DIR/settings.json`), and a trusted project's `.pi/settings.json`. Project settings are ignored when project trust is declined. Environment variables are expanded only in user and agent-directory settings.
 
 ```json
 {

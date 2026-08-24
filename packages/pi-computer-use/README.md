@@ -2,10 +2,7 @@
 
 ![pi-computer-use preview](https://raw.githubusercontent.com/TGYD-helige/pi/master/packages/pi-computer-use/preview.png)
 
-Cross-platform computer-use tools for Pi desktop automation. The extension
-exposes a native MCP tool surface with a `computer_use_` prefix. The bundled
-runtime comes from the official
-[Cua Driver Rust 0.9.0 release](https://github.com/trycua/cua/releases/tag/cua-driver-rs-v0.9.0).
+Cross-platform computer-use tools for Pi desktop automation. The extension exposes a native MCP tool surface with a `computer_use_` prefix. The bundled runtime comes from the official [Cua Driver Rust 0.9.0 release](https://github.com/trycua/cua/releases/tag/cua-driver-rs-v0.9.0).
 
 ## What it provides
 
@@ -20,9 +17,7 @@ runtime comes from the official
 - Bounded text and structured results before they enter Pi's context
 - Optional secondary vision analysis through a configured Pi model
 
-`get_window_state` is the primary perception tool. Cua Driver 0.9 returns the
-accessibility tree, structured elements with `element_token`, and a screenshot in
-one response. The standalone `screenshot` tool no longer exists.
+`get_window_state` is the primary perception tool. Cua Driver 0.9 returns the accessibility tree, structured elements with `element_token`, and a screenshot in one response. The standalone `screenshot` tool no longer exists.
 
 ## Install
 
@@ -30,15 +25,13 @@ one response. The standalone `screenshot` tool no longer exists.
 bun add @amaster.ai/pi-computer-use
 ```
 
-The package bundles signed/precompiled driver assets. No separate Cua Driver
-installation is required.
+The package bundles signed/precompiled driver assets. No separate Cua Driver installation is required.
 
 ## Configuration
 
 Configure `.pi/settings.json` or `~/.pi/agent/settings.json`:
 
-Project settings are loaded only after project trust is accepted. `${ENV_VAR}`
-interpolation is supported in user and agent settings, but not in project settings.
+Project settings are loaded only after project trust is accepted. `${ENV_VAR}` interpolation is supported in user and agent settings, but not in project settings.
 
 ```json
 {
@@ -59,8 +52,7 @@ interpolation is supported in user and agent settings, but not in project settin
 | `confirmDangerousActions` | `boolean` | `true` | Confirm high-risk tools such as `kill_app` and `replay_trajectory`; recording always requires confirmation |
 | `visionModel` | `{ provider, model }` | — | Register `computer_use_analyze_screenshot` |
 
-In non-interactive modes, confirmation-required tools return an error unless the
-corresponding confirmation setting is explicitly disabled.
+In non-interactive modes, confirmation-required tools return an error unless the corresponding confirmation setting is explicitly disabled.
 
 ### Optional vision model
 
@@ -75,29 +67,13 @@ corresponding confirmation setting is explicitly disabled.
 }
 ```
 
-`computer_use_analyze_screenshot` requires both `pid` and `window_id`. It calls
-`get_window_state`, reuses the returned image, and invokes the configured model.
-Use it only when the primary model cannot resolve visual ambiguity.
+`computer_use_analyze_screenshot` requires both `pid` and `window_id`. It calls `get_window_state`, reuses the returned image, and invokes the configured model. Use it only when the primary model cannot resolve visual ambiguity.
 
 ## Runtime and permissions
 
-On macOS, `session_start` registers the generated 0.9.0 manifest without
-starting the driver. The signed app and MCP proxy start lazily on the first
-computer-use tool call, which requests any missing permissions through
-`check_permissions({ prompt: true })`. Existing grants do not raise another
-system dialog. The requested tool still runs and reports its own capability or
-permission error. Linux and Windows keep eager startup: they discover the exact
-live `tools/list` surface and call
-`check_permissions({ prompt: false })`. If discovery fails, the extension
-registers `computer_use_connect` (and `/computer-use-connect`) so a later retry
-can install the exact live platform contract without advertising another OS's
-schemas.
+On macOS, `session_start` registers the generated 0.9.0 manifest without starting the driver. The signed app and MCP proxy start lazily on the first computer-use tool call, which requests any missing permissions through `check_permissions({ prompt: true })`. Existing grants do not raise another system dialog. The requested tool still runs and reports its own capability or permission error. Linux and Windows keep eager startup: they discover the exact live `tools/list` surface and call `check_permissions({ prompt: false })`. If discovery fails, the extension registers `computer_use_connect` (and `/computer-use-connect`) so a later retry can install the exact live platform contract without advertising another OS's schemas.
 
-Driver startup, reconnect, and the first macOS permission probe are session-owned.
-Cancelling a tool stops only that caller's wait or MCP request; session shutdown
-aborts the shared work. macOS and Linux also use a transient pipe-backed lease to
-stop the owned daemon after an abrupt host exit; no persistent service or system
-scheduler is installed.
+Driver startup, reconnect, and the first macOS permission probe are session-owned. Cancelling a tool stops only that caller's wait or MCP request; session shutdown aborts the shared work. macOS and Linux also use a transient pipe-backed lease to stop the owned daemon after an abrupt host exit; no persistent service or system scheduler is installed.
 
 - **Bundled macOS:** launches the signed `CuaDriver.app` through LaunchServices,
   so Accessibility and Screen Recording grants belong to `com.trycua.driver`.
@@ -126,10 +102,8 @@ scheduler is installed.
 5. Re-run `computer_use_get_window_state` and verify the change
 6. `computer_use_end_session`
 
-Linux and Windows tool descriptions and schemas come from the exact live driver.
-macOS uses the generated manifest for the bundled driver release.
+Linux and Windows tool descriptions and schemas come from the exact live driver. macOS uses the generated manifest for the bundled driver release.
 
 ## License
 
-Apache-2.0 for this package. Bundled Cua Driver assets retain their upstream
-license and release metadata.
+Apache-2.0 for this package. Bundled Cua Driver assets retain their upstream license and release metadata.

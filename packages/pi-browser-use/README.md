@@ -41,8 +41,7 @@ bun add @amaster.ai/pi-browser-use
 
 Configure via `.pi/settings.json` (project-level) or `~/.pi/agent/settings.json` (user-level) under the `"pi-browser-use"` key:
 
-Project settings are loaded only after project trust is accepted. `${ENV_VAR}`
-interpolation is supported in user and agent settings, but not in project settings.
+Project settings are loaded only after project trust is accepted. `${ENV_VAR}` interpolation is supported in user and agent settings, but not in project settings.
 
 ```json
 {
