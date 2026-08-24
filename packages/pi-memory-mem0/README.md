@@ -102,6 +102,7 @@ Calls the OSS REST server directly. The server uses `/memories` and `/search`, n
     "baseUrl": "${MEM0_BASE_URL}",
     "apiKey": "${MEM0_API_KEY}",
     "userId": "${PAPERCLIP_COMPANY_ID}",
+    "agentId": "${PAPERCLIP_AGENT_ID}",
     "userIdScope": "exact"
   }
 }
@@ -188,6 +189,7 @@ The configured vector store always owns persistence. To request an intentionally
 | `baseUrl` | string | `https://api.mem0.ai` | Platform override; required for self-hosted mode |
 | `requestTimeoutMs` | number | `30000` | Self-hosted request timeout |
 | `userId` | string | `$USER` or `"default-user"` | Memory scoping identifier |
+| `agentId` | string | — | Optional agent scope. Supports environment interpolation |
 | `userIdScope` | `"project"` \| `"exact"` | `"project"` | Append the cwd hash or use `userId` verbatim |
 | `topK` | number | `5` | Max recalled memories per turn |
 | `useRegistryKeys` | boolean | `true` | Whether OSS mode resolves keys from pi registry |
@@ -197,6 +199,8 @@ The configured vector store always owns persistence. To request an intentionally
 | `oss.historyStore` | object | SQLite at `<home>/memories/mem0-history.db` | Custom mem0 history store config |
 | `oss.historyDbPath` | string | `<home>/memories/mem0-history.db` | Shortcut for SQLite history DB path |
 | `oss.disableHistory` | boolean | `false` | Disable mem0 operation history |
+
+Embedded and self-hosted modes read and write the exact `userId` + `agentId` scope; Platform mode reads the user and agent entity scopes with OR because Mem0 Platform stores them as separate records. Existing memories with a null `agent_id` are not backfilled automatically.
 
 ## Data Storage
 

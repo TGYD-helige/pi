@@ -6,7 +6,7 @@ describe('self-hosted Mem0 provider', () => {
     vi.unstubAllGlobals();
   });
 
-  it('uses the OSS REST protocol and exact user filter', async () => {
+  it('uses exact user and agent filters for search', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ results: [{ id: '1', memory: 'likes cats', score: 0.9 }] }), {
         status: 200,
@@ -22,9 +22,9 @@ describe('self-hosted Mem0 provider', () => {
       },
     });
 
-    await expect(provider.search('pets', { userId: 'company-1', topK: 7 })).resolves.toEqual([
-      { id: '1', memory: 'likes cats', score: 0.9 },
-    ]);
+    await expect(
+      provider.search('pets', { userId: 'company-1', agentId: 'agent-1', topK: 7 }),
+    ).resolves.toEqual([{ id: '1', memory: 'likes cats', score: 0.9 }]);
     expect(fetchMock).toHaveBeenCalledWith(
       'https://mem0.example.com/search',
       expect.objectContaining({
@@ -35,7 +35,7 @@ describe('self-hosted Mem0 provider', () => {
         },
         body: JSON.stringify({
           query: 'pets',
-          filters: { user_id: 'company-1' },
+          filters: { user_id: 'company-1', agent_id: 'agent-1' },
           top_k: 7,
         }),
       }),
@@ -91,9 +91,10 @@ describe('self-hosted Mem0 provider', () => {
 
     await provider.add([{ role: 'user', content: 'dark mode' }], {
       userId: 'company/1',
+      agentId: 'agent/1',
       infer: false,
     });
-    await expect(provider.getAll({ userId: 'company/1' })).resolves.toEqual([
+    await expect(provider.getAll({ userId: 'company/1', agentId: 'agent/1' })).resolves.toEqual([
       { id: '1', memory: 'dark mode' },
     ]);
     await provider.delete('memory/1');
@@ -101,10 +102,11 @@ describe('self-hosted Mem0 provider', () => {
     expect(JSON.parse(fetchMock.mock.calls[0]![1].body)).toEqual({
       messages: [{ role: 'user', content: 'dark mode' }],
       user_id: 'company/1',
+      agent_id: 'agent/1',
       infer: false,
     });
     expect(fetchMock.mock.calls[1]![0]).toBe(
-      'https://mem0.example.com/memories?user_id=company%2F1',
+      'https://mem0.example.com/memories?user_id=company%2F1&agent_id=agent%2F1',
     );
     expect(fetchMock.mock.calls[2]![0]).toBe('https://mem0.example.com/memories/memory%2F1');
   });

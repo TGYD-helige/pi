@@ -242,6 +242,54 @@ describe('memoryMode gating', () => {
     expect(result.content[0]!.text).toContain('disabled');
   });
 
+  it('uses the current session agentId from an earlier tool registration', async () => {
+    const providerA = {
+      add: vi.fn(),
+      search: vi.fn().mockResolvedValue([]),
+      getAll: vi.fn(),
+      delete: vi.fn(),
+    };
+    const providerB = {
+      add: vi.fn(),
+      search: vi.fn().mockResolvedValue([]),
+      getAll: vi.fn(),
+      delete: vi.fn(),
+    };
+    const { pi, handlers, tools } = createMockPi();
+    mem0Extension(pi as never);
+    const ctx = createMockCtx();
+
+    vi.mocked(loadPiSettings).mockReturnValue({
+      mode: 'platform',
+      apiKey: 'm0-test',
+      memoryMode: 'hybrid',
+      agentId: 'agent-a',
+    });
+    mockCreateMem0Provider.mockResolvedValueOnce(providerA);
+    await handlers.session_start![0]!({}, ctx);
+    const earlierTool = tools[0]! as unknown as {
+      execute: (...args: unknown[]) => Promise<unknown>;
+    };
+    await handlers.session_shutdown![0]!({}, ctx);
+
+    vi.mocked(loadPiSettings).mockReturnValue({
+      mode: 'platform',
+      apiKey: 'm0-test',
+      memoryMode: 'hybrid',
+      agentId: 'agent-b',
+    });
+    mockCreateMem0Provider.mockResolvedValueOnce(providerB);
+    await handlers.session_start![0]!({}, ctx);
+
+    await earlierTool.execute('call-1', { action: 'search', query: 'x' }, undefined, undefined, {});
+
+    expect(providerA.search).not.toHaveBeenCalled();
+    expect(providerB.search).toHaveBeenCalledWith(
+      'x',
+      expect.objectContaining({ agentId: 'agent-b' }),
+    );
+  });
+
   it('ignores a superseded session_start that resolves after a newer session', async () => {
     // Session A (hybrid, slow embedded-style init) is still awaiting its
     // provider when session B (passive, fast init) starts and completes.
@@ -431,6 +479,11 @@ describe('passive recall', () => {
 describe('passive capture', () => {
   it('stores the turn with credentials redacted', async () => {
     const provider = mockActiveProvider();
+    vi.mocked(loadPiSettings).mockReturnValue({
+      mode: 'platform',
+      apiKey: 'm0-test',
+      agentId: ' agent-1 ',
+    });
     const { pi, handlers } = createMockPi();
     mem0Extension(pi as never);
     const ctx = createMockCtx();
@@ -451,7 +504,7 @@ describe('passive capture', () => {
     expect(provider.add).toHaveBeenCalledTimes(1);
     const [messages, opts] = provider.add.mock.calls[0] as [
       Array<{ role: string; content: string }>,
-      { userId: string },
+      { userId: string; agentId?: string },
     ];
     expect(messages[0]!.role).toBe('user');
     expect(messages[1]!.role).toBe('assistant');
@@ -459,11 +512,12 @@ describe('passive capture', () => {
     expect(JSON.stringify(messages)).not.toContain('abcdefghijklmnop');
     expect(JSON.stringify(messages)).toContain('[REDACTED]');
     expect(opts.userId).toMatch(/:project:/);
+    expect(opts.agentId).toBe('agent-1');
 
     // The prefetch search query is redacted before it reaches the backend too.
     expect(provider.search).toHaveBeenCalledWith(
       'use api_key=[REDACTED] for the API',
-      expect.objectContaining({ topK: 5 }),
+      expect.objectContaining({ agentId: 'agent-1', topK: 5 }),
     );
   });
 
@@ -529,6 +583,33 @@ describe('/mem0 command — not active', () => {
 });
 
 describe('/mem0 command — active subcommands', () => {
+  it('uses the configured agentId for add, search, and profile', async () => {
+    const provider = mockActiveProvider();
+    vi.mocked(loadPiSettings).mockReturnValue({
+      mode: 'platform',
+      apiKey: 'm0-test',
+      agentId: 'agent-1',
+    });
+    const { pi, handlers, commands } = createMockPi();
+    mem0Extension(pi as never);
+    const ctx = createMockCtx();
+    await handlers.session_start![0]!({}, ctx);
+
+    await commands.mem0!.handler('search preferences', ctx);
+    await commands.mem0!.handler('profile', ctx);
+    await commands.mem0!.handler('add remember this', ctx);
+
+    expect(provider.search).toHaveBeenCalledWith(
+      'preferences',
+      expect.objectContaining({ agentId: 'agent-1' }),
+    );
+    expect(provider.getAll).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'agent-1' }));
+    expect(provider.add).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ agentId: 'agent-1' }),
+    );
+  });
+
   it('add stores text with credentials redacted', async () => {
     const provider = mockActiveProvider();
     const { pi, handlers, commands } = createMockPi();

@@ -16,6 +16,7 @@ function createTool(provider: Mem0Provider | undefined, enabled = true) {
   return createMem0MemoryTool({
     getProvider: () => provider,
     getUserId: () => 'user:project:abc',
+    getAgentId: () => undefined,
     isEnabled: () => enabled,
     topK: 5,
   });

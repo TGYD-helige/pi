@@ -16,19 +16,25 @@ const MAX_BLOCK_LINES = 50;
 export class Prefetch {
   private readonly provider: Mem0Provider;
   private readonly userId: string;
+  private readonly agentId: string | undefined;
   private readonly topK: number;
   private pending: Promise<MemoryItem[]> | null = null;
 
-  constructor(provider: Mem0Provider, userId: string, opts: { topK: number }) {
+  constructor(provider: Mem0Provider, userId: string, opts: { agentId?: string; topK: number }) {
     this.provider = provider;
     this.userId = userId;
+    this.agentId = opts.agentId;
     this.topK = opts.topK;
   }
 
   /** Phase 1: kick off a background search (called on input with user text). */
   queue(query: string): void {
     if (!query.trim()) return;
-    const search = this.provider.search(query, { userId: this.userId, topK: this.topK });
+    const search = this.provider.search(query, {
+      userId: this.userId,
+      ...(this.agentId ? { agentId: this.agentId } : {}),
+      topK: this.topK,
+    });
     // A replaced or never-consumed search must not surface as an unhandled rejection.
     search.catch(() => {});
     this.pending = search;

@@ -27,18 +27,19 @@ import type {
 // Provider Interface
 // ---------------------------------------------------------------------------
 
+type Mem0ScopeOptions = { userId: string; agentId?: string; signal?: AbortSignal };
+type Mem0AddOptions = Mem0ScopeOptions & { infer?: boolean; observedAt?: Date | string };
+type Mem0SearchOptions = Mem0ScopeOptions & { topK?: number };
+
 export interface Mem0Provider {
   add(
     messages: Array<{ role: string; content: string }>,
-    opts: { userId: string; infer?: boolean; observedAt?: Date | string; signal?: AbortSignal },
+    opts: Mem0AddOptions,
   ): Promise<AddResult | null>;
 
-  search(
-    query: string,
-    opts: { userId: string; topK?: number; signal?: AbortSignal },
-  ): Promise<MemoryItem[]>;
+  search(query: string, opts: Mem0SearchOptions): Promise<MemoryItem[]>;
 
-  getAll(opts: { userId: string; signal?: AbortSignal }): Promise<MemoryItem[]>;
+  getAll(opts: Mem0ScopeOptions): Promise<MemoryItem[]>;
 
   delete(memoryId: string, opts?: { signal?: AbortSignal }): Promise<void>;
 }
@@ -199,10 +200,13 @@ class PlatformProvider implements Mem0Provider {
 
   async add(
     messages: Array<{ role: string; content: string }>,
-    opts: { userId: string; infer?: boolean; observedAt?: Date | string; signal?: AbortSignal },
+    opts: Mem0AddOptions,
   ): Promise<AddResult | null> {
     await waitWithCancellation(this.ensureClient(), opts.signal);
-    const addOpts: Record<string, unknown> = { userId: opts.userId };
+    const addOpts: Record<string, unknown> = {
+      userId: opts.userId,
+      ...(opts.agentId ? { agentId: opts.agentId } : {}),
+    };
     if (opts.infer === false) addOpts.infer = false;
     // Platform mem0 exposes a `timestamp` field on add(); pass observedAt
     // through as an ISO string. (OSS mode honors observedAt via prompt
@@ -218,14 +222,12 @@ class PlatformProvider implements Mem0Provider {
     return result as AddResult;
   }
 
-  async search(
-    query: string,
-    opts: { userId: string; topK?: number; signal?: AbortSignal },
-  ): Promise<MemoryItem[]> {
+  async search(query: string, opts: Mem0SearchOptions): Promise<MemoryItem[]> {
     await waitWithCancellation(this.ensureClient(), opts.signal);
-    const searchOpts: Record<string, unknown> = {
-      filters: { user_id: opts.userId },
-    };
+    const filters = opts.agentId
+      ? { OR: [{ user_id: opts.userId }, { agent_id: opts.agentId }] }
+      : { user_id: opts.userId };
+    const searchOpts: Record<string, unknown> = { filters };
     if (opts.topK) searchOpts.topK = opts.topK;
     const results = await waitWithCancellation(
       this.runWithSignal(opts.signal, () => this.client!.search(query, searchOpts)),
@@ -234,12 +236,15 @@ class PlatformProvider implements Mem0Provider {
     return normalizeResults(results);
   }
 
-  async getAll(opts: { userId: string; signal?: AbortSignal }): Promise<MemoryItem[]> {
+  async getAll(opts: Mem0ScopeOptions): Promise<MemoryItem[]> {
     await waitWithCancellation(this.ensureClient(), opts.signal);
+    const filters = opts.agentId
+      ? { OR: [{ user_id: opts.userId }, { agent_id: opts.agentId }] }
+      : { user_id: opts.userId };
     const results = await waitWithCancellation(
       this.runWithSignal(opts.signal, () =>
         this.client!.getAll({
-          filters: { user_id: opts.userId },
+          filters,
         }),
       ),
       opts.signal,
@@ -310,7 +315,7 @@ class SelfHostedProvider implements Mem0Provider {
 
   async add(
     messages: Array<{ role: string; content: string }>,
-    opts: { userId: string; infer?: boolean; observedAt?: Date | string; signal?: AbortSignal },
+    opts: Mem0AddOptions,
   ): Promise<AddResult | null> {
     return (await this.request(
       '/memories',
@@ -319,6 +324,7 @@ class SelfHostedProvider implements Mem0Provider {
         body: JSON.stringify({
           messages,
           user_id: opts.userId,
+          ...(opts.agentId ? { agent_id: opts.agentId } : {}),
           ...(opts.infer === undefined ? {} : { infer: opts.infer }),
         }),
       },
@@ -326,17 +332,17 @@ class SelfHostedProvider implements Mem0Provider {
     )) as AddResult;
   }
 
-  async search(
-    query: string,
-    opts: { userId: string; topK?: number; signal?: AbortSignal },
-  ): Promise<MemoryItem[]> {
+  async search(query: string, opts: Mem0SearchOptions): Promise<MemoryItem[]> {
     const result = await this.request(
       '/search',
       {
         method: 'POST',
         body: JSON.stringify({
           query,
-          filters: { user_id: opts.userId },
+          filters: {
+            user_id: opts.userId,
+            ...(opts.agentId ? { agent_id: opts.agentId } : {}),
+          },
           ...(opts.topK === undefined ? {} : { top_k: opts.topK }),
         }),
       },
@@ -345,12 +351,10 @@ class SelfHostedProvider implements Mem0Provider {
     return normalizeResults(result);
   }
 
-  async getAll(opts: { userId: string; signal?: AbortSignal }): Promise<MemoryItem[]> {
-    const result = await this.request(
-      `/memories?user_id=${encodeURIComponent(opts.userId)}`,
-      { method: 'GET' },
-      opts.signal,
-    );
+  async getAll(opts: Mem0ScopeOptions): Promise<MemoryItem[]> {
+    const params = new URLSearchParams({ user_id: opts.userId });
+    if (opts.agentId) params.set('agent_id', opts.agentId);
+    const result = await this.request(`/memories?${params}`, { method: 'GET' }, opts.signal);
     return normalizeResults(result);
   }
 
@@ -562,10 +566,13 @@ class OSSProvider implements Mem0Provider {
 
   async add(
     messages: Array<{ role: string; content: string }>,
-    opts: { userId: string; infer?: boolean; observedAt?: Date | string; signal?: AbortSignal },
+    opts: Mem0AddOptions,
   ): Promise<AddResult | null> {
     await waitWithCancellation(this.ensureMemory(), opts.signal);
-    const addOpts: Record<string, unknown> = { userId: opts.userId };
+    const addOpts: Record<string, unknown> = {
+      userId: opts.userId,
+      ...(opts.agentId ? { agentId: opts.agentId } : {}),
+    };
     if (opts.infer === false) addOpts.infer = false;
 
     // Serialize add() when observedAt is used. mem0 never exposes the
@@ -620,13 +627,13 @@ class OSSProvider implements Mem0Provider {
     }
   }
 
-  async search(
-    query: string,
-    opts: { userId: string; topK?: number; signal?: AbortSignal },
-  ): Promise<MemoryItem[]> {
+  async search(query: string, opts: Mem0SearchOptions): Promise<MemoryItem[]> {
     await waitWithCancellation(this.ensureMemory(), opts.signal);
     const searchOpts: Record<string, unknown> = {
-      filters: { user_id: opts.userId },
+      filters: {
+        user_id: opts.userId,
+        ...(opts.agentId ? { agent_id: opts.agentId } : {}),
+      },
     };
     if (opts.topK) searchOpts.topK = opts.topK;
     const results = await waitWithCancellation(
@@ -637,12 +644,15 @@ class OSSProvider implements Mem0Provider {
     return normalizeResults(results);
   }
 
-  async getAll(opts: { userId: string; signal?: AbortSignal }): Promise<MemoryItem[]> {
+  async getAll(opts: Mem0ScopeOptions): Promise<MemoryItem[]> {
     await waitWithCancellation(this.ensureMemory(), opts.signal);
     const results = await waitWithCancellation(
       // biome-ignore lint/suspicious/noExplicitAny: mem0ai/oss lacks type definitions
       (this.memory as any).getAll({
-        filters: { user_id: opts.userId },
+        filters: {
+          user_id: opts.userId,
+          ...(opts.agentId ? { agent_id: opts.agentId } : {}),
+        },
       }),
       opts.signal,
     );

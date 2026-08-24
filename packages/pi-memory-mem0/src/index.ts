@@ -63,6 +63,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
   let provider: Mem0Provider | undefined;
   let prefetch: Prefetch | undefined;
   let userId = '';
+  let agentId: string | undefined;
   let activeMode = '';
   let activeMemoryMode = '';
   let activeToolEnabled = false;
@@ -78,6 +79,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
     const epoch = ++sessionEpoch;
     provider = undefined;
     prefetch = undefined;
+    agentId = undefined;
     activeToolEnabled = false;
     const config = loadConfig(ctx.cwd, isProjectTrusted(ctx));
     try {
@@ -88,6 +90,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
         return;
       }
       const resolvedUserId = resolveUserId(config.userId, config.userIdScope);
+      const resolvedAgentId = config.agentId?.trim() || undefined;
       const newProvider = await createMem0Provider({
         config,
         resolveProvider: async (providerName: string) => {
@@ -118,10 +121,14 @@ export default function mem0Extension(pi: ExtensionAPI): void {
       if (epoch !== sessionEpoch) return;
       provider = newProvider;
       userId = scopeMemoryUserId(resolvedUserId, ctx.cwd, config.userIdScope);
+      agentId = resolvedAgentId;
       activeMode = mode;
       activeMemoryMode = memoryMode;
       if (memoryMode !== 'active') {
-        prefetch = new Prefetch(provider, userId, { topK: config.topK ?? 5 });
+        prefetch = new Prefetch(provider, userId, {
+          ...(agentId ? { agentId } : {}),
+          topK: config.topK ?? 5,
+        });
       }
       if (memoryMode !== 'passive') {
         activeToolEnabled = true;
@@ -129,6 +136,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
           createMem0MemoryTool({
             getProvider: () => provider,
             getUserId: () => userId,
+            getAgentId: () => agentId,
             isEnabled: () => activeToolEnabled,
             topK: config.topK ?? 5,
           }),
@@ -170,6 +178,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
     lastUserText = '';
     const activeProvider = provider;
     const activeUserId = userId;
+    const activeAgentId = agentId;
     pendingWrite = pendingWrite
       .catch(() => {})
       .then(async () => {
@@ -178,7 +187,10 @@ export default function mem0Extension(pi: ExtensionAPI): void {
             { role: 'user', content: redactMemoryText(userText) },
             { role: 'assistant', content: redactMemoryText(text) },
           ],
-          { userId: activeUserId },
+          {
+            userId: activeUserId,
+            ...(activeAgentId ? { agentId: activeAgentId } : {}),
+          },
         );
         // Extraction legitimately finds nothing in many turns, but a totally
         // silent no-op makes a broken pipeline indistinguishable from a quiet
@@ -214,6 +226,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
     await pendingWrite;
     provider = undefined;
     prefetch = undefined;
+    agentId = undefined;
     activeToolEnabled = false;
     lastUserText = '';
     pendingWrite = Promise.resolve();
@@ -227,6 +240,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
         ctx.ui.notify('Mem0 is not active.', 'warning');
         return;
       }
+      const scope = { userId, ...(agentId ? { agentId } : {}) };
 
       const parts = args.trim().split(/\s+/).filter(Boolean);
       const subcommand = parts[0]?.toLowerCase() ?? 'status';
@@ -243,7 +257,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
             break;
           }
           const results = await provider.search(rest, {
-            userId,
+            ...scope,
             topK: 10,
             ...(ctx.signal ? { signal: ctx.signal } : {}),
           });
@@ -257,7 +271,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
         }
         case 'profile': {
           const all = await provider.getAll({
-            userId,
+            ...scope,
             ...(ctx.signal ? { signal: ctx.signal } : {}),
           });
           if (all.length === 0) {
@@ -274,7 +288,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
             break;
           }
           const result = await provider.add([{ role: 'user', content: redactMemoryText(rest) }], {
-            userId,
+            ...scope,
             ...(ctx.signal ? { signal: ctx.signal } : {}),
           });
           const created = result?.results ?? [];
