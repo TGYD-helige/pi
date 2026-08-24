@@ -78,9 +78,7 @@ Custom DashScope base URLs must point to an OpenAI-compatible Responses API root
 
 Settings key: `pi-web-access`
 
-Project `.pi/settings.json` values are loaded only after project trust is
-accepted and are not environment-interpolated. User and agent settings retain
-environment interpolation.
+Project `.pi/settings.json` values are loaded only after project trust is accepted and are not environment-interpolated. User and agent settings retain environment interpolation.
 
 ```json
 {

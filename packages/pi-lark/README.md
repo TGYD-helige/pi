@@ -14,9 +14,7 @@ Pi extension for [Lark/Feishu](https://www.feishu.cn/) workspace — calendar, d
 
 Add to `~/.pi/agent/settings.json` or a trusted project's `.pi/settings.json`:
 
-Project settings are loaded only after project trust is accepted. For
-environment-backed credentials, use user or agent settings because project
-settings do not expand `${ENV_VAR}`.
+Project settings are loaded only after project trust is accepted. For environment-backed credentials, use user or agent settings because project settings do not expand `${ENV_VAR}`.
 
 ```json
 {

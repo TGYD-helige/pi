@@ -4,21 +4,16 @@
 
 Scheduled task domain types, execution scheduler, and pi agent extension.
 
-The package owns schedule parsing, task lifecycle state, process-local timers,
-runner callbacks, scheduler hooks, and LLM-callable tools for autonomous task
-management.
+The package owns schedule parsing, task lifecycle state, process-local timers, runner callbacks, scheduler hooks, and LLM-callable tools for autonomous task management.
 
 ## Storage
 
-The package ships with a built-in file-based storage (default, zero external
-dependencies):
+The package ships with a built-in file-based storage (default, zero external dependencies):
 
 - `JsonScheduledTaskStore` — persists tasks to a JSON file with atomic writes
 - `FileSchedulerLock` — PID-based file lock for single-owner execution
 
-For database-backed storage (multi-tenant, Prisma), use
-`@amaster.ai/pi-storage/scheduler` which implements the same interfaces with
-`DbScheduledTaskStore` and `RedisSchedulerLock`.
+For database-backed storage (multi-tenant, Prisma), use `@amaster.ai/pi-storage/scheduler` which implements the same interfaces with `DbScheduledTaskStore` and `RedisSchedulerLock`.
 
 ### Default (file storage)
 
@@ -42,8 +37,7 @@ await scheduler.start();
 
 ### Custom storage
 
-Implement `ScheduledTaskStore` and `SchedulerLock` interfaces for any backend
-(database, Redis, etc.):
+Implement `ScheduledTaskStore` and `SchedulerLock` interfaces for any backend (database, Redis, etc.):
 
 ```ts
 import { PersistentTaskScheduler } from "@amaster.ai/pi-task-scheduler";
@@ -61,16 +55,11 @@ await scheduler.start();
 
 ## Integration Modes
 
-The package provides two integration paths depending on who controls the
-scheduler lifecycle.
+The package provides two integration paths depending on who controls the scheduler lifecycle.
 
 ### Mode 1: Extension auto-discovery (standalone / CLI)
 
-When installed as an npm dependency with the `pi.extensions` field in
-`package.json`, the runtime auto-discovers and loads the extension. The
-extension creates its own `PersistentTaskScheduler` with file-based storage
-(`JsonScheduledTaskStore` + `FileSchedulerLock`) — fully self-contained, no
-external infrastructure needed.
+When installed as an npm dependency with the `pi.extensions` field in `package.json`, the runtime auto-discovers and loads the extension. The extension creates its own `PersistentTaskScheduler` with file-based storage (`JsonScheduledTaskStore` + `FileSchedulerLock`) — fully self-contained, no external infrastructure needed.
 
 ```
 pi.extensions → session_start → creates file-based scheduler → registers tools + commands
@@ -86,9 +75,7 @@ pi.extensions → session_start → creates file-based scheduler → registers t
 
 Configuration via settings key `pi-scheduler`:
 
-Project `.pi/settings.json` values are loaded only after project trust is
-accepted and are not environment-interpolated. User and agent settings retain
-environment interpolation.
+Project `.pi/settings.json` values are loaded only after project trust is accepted and are not environment-interpolated. User and agent settings retain environment interpolation.
 
 ```json
 {
@@ -100,9 +87,7 @@ environment interpolation.
 
 ### Mode 2: Dependency import (host-controlled)
 
-When the host process owns the scheduler instance (e.g. backed by a database),
-it bypasses the extension and registers tools directly using
-`createSchedulerTools`:
+When the host process owns the scheduler instance (e.g. backed by a database), it bypasses the extension and registers tools directly using `createSchedulerTools`:
 
 ```ts
 import { createSchedulerTools } from "@amaster.ai/pi-task-scheduler/tools";
@@ -119,8 +104,7 @@ await scheduler.start();
 const tools = createSchedulerTools(scheduler);
 ```
 
-In this mode the auto-discovered extension should be filtered out to prevent
-double tool registration. The host manages scheduler start/stop independently.
+In this mode the auto-discovered extension should be filtered out to prevent double tool registration. The host manages scheduler start/stop independently.
 
 ```
 host creates scheduler → createSchedulerTools(scheduler) → tools injected into runtime
@@ -145,10 +129,8 @@ Tasks support three schedule types:
 - `once`: ISO timestamps or relative values such as `+5m`
 - `cron`: 5/6-field cron expressions and a small RRULE subset
 
-The scheduler does not catch up missed runs after process downtime. When it
-starts, it registers future timers for enabled tasks.
+The scheduler does not catch up missed runs after process downtime. When it starts, it registers future timers for enabled tasks.
 
 ## Hooks
 
-Hooks are best-effort observability callbacks. If a hook throws, the scheduler
-swallows the error and keeps task state authoritative.
+Hooks are best-effort observability callbacks. If a hook throws, the scheduler swallows the error and keeps task state authoritative.

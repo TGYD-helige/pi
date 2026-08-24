@@ -43,9 +43,7 @@ Settings are read by `pi-shared`'s `loadPiSettings`, which merges three files (l
 2. `$PI_AGENT_HOME/settings.json` (agent dir, if `PI_AGENT_HOME` is set)
 3. `<cwd>/.pi/settings.json` (trusted project)
 
-Project settings are ignored when project trust is declined. `${ENV_VAR}`
-interpolation is supported in global and agent settings only, so keep
-environment-backed credentials out of project settings.
+Project settings are ignored when project trust is declined. `${ENV_VAR}` interpolation is supported in global and agent settings only, so keep environment-backed credentials out of project settings.
 
 All settings live under the `pi-image-gen` key. The minimum viable config sets `defaultModel`:
 
@@ -104,10 +102,16 @@ That's it. From the agent: `image_generate({ prompt: "a cyberpunk cat" })`.
 | `providers`       | Per-built-in-provider override. Set `apiKey`, `baseUrl`, or `headers` to point at a proxy or non-standard env var. |
 | `customProviders` | User-defined providers — see below.                                                      |
 
-In global and agent settings, `apiKey`, `baseUrl`, and `headers` values support
-`$VAR` and `${VAR}` environment interpolation. Fallbacks require the braced
-form (for example, `${FOO:-default}`); `$FOO:-default` is not supported.
-Project settings keep all of these placeholders literal.
+In global and agent settings, `apiKey`, `baseUrl`, and `headers` values support `$VAR` and `${VAR}` environment interpolation. Fallbacks require the braced form (for example, `${FOO:-default}`); `$FOO:-default` is not supported. Project settings keep all of these placeholders literal.
+
+## DeepSeek Harness
+
+| Host | `pi-image-gen` status |
+| --- | --- |
+| [pi2dsh](https://github.com/weijiafu14/pi2dsh) | `@amaster.ai/pi-image-gen@0.1.8` was exercised against a controlled OpenAI-compatible endpoint ([scope and evidence](https://github.com/TGYD-helige/pi/issues/159)). |
+| [dsh-pi-host](https://github.com/TGYD-helige/dsh-pi) | Loads `@amaster.ai/pi-image-gen` when selected in its `extensions` list. |
+
+Follow the selected host's documentation for installation and current compatibility details.
 
 ## Built-in setup walkthrough
 

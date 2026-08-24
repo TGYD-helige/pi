@@ -333,6 +333,7 @@ Rules:
 ## Implementation Discipline
 
 - Before modifying code, look at the same package's existing patterns first — match style, naming, structure
+- Do not hard-wrap Markdown prose. Keep each paragraph on one source line; use line breaks only for Markdown structure such as lists, tables, blockquotes, and code fences.
 - Do not make cross-package refactors unrelated to the current task
 - New config keys must have corresponding test coverage
 - Modifying a public tool or command's parameters requires updating its tests and README; update `promptSnippet` and `promptGuidelines` when the user-facing behavior or tool selection guidance changes
@@ -345,8 +346,8 @@ Rules:
 
 - Before drafting or opening an issue, read and follow `.github/ISSUE_TEMPLATE/issue.md`; before drafting or opening a pull request, read and follow `.github/pull_request_template.md`.
 - Keep titles specific and bodies brief. Include only the context needed to understand, reproduce, or review the work; link to longer logs or design notes instead of copying them.
-- Issues should identify the affected package and version, then state the problem, expected outcome, and minimal reproduction or context. Omit sections that do not apply.
-- Pull requests should list affected packages and their current and resulting versions, summarize what changed and why, list verification performed, and reference the related issue when one exists. Mark unchanged versions explicitly; write `none` only when the change is not package-scoped. Use the conventional-commit title prefix recognized by `.github/workflows/labeler.yml`.
+- Issues should identify the affected package and version when applicable, then state the problem or motivation, expected outcome, and minimal reproduction or context. Omit sections that do not apply.
+- Pull requests should summarize what changed and why, list verification performed, and reference the related issue when one exists. Use the conventional-commit title prefix recognized by `.github/workflows/labeler.yml`.
 
 ---
 

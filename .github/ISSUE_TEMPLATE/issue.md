@@ -6,13 +6,18 @@ labels: ''
 assignees: ''
 ---
 
+## Self-check
+
+- [ ] I searched open and closed issues for duplicates.
+- [ ] This issue covers one focused problem or request.
+
 ## Package and version
 
-<!-- Example: @amaster.ai/pi-memory@1.2.3 -->
+<!-- Required for bugs when applicable. Example: @amaster.ai/pi-memory@1.2.3. Omit for repository-wide changes. -->
 
-## Problem
+## Problem or motivation
 
-<!-- What is wrong or missing? -->
+<!-- What is wrong or missing, and why does it matter? -->
 
 ## Expected outcome
 
@@ -20,4 +25,4 @@ assignees: ''
 
 ## Reproduction or context
 
-<!-- Minimal steps, examples, or links needed to act. Omit if not applicable. -->
+<!-- For bugs: minimal steps and actual behavior. For proposals: examples, screenshots, or links. Omit if not applicable. -->

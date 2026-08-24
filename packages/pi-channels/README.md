@@ -4,24 +4,13 @@
 
 Pi extension for native messaging channels.
 
-This package follows the same extension shape as the open-source `@e9n/pi-channels`
-package: it registers a `notify` tool, channel events, route aliases, and an optional
-chat bridge that turns incoming channel messages into pi prompts.
+This package follows the same extension shape as the open-source `@e9n/pi-channels` package: it registers a `notify` tool, channel events, route aliases, and an optional chat bridge that turns incoming channel messages into pi prompts.
 
-It does not depend on `@e9n/pi-channels` at runtime. That package is published as
-a standalone extension source package with the older `@mariozechner/*` peer
-namespace and Slack/Telegram dependencies. This package keeps the same channel
-contract while targeting this repo's `@earendil-works/*` API surface and native
-Feishu/DingTalk/WeCom adapters.
+It does not depend on `@e9n/pi-channels` at runtime. That package is published as a standalone extension source package with the older `@mariozechner/*` peer namespace and Slack/Telegram dependencies. This package keeps the same channel contract while targeting this repo's `@earendil-works/*` API surface and native Feishu/DingTalk/WeCom adapters.
 
 ## Configuration
 
-Put the `pi-channels` section in `~/.pi/agent/settings.json`, the configured
-agent directory's `settings.json`, or a project/ancestor `.pi/settings.json`.
-Project-local files are read only after project trust is accepted. `${ENV_VAR}`
-interpolation is supported only in user and agent settings, not in project-local
-files. The direct credential environment variables documented in the examples
-still override loaded adapter values.
+Put the `pi-channels` section in `~/.pi/agent/settings.json`, the configured agent directory's `settings.json`, or a project/ancestor `.pi/settings.json`. Project-local files are read only after project trust is accepted. `${ENV_VAR}` interpolation is supported only in user and agent settings, not in project-local files. The direct credential environment variables documented in the examples still override loaded adapter values.
 
 ## Channels
 
@@ -39,9 +28,7 @@ still override loaded adapter values.
 
 ## Example
 
-The `${...}` placeholders below assume this section is stored in user or agent
-settings. For trusted project settings, use the corresponding direct credential
-environment variables or literal non-secret values.
+The `${...}` placeholders below assume this section is stored in user or agent settings. For trusted project settings, use the corresponding direct credential environment variables or literal non-secret values.
 
 ```json
 {
@@ -85,8 +72,7 @@ environment variables or literal non-secret values.
 
 ### Feishu modes
 
-WebSocket is the default and recommended mode because it does not require a
-public callback URL:
+WebSocket is the default and recommended mode because it does not require a public callback URL:
 
 ```json
 {
@@ -99,10 +85,7 @@ public callback URL:
 }
 ```
 
-Use HTTP callback mode when the deployment already exposes a Feishu event URL.
-The SDK handles challenge responses, token verification, and encrypted event
-payloads. `encryptKey` is required in HTTP mode because it is used to verify
-ordinary event signatures; `verificationToken` alone is not sufficient:
+Use HTTP callback mode when the deployment already exposes a Feishu event URL. The SDK handles challenge responses, token verification, and encrypted event payloads. `encryptKey` is required in HTTP mode because it is used to verify ordinary event signatures; `verificationToken` alone is not sufficient:
 
 ```json
 {
@@ -124,8 +107,7 @@ Set `"eventMode": "off"` for outgoing-only usage.
 
 ### DingTalk modes
 
-Create a DingTalk internal app, add the bot capability, select Stream mode, and
-publish it. Copy the Client ID and Client Secret into the adapter config:
+Create a DingTalk internal app, add the bot capability, select Stream mode, and publish it. Copy the Client ID and Client Secret into the adapter config:
 
 ```json
 {
@@ -139,16 +121,13 @@ publish it. Copy the Client ID and Client Secret into the adapter config:
 }
 ```
 
-Incoming replies use the per-message `sessionWebhook` when available. Active
-route sends use DingTalk's group message OpenAPI with the route recipient as the
-conversation/openConversationId. `robotCode` defaults to `clientId` when omitted.
+Incoming replies use the per-message `sessionWebhook` when available. Active route sends use DingTalk's group message OpenAPI with the route recipient as the conversation/openConversationId. `robotCode` defaults to `clientId` when omitted.
 
 Set `"eventMode": "off"` when the bot should only send messages.
 
 ### WeCom modes
 
-Create an intelligent bot in the WeCom admin console, choose API mode, and select
-the long connection option. Copy the Bot ID and Secret into the adapter config:
+Create an intelligent bot in the WeCom admin console, choose API mode, and select the long connection option. Copy the Bot ID and Secret into the adapter config:
 
 ```json
 {
@@ -170,8 +149,7 @@ notify(action: "list")
 notify(action: "test", adapter: "ops")
 ```
 
-For Feishu, recipients default to `chat_id`. Prefix the recipient to override the
-receive id type:
+For Feishu, recipients default to `chat_id`. Prefix the recipient to override the receive id type:
 
 ```text
 chat_id:oc_xxx
@@ -180,20 +158,16 @@ user_id:abc123
 email:name@example.com
 ```
 
-For WeCom intelligent bots, recipients are the conversation ids used by the Bot
-API. In a group, send one message to the bot and use route capture to fill the
-group `chatid`; for one-to-one pushes, use the target user's userid:
+For WeCom intelligent bots, recipients are the conversation ids used by the Bot API. In a group, send one message to the bot and use route capture to fill the group `chatid`; for one-to-one pushes, use the target user's userid:
 
 ```text
 wr_xxx
 zhangsan
 ```
 
-The intelligent bot adapter uses the WebSocket Bot API, so long connection mode
-does not require a public callback URL.
+The intelligent bot adapter uses the WebSocket Bot API, so long connection mode does not require a public callback URL.
 
-For DingTalk app bots, send one message to the bot and use route capture to fill
-the group conversation id:
+For DingTalk app bots, send one message to the bot and use route capture to fill the group conversation id:
 
 ```text
 cid_xxx
