@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const { mockCreateMem0Provider } = vi.hoisted(() => ({
+const { mockCreateMem0Provider, mockDedupProviderMemories } = vi.hoisted(() => ({
   mockCreateMem0Provider: vi.fn(),
+  mockDedupProviderMemories: vi.fn(),
 }));
 
 // Isolate mem0Extension from any settings.json that happens to live on the
@@ -26,6 +27,10 @@ vi.mock('../provider.js', async (importOriginal) => {
   };
 });
 
+vi.mock('../dedup.js', () => ({
+  dedupProviderMemories: mockDedupProviderMemories,
+}));
+
 import { loadPiSettings } from '@amaster.ai/pi-shared/settings';
 import mem0Extension from '../index.js';
 
@@ -33,6 +38,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.mocked(loadPiSettings).mockReturnValue({});
   mockCreateMem0Provider.mockReset();
+  mockDedupProviderMemories.mockReset();
 });
 
 // ---------------------------------------------------------------------------
@@ -583,6 +589,108 @@ describe('/mem0 command — not active', () => {
 });
 
 describe('/mem0 command — active subcommands', () => {
+  it('previews exact duplicates without deleting them', async () => {
+    const provider = mockActiveProvider();
+    mockDedupProviderMemories.mockResolvedValue({
+      total: 3,
+      duplicatesFound: 1,
+      duplicatesRemoved: 0,
+      deleteFailures: 0,
+    });
+    vi.mocked(loadPiSettings).mockReturnValue({
+      mode: 'platform',
+      apiKey: 'm0-test',
+      agentId: 'agent-1',
+    });
+    const { pi, handlers, commands } = createMockPi();
+    mem0Extension(pi as never);
+    const ctx = createMockCtx();
+    await handlers.session_start![0]!({}, ctx);
+
+    await commands.mem0!.handler('dedup', ctx);
+
+    expect(mockDedupProviderMemories).toHaveBeenCalledWith(provider, {
+      userId: expect.any(String),
+      agentId: 'agent-1',
+      dryRun: true,
+    });
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      'Mem0 dedup preview: scanned 3 memories and found 1 exact duplicate. Run /mem0 dedup --apply to remove it.',
+      'info',
+    );
+  });
+
+  it('does not suggest apply when the dedup preview is clean', async () => {
+    mockActiveProvider();
+    mockDedupProviderMemories.mockResolvedValue({
+      total: 3,
+      duplicatesFound: 0,
+      duplicatesRemoved: 0,
+      deleteFailures: 0,
+    });
+    const { pi, handlers, commands } = createMockPi();
+    mem0Extension(pi as never);
+    const ctx = createMockCtx();
+    await handlers.session_start![0]!({}, ctx);
+
+    await commands.mem0!.handler('dedup', ctx);
+
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      'Mem0 dedup preview: scanned 3 memories; no exact duplicates found.',
+      'info',
+    );
+  });
+
+  it('applies exact dedup only after interactive confirmation', async () => {
+    const provider = mockActiveProvider();
+    mockDedupProviderMemories.mockImplementation(
+      async (
+        _provider: unknown,
+        opts: { approve: (preview: Record<string, number>) => Promise<boolean> },
+      ) => {
+        const approved = await opts.approve({
+          total: 3,
+          duplicatesFound: 1,
+          duplicatesRemoved: 0,
+          deleteFailures: 0,
+        });
+        expect(approved).toBe(true);
+        return {
+          total: 3,
+          duplicatesFound: 1,
+          duplicatesRemoved: 1,
+          deleteFailures: 0,
+        };
+      },
+    );
+    const { pi, handlers, commands } = createMockPi();
+    mem0Extension(pi as never);
+    const confirm = vi.fn().mockResolvedValue(true);
+    const ctx = {
+      ...createMockCtx(),
+      hasUI: true,
+      ui: { ...createMockCtx().ui, confirm },
+    };
+    await handlers.session_start![0]!({}, ctx);
+
+    await commands.mem0!.handler('dedup --apply', ctx);
+
+    expect(confirm).toHaveBeenCalledWith(
+      'Remove exact duplicate memories?',
+      '1 duplicate will be permanently deleted.',
+    );
+    expect(mockDedupProviderMemories).toHaveBeenCalledTimes(1);
+    expect(mockDedupProviderMemories).toHaveBeenCalledWith(provider, {
+      userId: expect.any(String),
+      dryRun: false,
+      approve: expect.any(Function),
+    });
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      'Mem0 dedup complete: removed 1 duplicate; 0 deletions failed.',
+      'info',
+    );
+  });
+
   it('uses the configured agentId for add, search, and profile', async () => {
     const provider = mockActiveProvider();
     vi.mocked(loadPiSettings).mockReturnValue({

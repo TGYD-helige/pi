@@ -26,6 +26,7 @@
 
 import { isProjectTrusted, loadPiSettings } from '@amaster.ai/pi-shared/settings';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { dedupProviderMemories } from './dedup.js';
 import { Prefetch } from './prefetch.js';
 import { formatRecalledMemory, redactMemoryText, scopeMemoryUserId } from './privacy.js';
 import {
@@ -234,7 +235,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
 
   pi.registerCommand('mem0', {
     description:
-      'Mem0 memory commands. Subcommands: status, search <query>, profile, add <text>, delete <id>.',
+      'Mem0 memory commands. Subcommands: status, search <query>, profile, add <text>, dedup [--apply], delete <id>.',
     handler: async (args, ctx) => {
       if (!provider) {
         ctx.ui.notify('Mem0 is not active.', 'warning');
@@ -300,6 +301,68 @@ export default function mem0Extension(pi: ExtensionAPI): void {
           }
           break;
         }
+        case 'dedup': {
+          if (rest && rest !== '--apply') {
+            ctx.ui.notify('Usage: /mem0 dedup [--apply]', 'warning');
+            break;
+          }
+          if (rest !== '--apply') {
+            const preview = await dedupProviderMemories(provider, {
+              ...scope,
+              dryRun: true,
+              ...(ctx.signal ? { signal: ctx.signal } : {}),
+            });
+            if (preview.duplicatesFound === 0) {
+              ctx.ui.notify(
+                `Mem0 dedup preview: scanned ${preview.total} memories; no exact duplicates found.`,
+                'info',
+              );
+              break;
+            }
+            const noun = preview.duplicatesFound === 1 ? 'duplicate' : 'duplicates';
+            const pronoun = preview.duplicatesFound === 1 ? 'it' : 'them';
+            ctx.ui.notify(
+              `Mem0 dedup preview: scanned ${preview.total} memories and found ${preview.duplicatesFound} exact ${noun}. Run /mem0 dedup --apply to remove ${pronoun}.`,
+              'info',
+            );
+            break;
+          }
+          if (!ctx.hasUI) {
+            ctx.ui.notify('Mem0 dedup --apply requires an interactive confirmation.', 'warning');
+            break;
+          }
+          let preview: Awaited<ReturnType<typeof dedupProviderMemories>> | undefined;
+          let approved = false;
+          const result = await dedupProviderMemories(provider, {
+            ...scope,
+            dryRun: false,
+            ...(ctx.signal ? { signal: ctx.signal } : {}),
+            approve: async (candidate) => {
+              preview = candidate;
+              if (candidate.duplicatesFound === 0) return false;
+              const noun = candidate.duplicatesFound === 1 ? 'duplicate' : 'duplicates';
+              approved = await ctx.ui.confirm(
+                'Remove exact duplicate memories?',
+                `${candidate.duplicatesFound} ${noun} will be permanently deleted.`,
+              );
+              return approved;
+            },
+          });
+          if (preview?.duplicatesFound === 0) {
+            ctx.ui.notify('Mem0 dedup complete: no exact duplicates found.', 'info');
+            break;
+          }
+          if (!approved) {
+            ctx.ui.notify('Mem0 dedup cancelled.', 'info');
+            break;
+          }
+          const removedNoun = result.duplicatesRemoved === 1 ? 'duplicate' : 'duplicates';
+          ctx.ui.notify(
+            `Mem0 dedup complete: removed ${result.duplicatesRemoved} ${removedNoun}; ${result.deleteFailures} deletions failed.`,
+            result.deleteFailures ? 'warning' : 'info',
+          );
+          break;
+        }
         case 'delete': {
           if (!rest) {
             ctx.ui.notify('Usage: /mem0 delete <memory-id>', 'warning');
@@ -311,7 +374,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
         }
         default:
           ctx.ui.notify(
-            'Unknown subcommand. Available: status, search, profile, add, delete.',
+            'Unknown subcommand. Available: status, search, profile, add, dedup, delete.',
             'warning',
           );
       }

@@ -6,6 +6,63 @@ describe('self-hosted Mem0 provider', () => {
     vi.unstubAllGlobals();
   });
 
+  it('keeps self-hosted user and agent memories in one exact dedup group', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          results: [
+            { id: 'old', memory: 'same text' },
+            { id: 'new', memory: 'same text' },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = await createMem0Provider({
+      config: { mode: 'self-hosted', baseUrl: 'https://mem0.example.com' },
+    });
+
+    const groups = await provider.getDedupGroups!({
+      userId: 'company/1',
+      agentId: 'agent/1',
+    });
+
+    expect(groups).toEqual([
+      [
+        { id: 'old', memory: 'same text' },
+        { id: 'new', memory: 'same text' },
+      ],
+    ]);
+    expect(fetchMock.mock.calls[0]![0]).toBe(
+      'https://mem0.example.com/memories?user_id=company%2F1&agent_id=agent%2F1&top_k=1000',
+    );
+  });
+
+  it('fails closed when a self-hosted dedup scope reaches the server limit', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            results: Array.from({ length: 1000 }, (_, index) => ({
+              id: String(index),
+              memory: `memory ${index}`,
+            })),
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      ),
+    );
+    const provider = await createMem0Provider({
+      config: { mode: 'self-hosted', baseUrl: 'https://mem0.example.com' },
+    });
+
+    await expect(provider.getDedupGroups!({ userId: 'company-1' })).rejects.toThrow(
+      'Mem0 self-hosted dedup scope may exceed 999 memories.',
+    );
+  });
+
   it('uses exact user and agent filters for search', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ results: [{ id: '1', memory: 'likes cats', score: 0.9 }] }), {
