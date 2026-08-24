@@ -216,11 +216,32 @@ test('prepares the review prompt outside the workflow', async () => {
   await writeFile(path.join(directory, 'AGENTS.md'), '# Review rules');
   const listFiles = () => {};
   const listCommits = () => {};
+  const largeJsonPatch = Array.from({ length: 10_001 }, (_, index) => `+{"id":${index}}`);
   const github = {
-    request: async () => ({ data: 'diff --git a/src/example.ts b/src/example.ts' }),
+    request: async () => ({
+      data: [
+        'diff --git a/data/catalog.json b/data/catalog.json',
+        '--- /dev/null',
+        '+++ b/data/catalog.json',
+        '@@ -0,0 +1,10001 @@',
+        ...largeJsonPatch,
+        'diff --git a/src/example.ts b/src/example.ts',
+        '@@ -10 +10,2 @@',
+        ' old',
+        '+new',
+      ].join('\n'),
+    }),
     paginate: async (method) => {
       if (method === listFiles) {
-        return [{ filename: 'src/example.ts', patch: '@@ -10 +10,2 @@\n old\n+new' }];
+        return [
+          {
+            filename: 'data/catalog.json',
+            additions: 10_001,
+            deletions: 0,
+            patch: '@@ -0,0 +1 @@\n+{"id":0}',
+          },
+          { filename: 'src/example.ts', additions: 1, deletions: 0, patch: '@@ -10 +10,2 @@\n old\n+new' },
+        ];
       }
       if (method === listCommits) return [];
       throw new Error('Unexpected pagination method');
@@ -252,6 +273,10 @@ test('prepares the review prompt outside the workflow', async () => {
     const prompt = await readFile(contextPath, 'utf8');
     assert.match(prompt, /# Allowed changed-line locations/);
     assert.match(prompt, /src\/example\.ts\tRIGHT\t11/);
+    assert.match(prompt, /\[LARGE JSON DIFF OMITTED: 10001 changed lines\]/);
+    assert.match(prompt, /\+new/);
+    assert.doesNotMatch(prompt, /\+{"id":0}/);
+    assert.doesNotMatch(prompt, /data\/catalog\.json\tRIGHT/);
     assert.match(prompt, /Copy path, side, and line exactly from this list/);
     assert.match(prompt, /outputSchema/);
     assert.match(prompt, /structured_output/);

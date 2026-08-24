@@ -226,6 +226,28 @@ export function reviewLocationIndex(files) {
   return [...commentableLines(files)].map((location) => location.replaceAll('\0', '\t')).join('\n');
 }
 
+const maxJsonChangedLines = 10_000;
+
+function isLargeJsonChange(file) {
+  const paths = [file.filename, file.previous_filename].filter(Boolean);
+  return paths.some((filePath) => filePath.toLowerCase().endsWith('.json'))
+    && (file.additions ?? 0) + (file.deletions ?? 0) > maxJsonChangedLines;
+}
+
+function omitLargeJsonDiffs(diff) {
+  return diff.split(/(?=^diff --git )/m).map((section) => {
+    const header = section.split('\n', 1)[0];
+    if (!/\.json"?(?:\s|$)/i.test(header)) return section;
+    const changedLines = section.split('\n').filter((line) =>
+      (line.startsWith('+') && !line.startsWith('+++ '))
+      || (line.startsWith('-') && !line.startsWith('--- '))
+    ).length;
+    return changedLines > maxJsonChangedLines
+      ? `${header}\n[LARGE JSON DIFF OMITTED: ${changedLines} changed lines]\n`
+      : section;
+  }).join('');
+}
+
 export async function preparePiReview({ github, context, core, contextPath, workspace = process.env.GITHUB_WORKSPACE }) {
   const { owner, repo } = context.repo;
   const pull = context.payload.pull_request;
@@ -237,7 +259,9 @@ export async function preparePiReview({ github, context, core, contextPath, work
     pull_number: pullNumber,
     headers: { accept: 'application/vnd.github.v3.diff' },
   });
-  let diff = typeof diffResponse.data === 'string' ? diffResponse.data : String(diffResponse.data);
+  let diff = omitLargeJsonDiffs(
+    typeof diffResponse.data === 'string' ? diffResponse.data : String(diffResponse.data),
+  );
   const maxDiffChars = 600000;
   if (diff.length > maxDiffChars) {
     diff = `${diff.slice(0, maxDiffChars)}\n\n[DIFF TRUNCATED BY TRUSTED WORKFLOW]`;
@@ -298,7 +322,7 @@ export async function preparePiReview({ github, context, core, contextPath, work
     `PR body:\n${(pull.body || '(empty)').slice(0, 30000)}`,
     ...issues,
   ].join('\n\n');
-  const allowedLocations = reviewLocationIndex(files).slice(0, maxDiffChars);
+  const allowedLocations = reviewLocationIndex(files.filter((file) => !isLargeJsonChange(file))).slice(0, maxDiffChars);
   const untrustedText = [commitText, specText, allowedLocations, diff].join('\n');
   let untrustedBoundary;
   do {
