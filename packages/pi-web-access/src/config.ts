@@ -7,6 +7,7 @@ const SETTINGS_KEY = 'pi-web-access';
 // ─── Built-in defaults ───────────────────────────────────────────────────────
 
 const DEFAULT_BASE_URL: Record<BuiltInProviderId, string> = {
+  parallel: 'https://search.parallel.ai/mcp',
   tavily: 'https://api.tavily.com',
   brave: 'https://api.search.brave.com',
   firecrawl: 'https://api.firecrawl.dev',
@@ -24,7 +25,7 @@ const DEFAULT_BASE_URL: Record<BuiltInProviderId, string> = {
   unsplash: 'https://api.unsplash.com',
 };
 
-const ENV_VARS: Record<BuiltInProviderId, string> = {
+const ENV_VARS: Partial<Record<BuiltInProviderId, string>> = {
   tavily: 'TAVILY_API_KEY',
   brave: 'BRAVE_API_KEY',
   firecrawl: 'FIRECRAWL_API_KEY',
@@ -87,7 +88,8 @@ export function resolveProvider(
   }
 
   const config = settings.providers?.[requested] ?? {};
-  const apiKey = config.apiKey || process.env[ENV_VARS[requested]];
+  const environmentVariable = ENV_VARS[requested];
+  const apiKey = config.apiKey || (environmentVariable ? process.env[environmentVariable] : undefined);
   const baseUrl = config.baseUrl || DEFAULT_BASE_URL[requested];
 
   const provider: ResolvedProvider = {

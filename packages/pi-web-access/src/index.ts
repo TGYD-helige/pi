@@ -75,7 +75,10 @@ export default function piWebToolExtension(pi: ExtensionAPI): void {
     settings = loadWebToolSettings(ctx.cwd, isProjectTrusted(ctx));
 
     const searchResolved = resolveSearchProvider(settings);
-    const hasSearch = !('error' in searchResolved) && Boolean(searchResolved.apiKey);
+    const hasSearch =
+      !('error' in searchResolved) &&
+      (Boolean(searchResolved.apiKey) ||
+        (searchResolved.id === 'parallel' && settings.search?.provider === 'parallel'));
     const hasFetch = Boolean(settings.fetch?.provider) || Boolean(settings.fetch?.summary);
 
     if (hasSearch) {
@@ -128,12 +131,12 @@ export default function piWebToolExtension(pi: ExtensionAPI): void {
         async execute(
           _toolCallId: string,
           params: Record<string, unknown>,
-          _signal: AbortSignal | undefined,
+          signal: AbortSignal | undefined,
           _onUpdate: unknown,
           _ctx: ExtensionContext,
         ) {
           const searchParams = params as unknown as SearchParams;
-          const response = await search(searchParams, settings);
+          const response = await search(searchParams, settings, signal);
 
           const lines: string[] = [];
           lines.push(`## Web Search Results (${response.provider})`);

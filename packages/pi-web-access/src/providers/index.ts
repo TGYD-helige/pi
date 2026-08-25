@@ -7,6 +7,7 @@ import { FirecrawlProvider } from './firecrawl.js';
 import { GeminiProvider } from './gemini.js';
 import { KimiProvider } from './kimi.js';
 import { MimoProvider } from './mimo.js';
+import { ParallelProvider } from './parallel.js';
 import { OpenAIProvider } from './openai.js';
 import { OpenRouterProvider } from './openrouter.js';
 import { PerplexityProvider } from './perplexity.js';
@@ -29,6 +30,7 @@ export { BaseProvider, getEnvironmentContext, SEARCH_SYSTEM_PROMPT } from './bas
 // ─── Registry ────────────────────────────────────────────────────────────────
 
 const providers: WebProvider[] = [
+  new ParallelProvider(),
   new TavilyProvider(),
   new BraveProvider(),
   new FirecrawlProvider(),
