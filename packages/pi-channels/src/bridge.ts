@@ -582,7 +582,9 @@ async function cleanupBridgeAttachments(
   await Promise.all(
     (attachments ?? [])
       .filter((attachment) => resolve(attachment.path).startsWith(tempPrefix))
-      .map((attachment) => rm(dirname(attachment.path), { recursive: true, force: true })),
+      .map((attachment) =>
+        rm(dirname(attachment.path), { recursive: true, force: true }).catch(() => undefined),
+      ),
   );
 }
 
