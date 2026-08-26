@@ -336,7 +336,7 @@ export async function preparePiReview({ github, context, core, contextPath, work
     '',
     'Use the loaded code-review skill. Its Agent/general-purpose calls must be adapted to the Pi subagent tool:',
     'Make exactly one synchronous subagent workflow call containing exactly two tasks, both using the',
-    'general-purpose agent. Its workflowScript must call runs.all once. Omit async. Task 1 reviews Standards',
+    'general-purpose agent. Its workflowScript must call runs.all once. Set async to false explicitly. Task 1 reviews Standards',
     'and task 2 reviews Spec. Do not call emit, subagent_wait, status, or list, and do not retry.',
     'Reviewer children have no tools and inherit no context. Copy the supplied review data directly into each child task.',
     'Never tell a child to run git, execute the diff command, read files, or fetch context. Do not ask questions,',

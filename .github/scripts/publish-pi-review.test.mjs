@@ -286,6 +286,7 @@ test('prepares the review prompt outside the workflow', async () => {
     assert.match(prompt, /Copy the supplied review data directly into each child task/);
     assert.match(prompt, /Never tell a child to run git, execute the diff command, read files, or fetch context/);
     assert.match(prompt, /Make exactly one synchronous subagent workflow call/);
+    assert.match(prompt, /Set async to false explicitly/);
     assert.match(prompt, /Do not call emit, subagent_wait, status, or list, and do not retry/);
     assert.doesNotMatch(prompt, /file-only/);
   } finally {
