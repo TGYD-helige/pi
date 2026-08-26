@@ -85,7 +85,7 @@ export class ChatBridge {
   async handleMessage(message: IncomingMessage): Promise<void> {
     if (!this.running) return;
     const text = message.text.trim();
-    if (!text) return;
+    if (!text && !message.attachments?.some((attachment) => attachment.type === 'image')) return;
 
     const senderKey = `${message.adapter}:${message.sender}`;
     const builtInReply = this.handleBuiltInCommand(senderKey, text);

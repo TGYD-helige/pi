@@ -1,4 +1,5 @@
 import { readFile, rm } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { Readable } from 'node:stream';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -69,7 +70,21 @@ const imageRawEvent = {
   },
 };
 
-describe('Feishu image diagnostic', () => {
+const postNormalizedMessage = {
+  messageId: 'om_post_ws',
+  chatId: 'oc_chat',
+  chatType: 'group',
+  senderId: 'ou_sender',
+  content: '**Post**\n\nhello\n![image](img_v3_demo)',
+  rawContentType: 'post',
+  resources: [{ type: 'image', fileKey: 'img_v3_demo' }],
+  mentions: [],
+  mentionAll: false,
+  mentionedBot: true,
+  createTime: 1,
+};
+
+describe('Feishu adapter', () => {
   beforeEach(() => {
     channelHandlers = new Map();
     dispatcherHandlers = new Map();
@@ -110,7 +125,7 @@ describe('Feishu image diagnostic', () => {
       params: { type: 'image' },
     });
     expect(mockDownloadResource).not.toHaveBeenCalled();
-    await rm(emitted.attachments![0]!.path, { force: true });
+    await rm(dirname(emitted.attachments![0]!.path), { recursive: true, force: true });
     await adapter.stop?.();
   });
 
@@ -144,7 +159,28 @@ describe('Feishu image diagnostic', () => {
       params: { type: 'image' },
     });
     expect(mockDownloadResource).not.toHaveBeenCalled();
-    await rm(emitted.attachments![0]!.path, { force: true });
+    await rm(dirname(emitted.attachments![0]!.path), { recursive: true, force: true });
+    await adapter.stop?.();
+  });
+
+  it('keeps post messages as text without downloading embedded images', async () => {
+    const onMessage = vi.fn();
+    const adapter = createFeishuAdapter({
+      type: 'feishu',
+      appId: 'cli_xxx',
+      appSecret: 'secret',
+      eventMode: 'websocket',
+    });
+
+    await adapter.start?.(onMessage);
+    await channelHandlers.get('message')?.(postNormalizedMessage);
+
+    await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(1));
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: postNormalizedMessage.content }),
+    );
+    expect(onMessage.mock.calls[0]?.[0]).not.toHaveProperty('attachments');
+    expect(mockMessageResourceGet).not.toHaveBeenCalled();
     await adapter.stop?.();
   });
 });

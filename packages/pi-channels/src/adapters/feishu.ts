@@ -519,10 +519,12 @@ export function createFeishuAdapter(
       attachments = await downloadFeishuImageResources(
         client,
         msg.messageId,
-        msg.resources.filter(
-          (resource): resource is FeishuImageResource =>
-            resource.type === 'image' && Boolean(resource.fileKey),
-        ),
+        msg.rawContentType === 'image'
+          ? msg.resources.filter(
+              (resource): resource is FeishuImageResource =>
+                resource.type === 'image' && Boolean(resource.fileKey),
+            )
+          : [],
       );
     } catch (error) {
       context.log?.(
