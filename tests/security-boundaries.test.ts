@@ -6,9 +6,14 @@ const read = (path: string) => readFileSync(resolve(path), 'utf8');
 
 describe('security-sensitive workflows', () => {
   it.each(['.github/workflows/ci.yml', '.github/workflows/pr-checks.yml'])(
-    'does not run fork pull requests on self-hosted runners in %s',
+    'runs fork pull requests with read-only permissions on GitHub-hosted runners in %s',
     (path) => {
-      expect(read(path)).toContain(
+      const workflow = read(path);
+
+      expect(workflow).toContain('permissions:\n  contents: read');
+      expect(workflow).toContain('runs-on: ubuntu-latest');
+      expect(workflow).not.toContain('self-hosted');
+      expect(workflow).not.toContain(
         "github.event.pull_request.head.repo.full_name == github.repository",
       );
     },
