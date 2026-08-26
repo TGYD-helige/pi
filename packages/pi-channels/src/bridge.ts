@@ -62,7 +62,10 @@ export class ChatBridge {
 
   stop(): void {
     this.running = false;
-    for (const session of this.sessions.values()) session.abortController?.abort();
+    for (const session of this.sessions.values()) {
+      session.abortController?.abort();
+      for (const queued of session.queue) void cleanupBridgeAttachments(queued.message.attachments);
+    }
     this.sessions.clear();
     this.activeCount = 0;
   }
@@ -83,30 +86,44 @@ export class ChatBridge {
   }
 
   async handleMessage(message: IncomingMessage): Promise<void> {
-    if (!this.running) return;
+    if (!this.running) {
+      await cleanupBridgeAttachments(message.attachments);
+      return;
+    }
     const text = message.text.trim();
-    if (!text && !message.attachments?.some((attachment) => attachment.type === 'image')) return;
+    if (!text && !message.attachments?.some((attachment) => attachment.type === 'image')) {
+      await cleanupBridgeAttachments(message.attachments);
+      return;
+    }
 
     const senderKey = `${message.adapter}:${message.sender}`;
     const builtInReply = this.handleBuiltInCommand(senderKey, text);
     if (builtInReply !== null) {
-      await this.registry.send({
-        adapter: message.adapter,
-        recipient: message.sender,
-        text: builtInReply,
-        ...(message.metadata ? { metadata: message.metadata } : {}),
-      });
+      try {
+        await this.registry.send({
+          adapter: message.adapter,
+          recipient: message.sender,
+          text: builtInReply,
+          ...(message.metadata ? { metadata: message.metadata } : {}),
+        });
+      } finally {
+        await cleanupBridgeAttachments(message.attachments);
+      }
       return;
     }
 
     const session = this.getSession(senderKey);
     if (session.queue.length >= this.config.maxQueuePerSender) {
-      await this.registry.send({
-        adapter: message.adapter,
-        recipient: message.sender,
-        text: `Queue full (${this.config.maxQueuePerSender} pending). Wait or send /abort.`,
-        ...(message.metadata ? { metadata: message.metadata } : {}),
-      });
+      try {
+        await this.registry.send({
+          adapter: message.adapter,
+          recipient: message.sender,
+          text: `Queue full (${this.config.maxQueuePerSender} pending). Wait or send /abort.`,
+          ...(message.metadata ? { metadata: message.metadata } : {}),
+        });
+      } finally {
+        await cleanupBridgeAttachments(message.attachments);
+      }
       return;
     }
 

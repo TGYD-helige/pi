@@ -1,7 +1,7 @@
 import { readFile, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { Readable } from 'node:stream';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockChatGet = vi.fn();
 const mockRequest = vi.fn();
@@ -12,6 +12,18 @@ const mockChannelConnect = vi.fn();
 const mockChannelDisconnect = vi.fn();
 let channelHandlers = new Map<string, (...args: unknown[]) => unknown>();
 let dispatcherHandlers = new Map<string, (...args: unknown[]) => unknown>();
+const temporaryDirectories = new Set<string>();
+
+function trackAttachments(message: unknown): void {
+  if (!message || typeof message !== 'object') return;
+  const attachments = (message as { attachments?: unknown }).attachments;
+  if (!Array.isArray(attachments)) return;
+  for (const attachment of attachments) {
+    if (!attachment || typeof attachment !== 'object') continue;
+    const path = (attachment as { path?: unknown }).path;
+    if (typeof path === 'string') temporaryDirectories.add(dirname(path));
+  }
+}
 
 vi.mock('@larksuiteoapi/node-sdk', () => ({
   Domain: { Feishu: 0, Lark: 1 },
@@ -97,8 +109,15 @@ describe('Feishu adapter', () => {
     mockRequest.mockReset();
   });
 
+  afterEach(async () => {
+    await Promise.all(
+      [...temporaryDirectories].map((directory) => rm(directory, { recursive: true, force: true })),
+    );
+    temporaryDirectories.clear();
+  });
+
   it('downloads an SDK-normalized image and forwards it as an attachment', async () => {
-    const onMessage = vi.fn();
+    const onMessage = vi.fn(trackAttachments);
     const adapter = createFeishuAdapter({
       type: 'feishu',
       appId: 'cli_xxx',
@@ -125,12 +144,11 @@ describe('Feishu adapter', () => {
       params: { type: 'image' },
     });
     expect(mockDownloadResource).not.toHaveBeenCalled();
-    await rm(dirname(emitted.attachments![0]!.path), { recursive: true, force: true });
     await adapter.stop?.();
   });
 
   it('downloads an HTTP image event and forwards it as an attachment', async () => {
-    const onMessage = vi.fn();
+    const onMessage = vi.fn(trackAttachments);
     const adapter = createFeishuAdapter({
       type: 'feishu',
       appId: 'cli_xxx',
@@ -159,12 +177,11 @@ describe('Feishu adapter', () => {
       params: { type: 'image' },
     });
     expect(mockDownloadResource).not.toHaveBeenCalled();
-    await rm(dirname(emitted.attachments![0]!.path), { recursive: true, force: true });
     await adapter.stop?.();
   });
 
   it('keeps post messages as text without downloading embedded images', async () => {
-    const onMessage = vi.fn();
+    const onMessage = vi.fn(trackAttachments);
     const adapter = createFeishuAdapter({
       type: 'feishu',
       appId: 'cli_xxx',
