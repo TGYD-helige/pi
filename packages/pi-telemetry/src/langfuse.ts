@@ -84,6 +84,8 @@ const DEFAULT_LANGFUSE_BASE_URL = 'https://cloud.langfuse.com';
 const DEFAULT_FLUSH_AT = 20;
 const DEFAULT_FLUSH_INTERVAL_MS = 5000;
 const MAX_PENDING_GENERATIONS = 128;
+const TERMINAL_FLUSH_ATTEMPTS = 3;
+const TERMINAL_FLUSH_RETRY_BASE_MS = 50;
 
 export class LangfuseSdkRuntimeEventExporter implements RuntimeEventExporter {
   private readonly client: LangfuseSdkClient;
@@ -143,12 +145,20 @@ export class LangfuseSdkRuntimeEventExporter implements RuntimeEventExporter {
     if (!isTerminalTelemetryEvent(event)) {
       return;
     }
-    try {
-      await this.client.flushAsync();
-    } catch (error) {
-      console.warn(
-        `Langfuse telemetry flush failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
+    for (let attempt = 1; attempt <= TERMINAL_FLUSH_ATTEMPTS; attempt += 1) {
+      try {
+        await this.client.flushAsync();
+        return;
+      } catch (error) {
+        console.warn(
+          `Langfuse telemetry flush failed (attempt ${attempt}/${TERMINAL_FLUSH_ATTEMPTS}): ${error instanceof Error ? error.message : String(error)}`,
+        );
+        if (attempt < TERMINAL_FLUSH_ATTEMPTS) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, TERMINAL_FLUSH_RETRY_BASE_MS * attempt),
+          );
+        }
+      }
     }
   }
 

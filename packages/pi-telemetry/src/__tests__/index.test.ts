@@ -259,6 +259,41 @@ describe('telemetry', () => {
     expect(client.flushed).toBe(1);
   });
 
+  it('retries a failed terminal Langfuse flush within the terminal handler', async () => {
+    const client = new FakeLangfuseSdkClient();
+    client.flushFailuresRemaining = 2;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const exporter = new LangfuseSdkRuntimeEventExporter(
+      {
+        enabled: true,
+        publicKey: 'public',
+        secretKey: 'secret',
+        baseUrl: 'https://langfuse.example.com',
+        flushAt: 10,
+        flushIntervalMs: 60_000,
+      },
+      client,
+    );
+
+    await exporter.publish({
+      id: 'turn-end-retry',
+      traceId,
+      type: 'chat_turn_completed',
+      sessionId: 'session-1',
+      conversationId: 'conversation-1',
+      createdAt: '2026-05-02T00:00:02.000Z',
+      durationMs: 2000,
+      details: { output: 'done' },
+    });
+
+    expect(client.flushed).toBe(3);
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenNthCalledWith(
+      1,
+      'Langfuse telemetry flush failed (attempt 1/3): transient flush failure',
+    );
+  });
+
   it('flushes Langfuse SDK telemetry after point-in-time lifecycle events', async () => {
     const client = new FakeLangfuseSdkClient();
     const exporter = new LangfuseSdkRuntimeEventExporter(
@@ -1678,6 +1713,7 @@ function getStringAttribute(
 class FakeLangfuseSdkClient implements LangfuseSdkClient {
   readonly traces: FakeLangfuseSdkTraceClient[] = [];
   flushed = 0;
+  flushFailuresRemaining = 0;
   closed = 0;
 
   trace(body?: Record<string, unknown>): LangfuseSdkTraceClient {
@@ -1688,6 +1724,10 @@ class FakeLangfuseSdkClient implements LangfuseSdkClient {
 
   async flushAsync(): Promise<void> {
     this.flushed += 1;
+    if (this.flushFailuresRemaining > 0) {
+      this.flushFailuresRemaining -= 1;
+      throw new Error('transient flush failure');
+    }
   }
 
   async shutdownAsync(): Promise<void> {

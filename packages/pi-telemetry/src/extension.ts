@@ -214,8 +214,53 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   let traceStartTime: number | undefined;
   let tracePublished = false;
   let llmGenerationCounter = 0;
+  let terminalGenerationCounter = 0;
   let pendingInput: string | undefined;
   let lastModelConfig: RuntimeModelConfig = { provider: 'unknown', model: 'unknown' };
+
+  const publishCompletedGeneration = async (message: unknown): Promise<boolean> => {
+    if (!currentTraceId || llmGenerationCounter <= terminalGenerationCounter) {
+      return false;
+    }
+    if (!message || typeof message !== 'object') {
+      return false;
+    }
+    const msg = message as Record<string, unknown>;
+    if (msg.role !== 'assistant') {
+      return false;
+    }
+
+    const generationIndex = llmGenerationCounter;
+    // Reserve the terminal before awaiting the exporter. message_end and turn_end may
+    // be dispatched close together; only one of them may close this generation.
+    terminalGenerationCounter = generationIndex;
+    const content = simplifyContent(msg.content) ?? extractOutput(message);
+    const usage = msg.usage as Record<string, unknown> | undefined;
+    const mapped = usage ? mapUsage(usage) : undefined;
+    const output: JsonObject = {};
+    if (content !== undefined) output.content = content;
+    if (usage !== undefined) output.usage = usage as JsonValue;
+
+    await exporter.publish({
+      id: randomUUID(),
+      traceId: currentTraceId,
+      ...runtimeCorrelation,
+      sessionId: localSessionId,
+      conversationId: localSessionId,
+      ...(isSubagent
+        ? { ...(parentSessionId ? { parentSessionId } : {}), childSessionId: localSessionId }
+        : {}),
+      llmGenerationId: `gen-${generationIndex}`,
+      status: 'completed',
+      createdAt: new Date().toISOString(),
+      model: lastModelConfig,
+      ...(Object.keys(output).length > 0 ? { output } : {}),
+      ...(mapped ? { usage: mapped } : {}),
+      ...(typeof msg.responseId === 'string' ? { responseId: msg.responseId } : {}),
+      ...(typeof msg.stopReason === 'string' ? { stopReason: msg.stopReason } : {}),
+    });
+    return true;
+  };
 
   pi.on('session_start', async (_event, ctx) => {
     const config = resolveConfig(
@@ -245,12 +290,14 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     traceStartTime = undefined;
     tracePublished = false;
     llmGenerationCounter = 0;
+    terminalGenerationCounter = 0;
   });
 
   pi.on('turn_start', async (event) => {
     if (!currentTraceId) {
       currentTraceId = randomUUID().replace(/-/g, '');
       llmGenerationCounter = 0;
+      terminalGenerationCounter = 0;
       tracePublished = false;
     }
     if (!traceStartTime) {
@@ -292,6 +339,10 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
 
   pi.on('turn_end', async (event) => {
     if (!currentTraceId) return;
+    // Some executor shutdown paths can reach turn_end before the message_end
+    // listener has durably exported its terminal. Close from the same assistant
+    // message first so the lifecycle flush cannot leave a span-only trace.
+    await publishCompletedGeneration(event.message);
     const now = Date.now();
     const durationMs = traceStartTime ? now - traceStartTime : undefined;
     const output = extractOutput(event.message);
@@ -396,6 +447,9 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   pi.on('after_provider_response', async (event, ctx) => {
     if (!currentTraceId) return;
     if (event.status < 400) return;
+    const generationIndex = llmGenerationCounter;
+    if (generationIndex <= terminalGenerationCounter) return;
+    terminalGenerationCounter = generationIndex;
 
     await exporter.publish({
       id: randomUUID(),
@@ -406,7 +460,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
       ...(isSubagent
         ? { ...(parentSessionId ? { parentSessionId } : {}), childSessionId: localSessionId }
         : {}),
-      llmGenerationId: `gen-${llmGenerationCounter}`,
+      llmGenerationId: `gen-${generationIndex}`,
       status: 'failed',
       createdAt: new Date().toISOString(),
       model: modelConfigFromCtx(ctx),
@@ -415,36 +469,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   });
 
   pi.on('message_end', async (event) => {
-    if (!currentTraceId) return;
-    const msg = event.message as unknown as Record<string, unknown>;
-    if (msg.role !== 'assistant') return;
-
-    const content = simplifyContent(msg.content) ?? extractOutput(event.message);
-    const usage = msg.usage as Record<string, unknown> | undefined;
-    const mapped = usage ? mapUsage(usage) : undefined;
-
-    const output: JsonObject = {};
-    if (content !== undefined) output.content = content;
-    if (usage !== undefined) output.usage = usage as JsonValue;
-
-    await exporter.publish({
-      id: randomUUID(),
-      traceId: currentTraceId,
-      ...runtimeCorrelation,
-      sessionId: localSessionId,
-      conversationId: localSessionId,
-      ...(isSubagent
-        ? { ...(parentSessionId ? { parentSessionId } : {}), childSessionId: localSessionId }
-        : {}),
-      llmGenerationId: `gen-${llmGenerationCounter}`,
-      status: 'completed',
-      createdAt: new Date().toISOString(),
-      model: lastModelConfig,
-      ...(Object.keys(output).length > 0 ? { output } : {}),
-      ...(mapped ? { usage: mapped } : {}),
-      ...(typeof msg.responseId === 'string' ? { responseId: msg.responseId } : {}),
-      ...(typeof msg.stopReason === 'string' ? { stopReason: msg.stopReason } : {}),
-    });
+    await publishCompletedGeneration(event.message);
   });
 
   pi.on('model_select', async (event) => {

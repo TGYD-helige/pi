@@ -682,6 +682,72 @@ describe('telemetryExtension', () => {
     });
   });
 
+  it('closes a generation at turn_end when message_end did not durably arrive', async () => {
+    telemetryExtension(mockPi as any);
+    await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
+    await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
+    await fireEvent(
+      'before_provider_request',
+      { type: 'before_provider_request', payload: { messages: ['hello'] } },
+      { model: { id: 'deepseek-v4-flash', provider: 'amaster' } },
+    );
+
+    await fireEvent('turn_end', {
+      type: 'turn_end',
+      turnIndex: 0,
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'durable result' }],
+        usage: { input: 100, output: 20, cacheRead: 50, totalTokens: 170 },
+        responseId: 'resp-fallback',
+        stopReason: 'stop',
+      },
+      toolResults: [],
+    });
+
+    const events = getPublishedEvents();
+    const generationEvents = events.filter((event) => 'llmGenerationId' in event);
+    expect(generationEvents).toHaveLength(2);
+    expect(generationEvents[1]).toMatchObject({
+      llmGenerationId: 'gen-1',
+      status: 'completed',
+      output: {
+        content: 'durable result',
+        usage: { input: 100, output: 20, cacheRead: 50, totalTokens: 170 },
+      },
+      responseId: 'resp-fallback',
+      stopReason: 'stop',
+    });
+    expect(events.at(-1)).toMatchObject({ type: 'chat_turn_completed' });
+  });
+
+  it('does not duplicate at turn_end a generation already closed by message_end', async () => {
+    telemetryExtension(mockPi as any);
+    await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
+    await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
+    await fireEvent('before_provider_request', {
+      type: 'before_provider_request',
+      payload: { messages: ['hello'] },
+    });
+    const message = {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'one terminal' }],
+      usage: { input: 10, output: 2 },
+    };
+    await fireEvent('message_end', { type: 'message_end', message });
+    await fireEvent('turn_end', {
+      type: 'turn_end',
+      turnIndex: 0,
+      message,
+      toolResults: [],
+    });
+
+    const terminalEvents = getPublishedEvents().filter(
+      (event) => 'llmGenerationId' in event && event.status === 'completed',
+    );
+    expect(terminalEvents).toHaveLength(1);
+  });
+
   test('message_end keeps content array when it includes tool_use blocks', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
