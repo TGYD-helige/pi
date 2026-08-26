@@ -748,6 +748,52 @@ describe('telemetryExtension', () => {
     expect(terminalEvents).toHaveLength(1);
   });
 
+  it('releases a failed message_end reservation so turn_end can retry the terminal', async () => {
+    const exporter = {
+      publish: vi
+        .fn()
+        .mockResolvedValueOnce(undefined)
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new Error('terminal publish failed'))
+        .mockResolvedValue(undefined),
+      flush: vi.fn(() => Promise.resolve()),
+      close: vi.fn(() => Promise.resolve()),
+    };
+    (createLangfuseExporter as ReturnType<typeof vi.fn>).mockReturnValue(exporter);
+    telemetryExtension(mockPi as any);
+    await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
+    await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
+    await fireEvent('before_provider_request', {
+      type: 'before_provider_request',
+      payload: { messages: ['hello'] },
+    });
+    const message = {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'retry terminal' }],
+      usage: { input: 10, output: 2 },
+    };
+
+    await expect(fireEvent('message_end', { type: 'message_end', message })).rejects.toThrow(
+      'terminal publish failed',
+    );
+    await fireEvent('turn_end', {
+      type: 'turn_end',
+      turnIndex: 0,
+      message,
+      toolResults: [],
+    });
+
+    const terminalAttempts = exporter.publish.mock.calls
+      .map(([event]) => event as RuntimeTelemetryEvent)
+      .filter((event) => 'llmGenerationId' in event && event.status === 'completed');
+    expect(terminalAttempts).toHaveLength(2);
+    expect(terminalAttempts[0]).toMatchObject({ llmGenerationId: 'gen-1' });
+    expect(terminalAttempts[1]).toMatchObject({ llmGenerationId: 'gen-1' });
+    expect(exporter.publish.mock.calls.at(-1)?.[0]).toMatchObject({
+      type: 'chat_turn_completed',
+    });
+  });
+
   test('message_end keeps content array when it includes tool_use blocks', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });

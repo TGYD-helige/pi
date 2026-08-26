@@ -231,6 +231,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     }
 
     const generationIndex = llmGenerationCounter;
+    const previousTerminalGenerationCounter = terminalGenerationCounter;
     // Reserve the terminal before awaiting the exporter. message_end and turn_end may
     // be dispatched close together; only one of them may close this generation.
     terminalGenerationCounter = generationIndex;
@@ -241,24 +242,34 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     if (content !== undefined) output.content = content;
     if (usage !== undefined) output.usage = usage as JsonValue;
 
-    await exporter.publish({
-      id: randomUUID(),
-      traceId: currentTraceId,
-      ...runtimeCorrelation,
-      sessionId: localSessionId,
-      conversationId: localSessionId,
-      ...(isSubagent
-        ? { ...(parentSessionId ? { parentSessionId } : {}), childSessionId: localSessionId }
-        : {}),
-      llmGenerationId: `gen-${generationIndex}`,
-      status: 'completed',
-      createdAt: new Date().toISOString(),
-      model: lastModelConfig,
-      ...(Object.keys(output).length > 0 ? { output } : {}),
-      ...(mapped ? { usage: mapped } : {}),
-      ...(typeof msg.responseId === 'string' ? { responseId: msg.responseId } : {}),
-      ...(typeof msg.stopReason === 'string' ? { stopReason: msg.stopReason } : {}),
-    });
+    try {
+      await exporter.publish({
+        id: randomUUID(),
+        traceId: currentTraceId,
+        ...runtimeCorrelation,
+        sessionId: localSessionId,
+        conversationId: localSessionId,
+        ...(isSubagent
+          ? { ...(parentSessionId ? { parentSessionId } : {}), childSessionId: localSessionId }
+          : {}),
+        llmGenerationId: `gen-${generationIndex}`,
+        status: 'completed',
+        createdAt: new Date().toISOString(),
+        model: lastModelConfig,
+        ...(Object.keys(output).length > 0 ? { output } : {}),
+        ...(mapped ? { usage: mapped } : {}),
+        ...(typeof msg.responseId === 'string' ? { responseId: msg.responseId } : {}),
+        ...(typeof msg.stopReason === 'string' ? { stopReason: msg.stopReason } : {}),
+      });
+    } catch (error) {
+      // Keep the synchronous reservation for duplicate suppression, but release
+      // only our own reservation when delivery itself failed. A later turn_end
+      // can then retry the same terminal from its authoritative assistant message.
+      if (terminalGenerationCounter === generationIndex) {
+        terminalGenerationCounter = previousTerminalGenerationCounter;
+      }
+      throw error;
+    }
     return true;
   };
 
