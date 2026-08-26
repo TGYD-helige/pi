@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { readFile, rm } from 'node:fs/promises';
+import { Readable } from 'node:stream';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockChatGet = vi.fn();
 const mockRequest = vi.fn();
@@ -68,8 +70,19 @@ const imageRawEvent = {
 };
 
 describe('Feishu image diagnostic', () => {
-  it('drops an SDK-normalized image before the websocket onMessage seam', async () => {
+  beforeEach(() => {
     channelHandlers = new Map();
+    dispatcherHandlers = new Map();
+    mockMessageResourceGet.mockReset();
+    mockMessageResourceGet.mockResolvedValue({
+      getReadableStream: () => Readable.from([Buffer.from('fake-png')]),
+      headers: { 'content-type': 'image/png' },
+    });
+    mockDownloadResource.mockReset();
+    mockRequest.mockReset();
+  });
+
+  it('downloads an SDK-normalized image and forwards it as an attachment', async () => {
     const onMessage = vi.fn();
     const adapter = createFeishuAdapter({
       type: 'feishu',
@@ -81,15 +94,27 @@ describe('Feishu image diagnostic', () => {
     await adapter.start?.(onMessage);
     await channelHandlers.get('message')?.(imageNormalizedMessage);
 
-    expect(onMessage).not.toHaveBeenCalled();
-    expect(mockRequest).not.toHaveBeenCalled();
-    expect(mockMessageResourceGet).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(1));
+    const emitted = onMessage.mock.calls[0]?.[0] as {
+      attachments?: Array<{ path: string; type: string; mimeType?: string; size?: number }>;
+    };
+    expect(emitted.attachments).toHaveLength(1);
+    expect(emitted.attachments?.[0]).toMatchObject({
+      type: 'image',
+      mimeType: 'image/png',
+      size: 8,
+    });
+    expect(await readFile(emitted.attachments![0]!.path)).toEqual(Buffer.from('fake-png'));
+    expect(mockMessageResourceGet).toHaveBeenCalledWith({
+      path: { message_id: 'om_image_ws', file_key: 'img_v3_demo' },
+      params: { type: 'image' },
+    });
     expect(mockDownloadResource).not.toHaveBeenCalled();
+    await rm(emitted.attachments![0]!.path, { force: true });
     await adapter.stop?.();
   });
 
-  it('drops an image raw event before the HTTP onMessage seam', async () => {
-    dispatcherHandlers = new Map();
+  it('downloads an HTTP image event and forwards it as an attachment', async () => {
     const onMessage = vi.fn();
     const adapter = createFeishuAdapter({
       type: 'feishu',
@@ -103,9 +128,23 @@ describe('Feishu image diagnostic', () => {
     await adapter.start?.(onMessage);
     await dispatcherHandlers.get('im.message.receive_v1')?.(imageRawEvent);
 
-    expect(onMessage).not.toHaveBeenCalled();
-    expect(mockMessageResourceGet).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(1));
+    const emitted = onMessage.mock.calls[0]?.[0] as {
+      attachments?: Array<{ path: string; type: string; mimeType?: string; size?: number }>;
+    };
+    expect(emitted.attachments).toHaveLength(1);
+    expect(emitted.attachments?.[0]).toMatchObject({
+      type: 'image',
+      mimeType: 'image/png',
+      size: 8,
+    });
+    expect(await readFile(emitted.attachments![0]!.path)).toEqual(Buffer.from('fake-png'));
+    expect(mockMessageResourceGet).toHaveBeenCalledWith({
+      path: { message_id: 'om_image_http', file_key: 'img_v3_demo' },
+      params: { type: 'image' },
+    });
     expect(mockDownloadResource).not.toHaveBeenCalled();
+    await rm(emitted.attachments![0]!.path, { force: true });
     await adapter.stop?.();
   });
 });

@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getPackageDir } from '@earendil-works/pi-coding-agent';
@@ -91,6 +91,63 @@ describe('ChatBridge', () => {
         metadata: { messageId: 'om_1', threadId: 'omt_1' },
       });
     });
+  });
+
+  test('passes image attachments to the Pi CLI as @file arguments', async () => {
+    mockSpawn.mockReturnValue(createChild('pong'));
+    const registry = {
+      getAdapter: vi.fn(() => ({ sendTyping: vi.fn(() => Promise.resolve()) })),
+      send: vi.fn(() => Promise.resolve({ ok: true })),
+    };
+    const bridge = new ChatBridge({ enabled: true }, '/workspace', registry as never);
+    bridge.start();
+
+    await bridge.handleMessage({
+      adapter: 'feishu',
+      sender: 'oc_chat',
+      text: '请看图',
+      attachments: [{ type: 'image', path: '/tmp/feishu-image.png', mimeType: 'image/png' }],
+    });
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      trustedRuntime,
+      [
+        trustedCli,
+        '-p',
+        '--offline',
+        '--no-extensions',
+        '--session',
+        expect.stringMatching(/^\/workspace\/\.pi\/channel-sessions\/feishu-[0-9a-f]{24}\.jsonl$/),
+        '@/tmp/feishu-image.png',
+        '来自即时通讯的用户消息：\n请看图',
+      ],
+      expect.objectContaining({ cwd: '/workspace' }),
+    );
+  });
+
+  test('cleans Feishu temporary image attachments after the prompt finishes', async () => {
+    const attachmentDir = mkdtempSync(join(tmpdir(), 'pi-channels-feishu-image-'));
+    const imagePath = join(attachmentDir, 'image');
+    writeFileSync(imagePath, 'fake-png');
+    mockSpawn.mockReturnValue(createChild('pong'));
+    const registry = {
+      getAdapter: vi.fn(() => ({ sendTyping: vi.fn(() => Promise.resolve()) })),
+      send: vi.fn(() => Promise.resolve({ ok: true })),
+    };
+    const bridge = new ChatBridge({ enabled: true }, '/workspace', registry as never);
+    bridge.start();
+
+    await bridge.handleMessage({
+      adapter: 'feishu',
+      sender: 'oc_chat',
+      text: '请看图',
+      attachments: [{ type: 'image', path: imagePath, mimeType: 'image/png' }],
+    });
+
+    await vi.waitFor(() =>
+      expect(registry.send).toHaveBeenCalledWith(expect.objectContaining({ text: 'pong' })),
+    );
+    expect(existsSync(attachmentDir)).toBe(false);
   });
 
   it('does not execute a project-local Pi binary discovered from cwd', async () => {

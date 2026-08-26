@@ -1,11 +1,13 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getPackageDir } from '@earendil-works/pi-coding-agent';
 import type { ChannelRegistry } from './registry.js';
-import type { BridgeConfig, IncomingMessage } from './types.js';
+import type { BridgeConfig, IncomingAttachment, IncomingMessage } from './types.js';
 
 type BridgeRunResult = {
   ok: boolean;
@@ -202,19 +204,25 @@ export class ChatBridge {
     const bridgeModel = this.config.model ?? resolveDefaultBridgeModel();
     const bridgeProvider = this.config.provider ?? resolveDefaultBridgeProvider(bridgeModel);
     const sessionId = channelSessionId(queued.message);
-    const result = await runPrompt({
-      cwd: this.cwd,
-      prompt: queued.message.text,
-      ...(sessionId
-        ? { sessionFile: channelPromptSessionFile(this.cwd, queued.message, sessionId) }
-        : {}),
-      timeoutMs: this.config.timeoutMs,
-      model: bridgeModel,
-      provider: bridgeProvider,
-      piBin: this.config.piBin,
-      signal: ac.signal,
-      env: this.config.env,
-    });
+    let result: BridgeRunResult;
+    try {
+      result = await runPrompt({
+        cwd: this.cwd,
+        prompt: queued.message.text,
+        ...(queued.message.attachments ? { attachments: queued.message.attachments } : {}),
+        ...(sessionId
+          ? { sessionFile: channelPromptSessionFile(this.cwd, queued.message, sessionId) }
+          : {}),
+        timeoutMs: this.config.timeoutMs,
+        model: bridgeModel,
+        provider: bridgeProvider,
+        piBin: this.config.piBin,
+        signal: ac.signal,
+        env: this.config.env,
+      });
+    } finally {
+      await cleanupBridgeAttachments(queued.message.attachments);
+    }
 
     const reply = result.ok
       ? result.response
@@ -430,6 +438,7 @@ function resolvePiAgentApiBase(configured: string): string | undefined {
 function runPrompt(options: {
   cwd: string;
   prompt: string;
+  attachments?: IncomingAttachment[];
   sessionFile?: string;
   timeoutMs: number;
   model: string | null;
@@ -452,6 +461,9 @@ function runPrompt(options: {
     }
     if (provider) args.push('--provider', provider);
     if (model) args.push('--model', model);
+    for (const attachment of options.attachments ?? []) {
+      if (attachment.type === 'image') args.push(`@${attachment.path}`);
+    }
     args.push(formatBridgePrompt(options.prompt));
     let command: string;
     let commandArgs: string[];
@@ -560,6 +572,18 @@ function formatBridgeErrorReply(error: string | undefined): string {
 
 function formatBridgePrompt(prompt: string): string {
   return `来自即时通讯的用户消息：\n${prompt}`;
+}
+
+async function cleanupBridgeAttachments(
+  attachments: IncomingAttachment[] | undefined,
+): Promise<void> {
+  const tempRoot = resolve(tmpdir());
+  const tempPrefix = join(tempRoot, 'pi-channels-feishu-image-');
+  await Promise.all(
+    (attachments ?? [])
+      .filter((attachment) => resolve(attachment.path).startsWith(tempPrefix))
+      .map((attachment) => rm(dirname(attachment.path), { recursive: true, force: true })),
+  );
 }
 
 function resolveDefaultBridgeModel(): string | null {

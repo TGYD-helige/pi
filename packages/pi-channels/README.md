@@ -16,7 +16,10 @@ Put the `pi-channels` section in `~/.pi/agent/settings.json`, the configured age
 
 - `feishu` - Native Feishu/Lark app messaging backed by the official
   `@larksuiteoapi/node-sdk`. Supports outgoing text messages, WebSocket events
-  by default, and HTTP event callbacks as a fallback.
+  by default, HTTP event callbacks as a fallback, and incoming text, post, and
+  image messages. Incoming images are downloaded to a temporary file and passed
+  to the Pi bridge as image input; the Feishu app must be allowed to download
+  message resources.
 - `wecom` - Native WeCom intelligent bot messaging backed by the official
   `@wecom/aibot-node-sdk`. Supports WebSocket long connection events and active
   Markdown pushes with Bot ID / Secret credentials.
