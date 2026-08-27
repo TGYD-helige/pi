@@ -3,6 +3,8 @@ import path from 'node:path';
 
 const governedTools = new Set(['read', 'fffind', 'ffgrep', 'subagent']);
 const subagentKeys = ['agentScope', 'artifacts', 'async', 'workflowScript'];
+const workflowChildKeys = ['agent', 'agentScope', 'cwd', 'key', 'outputSchema', 'task'];
+const workflowKeys = new Set(['standards', 'spec', 'ponytail']);
 const blocked = {
   block: true,
   reason: 'Read-only review tools may only access the pull request workspace and trusted review inputs',
@@ -34,20 +36,51 @@ function validateSymlinks(directory, root, rootPrefix = `${root}${path.sep}`) {
   }
 }
 
-function safeSearchPath(value) {
+function safeSearchPath(value, workspace, root) {
   if (value === undefined || value === '') return true;
   if (typeof value !== 'string' || value.includes('\0')) return false;
   const trimmed = value.trim();
   if (!trimmed) return true;
   const normalized = trimmed.replaceAll('\\', '/');
-  return !path.isAbsolute(trimmed)
-    && !/^[A-Za-z]:\//.test(normalized)
-    && !normalized.startsWith('~')
-    && !/^[A-Za-z][A-Za-z\d+.-]*:/.test(normalized)
-    && !normalized.split('/').includes('..');
+  if (/^[A-Za-z]:\//.test(normalized)
+    || normalized.startsWith('~')
+    || /^[A-Za-z][A-Za-z\d+.-]*:/.test(normalized)
+    || normalized.split('/').includes('..')) return false;
+  const resolved = path.resolve(workspace, trimmed);
+  return resolved === workspace
+    || resolved.startsWith(`${workspace}${path.sep}`)
+    || resolved === root
+    || resolved.startsWith(`${root}${path.sep}`);
+}
+
+function safeWorkflowScript(value, workspace) {
+  if (typeof value !== 'string') return false;
+  const match = /^\s*return\s+await\s+runs\.all\(([\s\S]+)\);\s*$/.exec(value);
+  if (!match) return false;
+  try {
+    const tasks = JSON.parse(match[1]);
+    return Array.isArray(tasks)
+      && tasks.length === 3
+      && tasks.every((task) => task
+        && !Array.isArray(task)
+        && Object.keys(task).sort().join('\0') === workflowChildKeys.join('\0')
+        && workflowKeys.has(task.key)
+        && task.agent === 'general-purpose'
+        && task.agentScope === 'user'
+        && task.cwd === workspace
+        && typeof task.task === 'string'
+        && task.task.trim()
+        && task.outputSchema
+        && typeof task.outputSchema === 'object'
+        && !Array.isArray(task.outputSchema))
+      && new Set(tasks.map((task) => task.key)).size === 3;
+  } catch {
+    return false;
+  }
 }
 
 export function createReviewToolGuard({ workspace, diffPath, skillPath }) {
+  const workspacePath = path.resolve(workspace);
   const root = realFile(workspace, 'workspace');
   const allowedFiles = new Set([
     realFile(diffPath, 'diff'),
@@ -69,12 +102,11 @@ export function createReviewToolGuard({ workspace, diffPath, skillPath }) {
       return input.agentScope === 'user'
         && input.async === false
         && input.artifacts === false
-        && typeof input.workflowScript === 'string'
-        && input.workflowScript.trim()
+        && safeWorkflowScript(input.workflowScript, workspacePath)
         ? undefined
         : blocked;
     }
-    if (event.toolName !== 'read') return safeSearchPath(event?.input?.path) ? undefined : blocked;
+    if (event.toolName !== 'read') return safeSearchPath(event?.input?.path, workspacePath, root) ? undefined : blocked;
     const requested = event?.input?.path;
     if (typeof requested !== 'string' || !requested || requested.includes('\0')) return blocked;
     try {

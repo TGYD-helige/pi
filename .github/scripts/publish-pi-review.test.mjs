@@ -325,6 +325,8 @@ test('prepares the review prompt outside the workflow', async () => {
     assert.match(prompt, /"enum":\["P0","P1"\]/);
     assert.match(prompt, /Make exactly one synchronous subagent workflow call/);
     assert.match(prompt, /Set agentScope to "user" and artifacts to false/);
+    assert.match(prompt, /Every task must set agentScope to "user"/);
+    assert.match(prompt, /JSON array literal/);
     assert.match(prompt, /Set async to false explicitly/);
     assert.match(prompt, /Do not call emit, subagent_wait, status, or list, and do not retry/);
     assert.doesNotMatch(prompt, /file-only/);
