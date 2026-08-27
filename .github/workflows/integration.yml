@@ -97,17 +97,24 @@ jobs:
           fi
 
   # ──────────────────────────────────────────────────────────────────────
-  # Stage B: single-prompt LLM smoke test against the custom deepseek
-  # provider. This job runs in parallel with the Stage C matrix (both
-  # `needs: pi-runtime` and don't depend on each other) so the LLM
-  # round-trip doesn't gate per-extension verification.
-  # ──────────────────────────────────────────────────────────────────────
-  pi-runtime-smoke:
-    name: Pi runtime smoke (Stage B)
+  integration-approval:
+    name: Approve secret-backed Integration
     needs: pi-runtime
     environment:
       name: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name != github.repository && 'fork-integration' || 'integration' }}
       deployment: false
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Secret-backed Integration approved"
+
+  # Stage B: single-prompt LLM smoke test against the custom deepseek
+  # provider. This job runs in parallel with the Stage C matrix after the
+  # shared approval gate, so the LLM round-trip doesn't gate per-extension
+  # verification.
+  # ──────────────────────────────────────────────────────────────────────
+  pi-runtime-smoke:
+    name: Pi runtime smoke (Stage B)
+    needs: integration-approval
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -234,18 +241,15 @@ jobs:
   #
   # PR runs use pull_request_target so Integration executes exactly once.
   # Same-repository PRs use the unprotected `integration` environment; fork
-  # PRs check out the exact fork SHA and wait for approval on the protected
-  # `fork-integration` environment before either secret-backed job starts.
+  # PRs check out the exact fork SHA and pass one approval gate on the protected
+  # `fork-integration` environment before any secret-backed job starts.
   # ──────────────────────────────────────────────────────────────────────
   extension-tool-matrix:
     name: Extension E2E (${{ matrix.extension }}${{ matrix.provider && format('-{0}', matrix.provider) || '' }}${{ matrix.scenario && format('-{0}', matrix.scenario) || '' }})
-    needs: [detect-extension-matrix, pi-runtime]
+    needs: [detect-extension-matrix, integration-approval]
     if: >
       needs.detect-extension-matrix.outputs.has_extensions == 'true' &&
       vars.PI_INTEGRATION_SKIP_STAGE_C != 'true'
-    environment:
-      name: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name != github.repository && 'fork-integration' || 'integration' }}
-      deployment: false
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:

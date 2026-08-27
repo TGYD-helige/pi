@@ -9,8 +9,11 @@ test('requires environment approval for secret-backed fork integration', async (
   assert.match(workflow, /pull_request_target:\s+branches: \[master, main\]/);
   assert.doesNotMatch(workflow, /\n  pull_request:\n/);
   assert.doesNotMatch(workflow, /github\.event_name != 'pull_request_target' \|\|/);
-  assert.equal(workflow.match(/name: \$\{\{ github\.event_name == 'pull_request_target' && github\.event\.pull_request\.head\.repo\.full_name != github\.repository && 'fork-integration' \|\| 'integration' \}\}/g)?.length, 2);
-  assert.equal(workflow.match(/deployment: false/g)?.length, 2);
+  assert.equal(workflow.match(/name: \$\{\{ github\.event_name == 'pull_request_target' && github\.event\.pull_request\.head\.repo\.full_name != github\.repository && 'fork-integration' \|\| 'integration' \}\}/g)?.length, 1);
+  assert.equal(workflow.match(/deployment: false/g)?.length, 1);
+  assert.match(workflow, /integration-approval:\s+name: Approve secret-backed Integration/);
+  assert.match(workflow, /pi-runtime-smoke:[\s\S]*?needs: integration-approval/);
+  assert.match(workflow, /extension-tool-matrix:[\s\S]*?needs: \[detect-extension-matrix, integration-approval\]/);
   assert.equal(workflow.match(/allow-unsafe-pr-checkout:/g)?.length, 4);
   assert.equal(workflow.match(/persist-credentials: false/g)?.length, 4);
   assert.equal(workflow.match(/ref: \$\{\{ env\.INTEGRATION_CHECKOUT_REF \}\}/g)?.length, 4);
