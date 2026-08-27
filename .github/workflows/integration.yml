@@ -17,9 +17,6 @@ permissions:
 jobs:
   detect-extension-matrix:
     name: Detect extension E2E matrix
-    if: >
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.select.outputs.matrix }}
@@ -42,9 +39,6 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────
   pi-runtime:
     name: Pi runtime integration
-    if: >
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -107,6 +101,9 @@ jobs:
     env:
       PI_INTEGRATION_BASE_URL: ${{ secrets.PI_INTEGRATION_BASE_URL }}
       PI_INTEGRATION_API_KEY: ${{ secrets.PI_INTEGRATION_API_KEY }}
+      LANGFUSE_BASE_URL: ${{ secrets.LANGFUSE_BASE_URL }}
+      LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+      LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
       PI_OFFLINE: '0'
 
     steps:
@@ -156,6 +153,21 @@ jobs:
             }
           }
           EOF
+          cat > "$PI_CODING_AGENT_DIR/settings.json" <<EOF
+          {
+            "pi-telemetry": {
+              "serviceName": "pi-telemetry-ci",
+              "includePayloads": true,
+              "langfuse": {
+                "enabled": true,
+                "publicKey": "\${LANGFUSE_PUBLIC_KEY}",
+                "secretKey": "\${LANGFUSE_SECRET_KEY}",
+                "baseUrl": "\${LANGFUSE_BASE_URL}"
+              }
+            }
+          }
+          EOF
+          pi install "./packages/pi-telemetry"
 
       - name: Verify provider is registered
         if: env.PI_INTEGRATION_BASE_URL != '' && env.PI_INTEGRATION_API_KEY != ''
@@ -202,8 +214,10 @@ jobs:
   # allowlist and assert the tool result; pi-video-gen uses RPC commands
   # instead so local composition never needs a model call.
   #
-  # Skipped on fork PRs (secrets unavailable). Each job duplicates Stage A
-  # setup because matrix jobs don't share workspace state.
+  # Skipped on fork PRs because GitHub does not expose repository secrets to
+  # pull_request workflows from forks. The secret-free selector and Stage A
+  # still run for those PRs. Each matrix job duplicates Stage A setup because
+  # jobs don't share workspace state.
   # ──────────────────────────────────────────────────────────────────────
   extension-tool-matrix:
     name: Extension E2E (${{ matrix.extension }}${{ matrix.provider && format('-{0}', matrix.provider) || '' }}${{ matrix.scenario && format('-{0}', matrix.scenario) || '' }})
@@ -225,8 +239,7 @@ jobs:
       FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
       UNSPLASH_TOKEN: ${{ secrets.UNSPLASH_TOKEN }}
       BROWSERLESS_TOKEN: ${{ secrets.BROWSERLESS_TOKEN }}
-      # LANGFUSE_* is NOT job-level: only the pi-telemetry settings/run/verify
-      # steps receive it, so other extensions and steps never see the keys.
+      # LANGFUSE_* remains step-scoped to commands that start pi.
       PI_OFFLINE: '0'
 
     steps:
@@ -275,6 +288,12 @@ jobs:
           if [ "${{ matrix.provider }}" = "deepseek" ]; then
             WEB_ACCESS_SETTINGS='{
               "search": { "provider": "deepseek" },
+              "fetch": {
+                "summary": {
+                  "provider": "deepseek-integration",
+                  "model": "deepseek-v4-flash"
+                }
+              },
               "providers": {
                 "deepseek": {
                   "baseUrl": "${PI_INTEGRATION_BASE_URL}",
@@ -406,8 +425,8 @@ jobs:
           #    concurrent better-sqlite3 writers on one shared file segfault
           #    the pi process (exit 139), so nothing may point at a default
           #    location like ~/.pi/agent/memories/.
-          # ${LANGFUSE_*} stays literal for pi's settings resolver. Other
-          # matrix legs do not install pi-telemetry and ignore this block.
+          # ${LANGFUSE_*} stays literal for pi's settings resolver. Every
+          # model-backed matrix leg installs pi-telemetry below.
           cat > "$PI_CODING_AGENT_DIR/settings.json" <<EOF
           {
             "pi-teamwork": {
@@ -516,6 +535,9 @@ jobs:
           # heredoc would otherwise clobber the array and the matrix prompt
           # would hang against zero registered extensions).
           pi install "./packages/${{ matrix.extension }}"
+          if [ "${{ matrix.extension }}" != "pi-telemetry" ]; then
+            pi install "./packages/pi-telemetry"
+          fi
           if [ "${{ matrix.extension }}" = "pi-memory" ]; then
             pi install "./packages/pi-memory-mem0"
           fi
@@ -527,6 +549,10 @@ jobs:
 
       - name: Compose preview video (pi-video-gen only)
         if: matrix.extension == 'pi-video-gen'
+        env:
+          LANGFUSE_BASE_URL: ${{ secrets.LANGFUSE_BASE_URL }}
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
         run: |
           set -euo pipefail
           export PI_OFFLINE=1
@@ -723,12 +749,11 @@ jobs:
           # Lets pi-memory-mem0 log turns whose extraction stored nothing —
           # the difference between a quiet pipeline and a broken one.
           DEBUG: 'pi-memory-mem0'
-          # pi-telemetry only: pi expands the ${LANGFUSE_*} placeholders in
-          # settings.json from this step's env at runtime. Emptied for other
-          # extensions so they never see the keys.
-          LANGFUSE_BASE_URL: ${{ matrix.extension == 'pi-telemetry' && secrets.LANGFUSE_BASE_URL || '' }}
-          LANGFUSE_PUBLIC_KEY: ${{ matrix.extension == 'pi-telemetry' && secrets.LANGFUSE_PUBLIC_KEY || '' }}
-          LANGFUSE_SECRET_KEY: ${{ matrix.extension == 'pi-telemetry' && secrets.LANGFUSE_SECRET_KEY || '' }}
+          # Every model-backed matrix run loads pi-telemetry and expands these
+          # placeholders at runtime.
+          LANGFUSE_BASE_URL: ${{ secrets.LANGFUSE_BASE_URL }}
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
         run: |
           set -euo pipefail
           # The firecrawl matrix entry needs a real Firecrawl API key. Skip it
