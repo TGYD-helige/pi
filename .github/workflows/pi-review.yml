@@ -48,6 +48,8 @@ jobs:
           path: pull-request
           fetch-depth: 1
           persist-credentials: false
+          # This job never executes or loads configuration from the fork checkout.
+          allow-unsafe-pr-checkout: true
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
@@ -85,8 +87,8 @@ jobs:
           set -euo pipefail
           npm install --global --ignore-scripts @earendil-works/pi-coding-agent@latest
           npm install --prefix "$PI_CODING_AGENT_DIR/review-runtime" --ignore-scripts pi-subagents@latest
-          pi install npm:@ff-labs/pi-fff
-          pi install npm:@amaster.ai/pi-telemetry
+          pi install npm:@ff-labs/pi-fff@latest
+          pi install npm:@amaster.ai/pi-telemetry@latest
           pi --version
           npm list --prefix "$PI_CODING_AGENT_DIR/review-runtime" pi-subagents --depth=0
 
@@ -152,6 +154,7 @@ jobs:
             },
           };
           fs.writeFileSync(path.join(dir, 'models.json'), `${JSON.stringify(models, null, 2)}\n`, { mode: 0o600 });
+          settings.defaultProjectTrust = 'never';
           settings['pi-telemetry'] = {
             serviceName: 'pi-review-ci',
             includePayloads: true,

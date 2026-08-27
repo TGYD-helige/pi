@@ -20,6 +20,18 @@ async function fixture() {
   return { directory, workspace, diffPath, skillPath, secretPath };
 }
 
+function workflowScript(workspace, overrides = {}) {
+  return `return await runs.all(${JSON.stringify(['standards', 'spec', 'ponytail'].map((key) => ({
+    key,
+    agent: 'general-purpose',
+    agentScope: 'user',
+    cwd: workspace,
+    task: `Review ${key}`,
+    outputSchema: { type: 'object' },
+    ...overrides,
+  })))});`;
+}
+
 test('allows only review files and workspace-local search roots', async () => {
   const paths = await fixture();
   try {
@@ -30,6 +42,16 @@ test('allows only review files and workspace-local search roots', async () => {
     assert.equal(guard({ toolName: 'read', input: { path: paths.skillPath } }, context), undefined);
     assert.equal(guard({ toolName: 'fffind', input: { pattern: 'example' } }, context), undefined);
     assert.equal(guard({ toolName: 'ffgrep', input: { query: 'export', path: 'src/**' } }, context), undefined);
+    assert.equal(guard({ toolName: 'ffgrep', input: { query: 'export', path: paths.workspace } }, context), undefined);
+    assert.equal(guard({
+      toolName: 'subagent',
+      input: {
+        workflowScript: workflowScript(paths.workspace),
+        agentScope: 'user',
+        async: false,
+        artifacts: false,
+      },
+    }, context), undefined);
   } finally {
     await rm(paths.directory, { recursive: true, force: true });
   }
@@ -50,6 +72,12 @@ test('blocks reads and searches that can escape the PR workspace', async () => {
       { toolName: 'fffind', input: { pattern: 'secret', path: ' ../secret' } },
       { toolName: 'ffgrep', input: { query: 'secret', path: ' /proc/self' } },
       { toolName: 'ffgrep', input: { query: 'secret', path: ' ~/secrets' } },
+      { toolName: 'subagent', input: { workflowScript: '', agentScope: 'user', async: false, artifacts: false } },
+      { toolName: 'subagent', input: { workflowScript: 'return [];', agentScope: 'both', async: false, artifacts: false } },
+      { toolName: 'subagent', input: { workflowScript: workflowScript(paths.workspace, { agentScope: 'project' }), agentScope: 'user', async: false, artifacts: false } },
+      { toolName: 'subagent', input: { workflowScript: 'return [];', agentScope: 'user', async: true, artifacts: false } },
+      { toolName: 'subagent', input: { workflowScript: 'return [];', agentScope: 'user', async: false, artifacts: true } },
+      { toolName: 'subagent', input: { workflowScriptPath: paths.secretPath, agentScope: 'user', async: false, artifacts: false } },
     ]) {
       assert.deepEqual(guard(event, context), {
         block: true,
