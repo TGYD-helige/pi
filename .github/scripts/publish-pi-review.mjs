@@ -374,6 +374,7 @@ export async function preparePiReview({
     'for an independent over-engineering pass. Make exactly one synchronous subagent workflow call containing exactly three tasks,',
     `Before spawning reviewers, use read to read the full ponytail-review skill file at ${ponytailSkillPath} and copy its rules into Task 3.`,
     'all using the general-purpose agent. Its workflowScript must call runs.all once. Set async to false explicitly.',
+    'Set agentScope to "user" and artifacts to false on the subagent workflow call.',
     'Task 1 reviews Standards, task 2 reviews Spec, and task 3 reviews Ponytail. Do not call emit, subagent_wait, status, or list, and do not retry.',
     'Set cwd on every task to the PR workspace named below.',
     'Reviewer children have only the read, fffind, and ffgrep tools plus the runtime-provided structured_output tool.',

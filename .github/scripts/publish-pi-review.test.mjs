@@ -324,6 +324,7 @@ test('prepares the review prompt outside the workflow', async () => {
     assert.match(prompt, /"const":"PONYTAIL"/);
     assert.match(prompt, /"enum":\["P0","P1"\]/);
     assert.match(prompt, /Make exactly one synchronous subagent workflow call/);
+    assert.match(prompt, /Set agentScope to "user" and artifacts to false/);
     assert.match(prompt, /Set async to false explicitly/);
     assert.match(prompt, /Do not call emit, subagent_wait, status, or list, and do not retry/);
     assert.doesNotMatch(prompt, /file-only/);
@@ -341,8 +342,11 @@ test('prepares the review prompt outside the workflow', async () => {
   assert.match(workflow, /completionGuard: false/);
   assert.match(workflow, /path: pull-request/);
   assert.match(workflow, /repository: \$\{\{ github\.event\.pull_request\.head\.repo\.full_name \}\}/);
-  assert.match(workflow, /pi install npm:@ff-labs\/pi-fff/);
-  assert.match(workflow, /pi install npm:@amaster\.ai\/pi-telemetry/);
+  assert.match(workflow, /allow-unsafe-pr-checkout: true/);
+  assert.match(workflow, /pi install npm:@ff-labs\/pi-fff@latest/);
+  assert.match(workflow, /pi install npm:@amaster\.ai\/pi-telemetry@latest/);
+  assert.match(workflow, /settings\.defaultProjectTrust = 'never'/);
+  assert.match(workflow, /working-directory: \$\{\{ github\.workspace \}\}\/pull-request/);
   assert.match(workflow, /tools: read,fffind,ffgrep/);
   assert.match(workflow, /Read every diff hunk line by line/);
   assert.match(workflow, /concrete input, state, timing, or platform/);

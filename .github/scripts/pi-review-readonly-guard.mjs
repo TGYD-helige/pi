@@ -1,7 +1,8 @@
 import { lstatSync, readdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 
-const governedTools = new Set(['read', 'fffind', 'ffgrep']);
+const governedTools = new Set(['read', 'fffind', 'ffgrep', 'subagent']);
+const subagentKeys = ['agentScope', 'artifacts', 'async', 'workflowScript'];
 const blocked = {
   block: true,
   reason: 'Read-only review tools may only access the pull request workspace and trusted review inputs',
@@ -61,6 +62,17 @@ export function createReviewToolGuard({ workspace, diffPath, skillPath }) {
       if (realpathSync(context?.cwd) !== root) return blocked;
     } catch {
       return blocked;
+    }
+    if (event.toolName === 'subagent') {
+      const input = event.input;
+      if (!input || Object.keys(input).sort().join('\0') !== subagentKeys.join('\0')) return blocked;
+      return input.agentScope === 'user'
+        && input.async === false
+        && input.artifacts === false
+        && typeof input.workflowScript === 'string'
+        && input.workflowScript.trim()
+        ? undefined
+        : blocked;
     }
     if (event.toolName !== 'read') return safeSearchPath(event?.input?.path) ? undefined : blocked;
     const requested = event?.input?.path;
