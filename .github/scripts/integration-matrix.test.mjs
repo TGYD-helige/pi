@@ -68,6 +68,7 @@ test('runs the full matrix for shared and integration infrastructure changes', (
     'packages/shared/src/settings.ts',
     '.github/workflows/integration.yml',
     '.github/actions/setup-pi-build/action.yml',
+    'package.json',
     'pnpm-lock.yaml',
   ]) {
     assert.equal(selectIntegrationMatrix([file]).length, fullMatrix.length, file);
