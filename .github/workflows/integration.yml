@@ -3,8 +3,6 @@ name: Integration
 on:
   push:
     branches: [master, main]
-  pull_request:
-    branches: [master, main]
   pull_request_target:
     branches: [master, main]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -24,9 +22,6 @@ env:
 jobs:
   detect-extension-matrix:
     name: Detect extension E2E matrix
-    if: >
-      github.event_name != 'pull_request_target' ||
-      github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.select.outputs.matrix }}
@@ -53,9 +48,6 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────
   pi-runtime:
     name: Pi runtime integration
-    if: >
-      github.event_name != 'pull_request_target' ||
-      github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -113,11 +105,8 @@ jobs:
   pi-runtime-smoke:
     name: Pi runtime smoke (Stage B)
     needs: pi-runtime
-    if: >
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
     environment:
-      name: ${{ github.event_name == 'pull_request_target' && 'fork-integration' || 'integration' }}
+      name: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name != github.repository && 'fork-integration' || 'integration' }}
       deployment: false
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -243,21 +232,19 @@ jobs:
   # allowlist and assert the tool result; pi-video-gen uses RPC commands
   # instead so local composition never needs a model call.
   #
-  # Fork pull_request runs do not receive repository secrets, so their normal
-  # Stage B/C jobs remain skipped. A parallel pull_request_target run checks
-  # out the exact fork SHA and waits for approval on the protected
+  # PR runs use pull_request_target so Integration executes exactly once.
+  # Same-repository PRs use the unprotected `integration` environment; fork
+  # PRs check out the exact fork SHA and wait for approval on the protected
   # `fork-integration` environment before either secret-backed job starts.
   # ──────────────────────────────────────────────────────────────────────
   extension-tool-matrix:
     name: Extension E2E (${{ matrix.extension }}${{ matrix.provider && format('-{0}', matrix.provider) || '' }}${{ matrix.scenario && format('-{0}', matrix.scenario) || '' }})
     needs: [detect-extension-matrix, pi-runtime]
     if: >
-      (github.event_name != 'pull_request' ||
-       github.event.pull_request.head.repo.full_name == github.repository) &&
       needs.detect-extension-matrix.outputs.has_extensions == 'true' &&
       vars.PI_INTEGRATION_SKIP_STAGE_C != 'true'
     environment:
-      name: ${{ github.event_name == 'pull_request_target' && 'fork-integration' || 'integration' }}
+      name: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name != github.repository && 'fork-integration' || 'integration' }}
       deployment: false
     runs-on: ubuntu-latest
     timeout-minutes: 15
