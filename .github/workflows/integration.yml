@@ -279,7 +279,7 @@ jobs:
 
           # pi-web-access settings vary by matrix `provider`: DeepSeek search
           # reuses the integration gateway, DashScope search rides the same
-          # gateway with an explicit qwen3.8-max model, while Firecrawl and
+          # gateway with an explicit qwen3.8-flash model, while Firecrawl and
           # Unsplash configure their own API keys. Keys are expanded by pi at
           # runtime.
           # (Single-quoted heredoc-var: placeholders like ${FIRECRAWL_API_KEY}
@@ -308,7 +308,7 @@ jobs:
                 "dashscope": {
                   "baseUrl": "${PI_INTEGRATION_BASE_URL}",
                   "apiKey": "${PI_INTEGRATION_API_KEY}",
-                  "model": "qwen3.8-max"
+                  "model": "qwen3.8-flash"
                 }
               }
             }'
