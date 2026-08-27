@@ -261,8 +261,8 @@ describe('telemetry', () => {
 
   it('retries a failed terminal Langfuse flush within the terminal handler', async () => {
     const client = new FakeLangfuseSdkClient();
-    client.flushFailuresRemaining = 2;
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    client.flushFailuresRemaining = 3;
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const exporter = new LangfuseSdkRuntimeEventExporter(
       {
         enabled: true,
@@ -286,12 +286,45 @@ describe('telemetry', () => {
       details: { output: 'done' },
     });
 
-    expect(client.flushed).toBe(3);
-    expect(warn).toHaveBeenCalledTimes(2);
-    expect(warn).toHaveBeenNthCalledWith(
+    expect(client.flushed).toBe(4);
+    expect(log).toHaveBeenCalledTimes(3);
+    expect(log).toHaveBeenNthCalledWith(
       1,
-      'Langfuse telemetry flush failed (attempt 1/3): transient flush failure',
+      '[pi-telemetry] Langfuse telemetry flush failed (attempt 1/4): transient flush failure',
     );
+  });
+
+  it('rejects when every terminal Langfuse flush attempt is exhausted', async () => {
+    const client = new FakeLangfuseSdkClient();
+    client.flushFailuresRemaining = 4;
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const exporter = new LangfuseSdkRuntimeEventExporter(
+      {
+        enabled: true,
+        publicKey: 'public',
+        secretKey: 'secret',
+        baseUrl: 'https://langfuse.example.com',
+        flushAt: 10,
+        flushIntervalMs: 60_000,
+      },
+      client,
+    );
+
+    await expect(
+      exporter.publish({
+        id: 'turn-end-exhausted',
+        traceId,
+        type: 'chat_turn_completed',
+        sessionId: 'session-1',
+        conversationId: 'conversation-1',
+        createdAt: '2026-05-02T00:00:02.000Z',
+        durationMs: 2000,
+        details: { output: 'done' },
+      }),
+    ).rejects.toThrow('transient flush failure');
+
+    expect(client.flushed).toBe(4);
+    expect(log).toHaveBeenCalledTimes(4);
   });
 
   it('flushes Langfuse SDK telemetry after point-in-time lifecycle events', async () => {

@@ -218,6 +218,19 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   let pendingInput: string | undefined;
   let lastModelConfig: RuntimeModelConfig = { provider: 'unknown', model: 'unknown' };
 
+  const tryReserveTerminalGeneration = (generationIndex: number): (() => void) | undefined => {
+    if (generationIndex <= terminalGenerationCounter) {
+      return undefined;
+    }
+    const previousTerminalGenerationCounter = terminalGenerationCounter;
+    terminalGenerationCounter = generationIndex;
+    return () => {
+      if (terminalGenerationCounter === generationIndex) {
+        terminalGenerationCounter = previousTerminalGenerationCounter;
+      }
+    };
+  };
+
   const publishCompletedGeneration = async (message: unknown): Promise<boolean> => {
     if (!currentTraceId || llmGenerationCounter <= terminalGenerationCounter) {
       return false;
@@ -231,16 +244,18 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     }
 
     const generationIndex = llmGenerationCounter;
-    const previousTerminalGenerationCounter = terminalGenerationCounter;
-    // Reserve the terminal before awaiting the exporter. message_end and turn_end may
-    // be dispatched close together; only one of them may close this generation.
-    terminalGenerationCounter = generationIndex;
     const content = simplifyContent(msg.content) ?? extractOutput(message);
     const usage = msg.usage as Record<string, unknown> | undefined;
     const mapped = usage ? mapUsage(usage) : undefined;
     const output: JsonObject = {};
     if (content !== undefined) output.content = content;
     if (usage !== undefined) output.usage = usage as JsonValue;
+    // Reserve only after synchronous extraction succeeds and immediately before
+    // the first await. message_end and turn_end may otherwise double-close it.
+    const releaseReservation = tryReserveTerminalGeneration(generationIndex);
+    if (!releaseReservation) {
+      return false;
+    }
 
     try {
       await exporter.publish({
@@ -262,12 +277,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
         ...(typeof msg.stopReason === 'string' ? { stopReason: msg.stopReason } : {}),
       });
     } catch (error) {
-      // Keep the synchronous reservation for duplicate suppression, but release
-      // only our own reservation when delivery itself failed. A later turn_end
-      // can then retry the same terminal from its authoritative assistant message.
-      if (terminalGenerationCounter === generationIndex) {
-        terminalGenerationCounter = previousTerminalGenerationCounter;
-      }
+      releaseReservation();
       throw error;
     }
     return true;
@@ -350,11 +360,17 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
 
   pi.on('turn_end', async (event) => {
     if (!currentTraceId) return;
+    const now = Date.now();
     // Some executor shutdown paths can reach turn_end before the message_end
     // listener has durably exported its terminal. Close from the same assistant
     // message first so the lifecycle flush cannot leave a span-only trace.
-    await publishCompletedGeneration(event.message);
-    const now = Date.now();
+    try {
+      await publishCompletedGeneration(event.message);
+    } catch (error) {
+      console.error(
+        `[pi-telemetry] failed to publish generation terminal during turn_end: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     const durationMs = traceStartTime ? now - traceStartTime : undefined;
     const output = extractOutput(event.message);
 
@@ -459,24 +475,29 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     if (!currentTraceId) return;
     if (event.status < 400) return;
     const generationIndex = llmGenerationCounter;
-    if (generationIndex <= terminalGenerationCounter) return;
-    terminalGenerationCounter = generationIndex;
+    const releaseReservation = tryReserveTerminalGeneration(generationIndex);
+    if (!releaseReservation) return;
 
-    await exporter.publish({
-      id: randomUUID(),
-      traceId: currentTraceId,
-      ...runtimeCorrelation,
-      sessionId: localSessionId,
-      conversationId: localSessionId,
-      ...(isSubagent
-        ? { ...(parentSessionId ? { parentSessionId } : {}), childSessionId: localSessionId }
-        : {}),
-      llmGenerationId: `gen-${generationIndex}`,
-      status: 'failed',
-      createdAt: new Date().toISOString(),
-      model: modelConfigFromCtx(ctx),
-      error: `HTTP ${event.status}`,
-    });
+    try {
+      await exporter.publish({
+        id: randomUUID(),
+        traceId: currentTraceId,
+        ...runtimeCorrelation,
+        sessionId: localSessionId,
+        conversationId: localSessionId,
+        ...(isSubagent
+          ? { ...(parentSessionId ? { parentSessionId } : {}), childSessionId: localSessionId }
+          : {}),
+        llmGenerationId: `gen-${generationIndex}`,
+        status: 'failed',
+        createdAt: new Date().toISOString(),
+        model: modelConfigFromCtx(ctx),
+        error: `HTTP ${event.status}`,
+      });
+    } catch (error) {
+      releaseReservation();
+      throw error;
+    }
   });
 
   pi.on('message_end', async (event) => {

@@ -73,6 +73,10 @@ describe('telemetryExtension', () => {
     );
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   test('registers expected event handlers', () => {
     telemetryExtension(mockPi as any);
 
@@ -437,12 +441,77 @@ describe('telemetryExtension', () => {
       status: 429,
       headers: {},
     });
+    const message = {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'provider rejected' }],
+      usage: { input: 10, output: 2 },
+    };
+    await fireEvent('message_end', { type: 'message_end', message });
+    await fireEvent('turn_end', {
+      type: 'turn_end',
+      turnIndex: 0,
+      message,
+      toolResults: [],
+    });
 
     const events = getPublishedEvents();
     const llmEvents = events.filter((e) => 'llmGenerationId' in e);
+    expect(llmEvents).toHaveLength(2);
     expect(llmEvents[1]).toMatchObject({
       status: 'failed',
       error: 'HTTP 429',
+    });
+  });
+
+  it('releases a failed provider-terminal reservation so message_end can retry', async () => {
+    const exporter = {
+      publish: vi
+        .fn()
+        .mockResolvedValueOnce(undefined)
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new Error('failed terminal publish failed'))
+        .mockResolvedValue(undefined),
+      flush: vi.fn(() => Promise.resolve()),
+      close: vi.fn(() => Promise.resolve()),
+    };
+    (createLangfuseExporter as ReturnType<typeof vi.fn>).mockReturnValue(exporter);
+    telemetryExtension(mockPi as any);
+    await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
+    await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
+    await fireEvent('before_provider_request', {
+      type: 'before_provider_request',
+      payload: {},
+    });
+
+    await expect(
+      fireEvent('after_provider_response', {
+        type: 'after_provider_response',
+        status: 503,
+        headers: {},
+      }),
+    ).rejects.toThrow('failed terminal publish failed');
+
+    const message = {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'fallback terminal' }],
+      usage: { input: 10, output: 2 },
+    };
+    await fireEvent('message_end', { type: 'message_end', message });
+    await fireEvent('turn_end', {
+      type: 'turn_end',
+      turnIndex: 0,
+      message,
+      toolResults: [],
+    });
+
+    const terminalAttempts = exporter.publish.mock.calls
+      .map(([event]) => event as RuntimeTelemetryEvent)
+      .filter((event) => 'llmGenerationId' in event && event.status !== 'started');
+    expect(terminalAttempts).toHaveLength(2);
+    expect(terminalAttempts[0]).toMatchObject({ llmGenerationId: 'gen-1', status: 'failed' });
+    expect(terminalAttempts[1]).toMatchObject({ llmGenerationId: 'gen-1', status: 'completed' });
+    expect(exporter.publish.mock.calls.at(-1)?.[0]).toMatchObject({
+      type: 'chat_turn_completed',
     });
   });
 
@@ -792,6 +861,52 @@ describe('telemetryExtension', () => {
     expect(exporter.publish.mock.calls.at(-1)?.[0]).toMatchObject({
       type: 'chat_turn_completed',
     });
+  });
+
+  it('keeps the turn lifecycle when its terminal fallback fails without inflating duration', async () => {
+    let now = 1_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const exporter = {
+      publish: vi.fn(async (event: RuntimeTelemetryEvent) => {
+        if ('llmGenerationId' in event && event.status === 'completed') {
+          now = 2_000;
+          throw new Error('turn terminal publish failed');
+        }
+      }),
+      flush: vi.fn(() => Promise.resolve()),
+      close: vi.fn(() => Promise.resolve()),
+    };
+    (createLangfuseExporter as ReturnType<typeof vi.fn>).mockReturnValue(exporter);
+    telemetryExtension(mockPi as any);
+    await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
+    await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: 500 });
+    await fireEvent('before_provider_request', {
+      type: 'before_provider_request',
+      payload: {},
+    });
+
+    await expect(
+      fireEvent('turn_end', {
+        type: 'turn_end',
+        turnIndex: 0,
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'terminal fallback' }],
+          usage: { input: 10, output: 2 },
+        },
+        toolResults: [],
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(exporter.publish.mock.calls.at(-1)?.[0]).toMatchObject({
+      type: 'chat_turn_completed',
+      createdAt: '1970-01-01T00:00:01.000Z',
+      durationMs: 500,
+    });
+    expect(log).toHaveBeenCalledWith(
+      '[pi-telemetry] failed to publish generation terminal during turn_end: turn terminal publish failed',
+    );
   });
 
   test('message_end keeps content array when it includes tool_use blocks', async () => {
