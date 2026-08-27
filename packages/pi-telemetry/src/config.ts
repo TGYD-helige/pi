@@ -15,7 +15,6 @@ export interface OtelConfig {
   headers?: Record<string, string>;
   flushAt?: number;
   flushIntervalMs?: number;
-  errorLabel?: string;
 }
 
 export interface TelemetryConfig {

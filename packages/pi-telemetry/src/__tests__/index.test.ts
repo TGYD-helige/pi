@@ -1,27 +1,83 @@
+import { getLangfuseTracerProvider, setLangfuseTracerProvider } from '@langfuse/tracing';
+import { SpanStatusCode } from '@opentelemetry/api';
+import {
+  BasicTracerProvider,
+  InMemorySpanExporter,
+  type ReadableSpan,
+  SimpleSpanProcessor,
+} from '@opentelemetry/sdk-trace-base';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   CompositeRuntimeEventExporter,
   NoopRuntimeEventExporter,
   type RuntimeTelemetryEvent,
 } from '../index.js';
+import { OtelRuntimeEventExporter, TelemetryIdGenerator } from '../langfuse/exporters.js';
+import { MAX_CLOSE_MS } from '../langfuse/types.js';
+import { normalizeOtelTracesEndpoint } from '../langfuse/utils.js';
 import {
   createRuntimeEventExporterFromEnv as createLangfuseRuntimeEventExporterFromEnv,
-  type LangfuseSdkClient,
-  type LangfuseSdkGenerationClient,
-  LangfuseSdkRuntimeEventExporter,
-  type LangfuseSdkSpanClient,
-  type LangfuseSdkTraceClient,
   resolveLangfuseConfig,
+  resolveLangfuseExporterConfig,
 } from '../langfuse.js';
 import {
   createOtelRuntimeEventExporterFromEnv,
-  OtelRuntimeEventExporter,
+  createTelemetryExporter,
+  type OtelExporterConfig,
   resolveOtelConfig,
+  resolveOtelExporterConfig,
 } from '../otel.js';
+
+const { delayMock } = vi.hoisted(() => ({
+  delayMock: vi.fn(() => Promise.resolve()),
+}));
+
+vi.mock('node:timers/promises', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:timers/promises')>()),
+  setTimeout: delayMock,
+}));
 
 const traceId = '11111111111111111111111111111111';
 
+// Drives the exporter with an in-memory SDK pipeline: spans land in
+// `inMemory` as soon as they end, so tests assert on finished spans directly
+// instead of intercepting HTTP requests (the SDK owns the transport now).
+function makeExporter(configOverrides: Partial<OtelExporterConfig> = {}) {
+  const inMemory = new InMemorySpanExporter();
+  const provider = new BasicTracerProvider({
+    spanProcessors: [new SimpleSpanProcessor(inMemory)],
+  });
+  const exporter = new OtelRuntimeEventExporter(
+    {
+      enabled: true,
+      endpoint: '',
+      flushAt: 10,
+      flushIntervalMs: 60_000,
+      ...configOverrides,
+    },
+    { provider },
+  );
+  return { exporter, inMemory };
+}
+
+function completedTurnEvent(id: string): RuntimeTelemetryEvent {
+  return {
+    id,
+    traceId,
+    type: 'chat_turn_completed',
+    sessionId: 'session-1',
+    createdAt: '2026-05-02T00:00:01.000Z',
+  };
+}
+
+function hrTimeToMs([seconds, nanos]: [number, number]): number {
+  return seconds * 1000 + nanos / 1_000_000;
+}
+
 afterEach(() => {
+  delete process.env.PI_TELEMETRY_TRACEPARENT;
+  setLangfuseTracerProvider(null);
+  delayMock.mockClear();
   vi.restoreAllMocks();
 });
 
@@ -105,196 +161,46 @@ describe('telemetry', () => {
     });
   });
 
-  it('creates Langfuse SDK exporter from environment', () => {
+  it('falls back from invalid settings batch sizes', () => {
+    expect(
+      resolveLangfuseExporterConfig({
+        langfuse: {
+          enabled: true,
+          publicKey: 'public',
+          secretKey: 'secret',
+          flushAt: 0,
+        },
+      }).flushAt,
+    ).toBe(20);
+    expect(
+      resolveOtelExporterConfig({
+        otel: { enabled: true, endpoint: 'https://otel.example.com', flushAt: -1 },
+      }).flushAt,
+    ).toBe(20);
+    expect(
+      resolveOtelExporterConfig({
+        otel: { enabled: true, endpoint: 'https://otel.example.com', flushAt: 0.5 },
+      }).flushAt,
+    ).toBe(20);
+  });
+
+  it('creates a Langfuse OTEL exporter from environment', async () => {
     expect(createLangfuseRuntimeEventExporterFromEnv({ LANGFUSE_ENABLED: 'true' })).toBeInstanceOf(
       NoopRuntimeEventExporter,
     );
-    expect(
-      createLangfuseRuntimeEventExporterFromEnv({
-        LANGFUSE_ENABLED: 'true',
-        LANGFUSE_PUBLIC_KEY: 'public',
-        LANGFUSE_SECRET_KEY: 'secret',
-      }),
-    ).toBeInstanceOf(LangfuseSdkRuntimeEventExporter);
-  });
-
-  it('strips payloads when includePayloads is false in SDK transport', async () => {
-    const client = new FakeLangfuseSdkClient();
-    const exporter = new LangfuseSdkRuntimeEventExporter(
-      {
-        enabled: true,
-        publicKey: 'public',
-        secretKey: 'secret',
-        baseUrl: 'https://langfuse.example.com',
-        flushAt: 10,
-        flushIntervalMs: 60_000,
-        includePayloads: false,
-      },
-      client,
-    );
-
-    await exporter.publish({
-      id: 'event-1',
-      traceId,
-      type: 'chat_turn_started',
-      sessionId: 'session-1',
-      conversationId: 'conversation-1',
-      createdAt: '2026-05-02T00:00:00.000Z',
-      details: { input: 'secret prompt', output: 'draft', content: 'raw content', kept: true },
+    // The Langfuse write path is the official stack: a BasicTracerProvider
+    // carrying a LangfuseSpanProcessor, which wraps a BatchSpanProcessor +
+    // OTLPTraceExporter with Langfuse auth against
+    // `<baseUrl>/api/public/otel/v1/traces`. Constructing it with fake keys is
+    // fine offline as long as nothing is published through it.
+    const exporter = createLangfuseRuntimeEventExporterFromEnv({
+      LANGFUSE_ENABLED: 'true',
+      LANGFUSE_PUBLIC_KEY: 'public',
+      LANGFUSE_SECRET_KEY: 'secret',
+      LANGFUSE_BASE_URL: 'https://langfuse.example.com/',
     });
-    await exporter.publish({
-      id: 'tool-event-1',
-      traceId,
-      sessionId: 'session-1',
-      conversationId: 'conversation-1',
-      toolCallId: 'call-1',
-      toolName: 'run_shell',
-      status: 'started',
-      createdAt: '2026-05-02T00:00:00.100Z',
-      args: { command: 'cat private.txt' },
-      details: { args: { command: 'cat private.txt' }, kept: true },
-    });
-    await exporter.publish({
-      id: 'tool-event-2',
-      traceId,
-      sessionId: 'session-1',
-      conversationId: 'conversation-1',
-      toolCallId: 'call-2',
-      toolName: 'run_shell',
-      status: 'failed',
-      createdAt: '2026-05-02T00:00:00.200Z',
-      error: 'complete failed result with secret',
-      details: {
-        kept: true,
-        apiKey: 'sdk-secret',
-        nested: { content: 'secret output', token: 'nested-secret', safe: 'metadata' },
-      },
-    });
-
-    const trace = client.traces[0];
-    expect(trace?.body.input).toBeUndefined();
-    const toolSpan = trace?.spans[0]?.spans[0];
-    expect(toolSpan?.body.input).toBeUndefined();
-    const serialized = JSON.stringify(client.traces);
-    expect(serialized).not.toContain('complete failed result');
-    expect(serialized).not.toContain('secret output');
-    expect(serialized).not.toContain('sdk-secret');
-    expect(serialized).not.toContain('nested-secret');
-  });
-
-  it('allows redaction hooks to drop telemetry events in SDK transport', async () => {
-    const client = new FakeLangfuseSdkClient();
-    const exporter = new LangfuseSdkRuntimeEventExporter(
-      {
-        enabled: true,
-        publicKey: 'public',
-        secretKey: 'secret',
-        baseUrl: 'https://langfuse.example.com',
-        flushAt: 10,
-        flushIntervalMs: 60_000,
-        redactEvent: (event) => (event.id === 'drop-me' ? undefined : event),
-      },
-      client,
-    );
-
-    await exporter.publish({
-      id: 'drop-me',
-      traceId,
-      type: 'chat_turn_started',
-      sessionId: 'session-1',
-      conversationId: 'conversation-1',
-      createdAt: '2026-05-02T00:00:00.000Z',
-      details: { input: 'hello' },
-    });
-    await exporter.publish({
-      id: 'keep-me',
-      traceId,
-      type: 'chat_turn_started',
-      sessionId: 'session-1',
-      conversationId: 'conversation-1',
-      createdAt: '2026-05-02T00:00:01.000Z',
-      details: { input: 'world' },
-    });
-
-    expect(client.traces).toHaveLength(1);
-    expect(client.traces[0]?.body.input).toBe('world');
-  });
-
-  it('flushes Langfuse SDK telemetry after terminal events', async () => {
-    const client = new FakeLangfuseSdkClient();
-    const exporter = new LangfuseSdkRuntimeEventExporter(
-      {
-        enabled: true,
-        publicKey: 'public',
-        secretKey: 'secret',
-        baseUrl: 'https://langfuse.example.com',
-        flushAt: 10,
-        flushIntervalMs: 60_000,
-      },
-      client,
-    );
-
-    await exporter.publish({
-      id: 'turn-start',
-      traceId,
-      type: 'chat_turn_started',
-      sessionId: 'session-1',
-      conversationId: 'conversation-1',
-      createdAt: '2026-05-02T00:00:00.000Z',
-      details: { input: 'hello' },
-    });
-    expect(client.flushed).toBe(0);
-
-    await exporter.publish({
-      id: 'turn-end',
-      traceId,
-      type: 'chat_turn_completed',
-      sessionId: 'session-1',
-      conversationId: 'conversation-1',
-      createdAt: '2026-05-02T00:00:02.000Z',
-      durationMs: 2000,
-      details: { output: 'done' },
-    });
-
-    expect(client.flushed).toBe(1);
-  });
-
-  it('flushes Langfuse SDK telemetry after point-in-time lifecycle events', async () => {
-    const client = new FakeLangfuseSdkClient();
-    const exporter = new LangfuseSdkRuntimeEventExporter(
-      {
-        enabled: true,
-        publicKey: 'public',
-        secretKey: 'secret',
-        baseUrl: 'https://langfuse.example.com',
-        flushAt: 10,
-        flushIntervalMs: 60_000,
-      },
-      client,
-    );
-
-    await exporter.publish({
-      id: 'turn-start',
-      traceId,
-      type: 'chat_turn_started',
-      sessionId: 'session-1',
-      conversationId: 'conversation-1',
-      createdAt: '2026-05-02T00:00:00.000Z',
-      details: { input: 'hello' },
-    });
-    expect(client.flushed).toBe(0);
-
-    await exporter.publish({
-      id: 'turn-steered',
-      traceId,
-      type: 'chat_turn_steered',
-      sessionId: 'session-1',
-      conversationId: 'conversation-1',
-      createdAt: '2026-05-02T00:00:01.000Z',
-      details: { input: 'use claude', turnMode: 'steer' },
-    });
-
-    expect(client.flushed).toBe(1);
+    expect(exporter).toBeInstanceOf(OtelRuntimeEventExporter);
+    await expect(exporter.close?.()).resolves.toBeUndefined();
   });
 
   it('excludes OTEL payloads by default', () => {
@@ -308,7 +214,7 @@ describe('telemetry', () => {
     });
   });
 
-  it('exports completed spans through a generic OTEL traces endpoint', async () => {
+  it('creates a generic OTEL exporter from environment and normalizes the endpoint', async () => {
     expect(
       resolveOtelConfig({
         OTEL_EXPORTER_OTLP_ENDPOINT: 'https://otel.example.com',
@@ -327,57 +233,6 @@ describe('telemetry', () => {
       includePayloads: false,
     });
 
-    const requests: Array<{
-      input: string;
-      init: { headers: Record<string, string>; body: string };
-    }> = [];
-    const exporter = createOtelRuntimeEventExporterFromEnv(
-      {
-        OTEL_EXPORTER_OTLP_ENDPOINT: 'https://otel.example.com',
-        OTEL_EXPORTER_OTLP_HEADERS: 'authorization=Bearer%20token',
-        OTEL_SERVICE_NAME: 'pi-test',
-        TELEMETRY_INCLUDE_PAYLOADS: 'false',
-      },
-      async (input, init) => {
-        requests.push({ input, init });
-        return { ok: true, status: 200, text: async () => '' };
-      },
-    );
-
-    await exporter.publish({
-      id: 'otel-event-1',
-      traceId,
-      type: 'chat_turn_started',
-      sessionId: 'session-1',
-      conversationId: 'conversation-1',
-      createdAt: '2026-05-02T00:00:00.000Z',
-      details: { input: 'hello' },
-    });
-    await exporter.publish({
-      id: 'otel-event-2',
-      traceId,
-      type: 'chat_turn_completed',
-      sessionId: 'session-1',
-      conversationId: 'conversation-1',
-      createdAt: '2026-05-02T00:00:01.000Z',
-      details: { output: 'world' },
-    });
-    await exporter.flush?.();
-
-    expect(exporter).toBeInstanceOf(OtelRuntimeEventExporter);
-    expect(requests[0]?.input).toBe('https://otel.example.com/v1/traces');
-    expect(requests[0]?.init.headers.authorization).toBe('Bearer token');
-    const payload = JSON.parse(requests[0]?.init.body ?? '{}');
-    const resourceAttributes = payload.resourceSpans[0].resource.attributes;
-    const span = payload.resourceSpans[0].scopeSpans[0].spans[0];
-    expect(getStringAttribute({ attributes: resourceAttributes }, 'service.name')).toBe('pi-test');
-    expect(getStringAttribute(span, 'langfuse.observation.input')).toBeUndefined();
-    expect(getStringAttribute(span, 'langfuse.observation.output')).toBeUndefined();
-    expect(requests[0]?.init.body).not.toContain('hello');
-    expect(requests[0]?.init.body).not.toContain('world');
-  });
-
-  it('keeps OTEL disabled without an endpoint and preserves trace endpoint paths', async () => {
     expect(createOtelRuntimeEventExporterFromEnv({})).toBeInstanceOf(NoopRuntimeEventExporter);
     expect(
       createOtelRuntimeEventExporterFromEnv({
@@ -386,887 +241,152 @@ describe('telemetry', () => {
       }),
     ).toBeInstanceOf(NoopRuntimeEventExporter);
 
-    const requests: Array<{ input: string }> = [];
-    const exporter = new OtelRuntimeEventExporter(
-      {
-        enabled: true,
-        endpoint: 'https://otel.example.com/v1/traces',
-        flushAt: 10,
-        flushIntervalMs: 60_000,
-      },
-      async (input) => {
-        requests.push({ input });
-        return { ok: true, status: 200, text: async () => '' };
-      },
-    );
-
-    await exporter.publish({
-      id: 'otel-event-1',
-      traceId,
-      type: 'chat_turn_completed',
-      sessionId: 'session-1',
-      createdAt: '2026-05-02T00:00:01.000Z',
+    const exporter = createOtelRuntimeEventExporterFromEnv({
+      OTEL_EXPORTER_OTLP_ENDPOINT: 'https://otel.example.com',
+      OTEL_EXPORTER_OTLP_HEADERS: 'authorization=Bearer%20token',
+      OTEL_SERVICE_NAME: 'pi-test',
     });
-    await exporter.flush();
+    expect(exporter).toBeInstanceOf(OtelRuntimeEventExporter);
+    await expect(exporter.close?.()).resolves.toBeUndefined();
 
-    expect(requests[0]?.input).toBe('https://otel.example.com/v1/traces');
+    expect(normalizeOtelTracesEndpoint('https://otel.example.com')).toBe(
+      'https://otel.example.com/v1/traces',
+    );
+    expect(normalizeOtelTracesEndpoint('https://otel.example.com/v1/traces')).toBe(
+      'https://otel.example.com/v1/traces',
+    );
   });
 
-  it('keeps failed OTEL batches queued for retry', async () => {
-    let attempt = 0;
-    const exporter = new OtelRuntimeEventExporter(
-      {
+  it('does not replace the process-wide Langfuse tracer provider', async () => {
+    setLangfuseTracerProvider(null);
+    const processProvider = getLangfuseTracerProvider();
+    const { exporter } = makeExporter();
+
+    expect(getLangfuseTracerProvider()).toBe(processProvider);
+    await exporter.close();
+    expect(getLangfuseTracerProvider()).toBe(processProvider);
+  });
+
+  it('normalizes direct-constructor batch sizes', async () => {
+    const exporter = new OtelRuntimeEventExporter({
+      enabled: true,
+      endpoint: 'https://otel.example.com',
+      flushAt: 0,
+      flushIntervalMs: 1000,
+      langfuse: {
+        publicKey: 'public',
+        secretKey: 'secret',
+        baseUrl: 'https://langfuse.example.com',
+        flushAt: 0.5,
+        flushIntervalMs: 1000,
+      },
+    });
+    const internals = exporter as unknown as {
+      provider: {
+        _activeSpanProcessor: {
+          _spanProcessors: Array<{
+            processor?: { _maxExportBatchSize: number };
+            _maxExportBatchSize?: number;
+          }>;
+        };
+      };
+    };
+
+    const [langfuseProcessor, otelProcessor] =
+      internals.provider._activeSpanProcessor._spanProcessors;
+    expect(langfuseProcessor?.processor?._maxExportBatchSize).toBe(20);
+    expect(otelProcessor?._maxExportBatchSize).toBe(20);
+    await exporter.close();
+  });
+
+  it('keeps batching settings separate for Langfuse and generic OTLP', async () => {
+    const exporter = createTelemetryExporter({
+      langfuse: {
+        enabled: true,
+        publicKey: 'public',
+        secretKey: 'secret',
+        flushAt: 7,
+        flushIntervalMs: 250,
+      },
+      otel: {
         enabled: true,
         endpoint: 'https://otel.example.com',
-        flushAt: 10,
-        flushIntervalMs: 60_000,
+        flushAt: 31,
+        flushIntervalMs: 31000,
       },
-      async () => {
-        attempt += 1;
-        if (attempt === 1) {
-          return { ok: false, status: 502, text: async () => 'bad gateway' };
-        }
-        return { ok: true, status: 200, text: async () => '' };
-      },
-    );
-
-    await exporter.publish({
-      id: 'otel-event-1',
-      traceId,
-      type: 'chat_turn_completed',
-      sessionId: 'session-1',
-      createdAt: '2026-05-02T00:00:01.000Z',
     });
+    const internals = exporter as unknown as {
+      config: OtelExporterConfig;
+      provider: {
+        _activeSpanProcessor: {
+          _spanProcessors: Array<{
+            processor?: { _maxExportBatchSize: number; _scheduledDelayMillis: number };
+            _maxExportBatchSize?: number;
+            _scheduledDelayMillis?: number;
+          }>;
+        };
+      };
+    };
 
-    await expect(exporter.flush()).rejects.toThrow('OTEL export failed with 502');
-    await expect(exporter.flush()).resolves.toBeUndefined();
-    expect(attempt).toBe(2);
+    expect(internals.config).toMatchObject({
+      flushAt: 31,
+      flushIntervalMs: 31000,
+      langfuse: { flushAt: 7, flushIntervalMs: 250 },
+    });
+    const [langfuseProcessor, otelProcessor] =
+      internals.provider._activeSpanProcessor._spanProcessors;
+    expect(langfuseProcessor?.processor).toMatchObject({
+      _maxExportBatchSize: 7,
+      _scheduledDelayMillis: 250,
+    });
+    expect(otelProcessor).toMatchObject({
+      _maxExportBatchSize: 31,
+      _scheduledDelayMillis: 31000,
+    });
+    await exporter.close?.();
   });
 
-  it('exports traces and nested spans through the Langfuse SDK transport', async () => {
-    const client = new FakeLangfuseSdkClient();
-    const exporter = new LangfuseSdkRuntimeEventExporter(
-      {
-        enabled: true,
-        publicKey: 'public',
-        secretKey: 'secret',
-        baseUrl: 'https://langfuse.example.com',
-        flushAt: 10,
-        flushIntervalMs: 60_000,
-        serviceName: 'pi-task-worker',
-        serviceVersion: '0.1.0-test',
-      },
-      client,
-    );
+  it('preserves default SDK resource attributes with configured service identity', async () => {
+    const exporter = createTelemetryExporter({
+      serviceName: 'pi-test',
+      serviceVersion: '1.2.3',
+      otel: { enabled: true, endpoint: 'https://otel.example.com' },
+    });
+    const internals = exporter as unknown as {
+      provider: { _resource: { attributes: Record<string, unknown> } };
+    };
+
+    expect(internals.provider._resource.attributes).toMatchObject({
+      'service.name': 'pi-test',
+      'service.version': '1.2.3',
+      'telemetry.sdk.name': 'opentelemetry',
+      'telemetry.sdk.language': 'nodejs',
+    });
+    await exporter.close?.();
+  });
+
+  it('exports a chat turn as linked spans', async () => {
+    const { exporter, inMemory } = makeExporter({ serviceName: 'pi-test' });
 
     await exporter.publish({
-      id: 'event-1',
+      id: 'turn-1-start',
       traceId,
       type: 'chat_turn_started',
       sessionId: 'session-1',
       conversationId: 'conversation-1',
-      taskRunId: '003cc514-4f61-4f9c-b497-6ec99967d6d1',
       createdAt: '2026-05-02T00:00:00.000Z',
       details: { input: 'hello' },
     });
     await exporter.publish({
-      id: 'tool-event-1',
+      id: 'tool-1-start',
       traceId,
       sessionId: 'session-1',
       conversationId: 'conversation-1',
       toolCallId: 'call-1',
-      toolName: 'run_shell',
-      status: 'started',
-      createdAt: '2026-05-02T00:00:00.500Z',
-      args: { command: 'pwd' },
-    });
-    await exporter.publish({
-      id: 'tool-event-2',
-      traceId,
-      sessionId: 'session-1',
-      conversationId: 'conversation-1',
-      toolCallId: 'call-1',
-      toolName: 'run_shell',
-      status: 'completed',
-      createdAt: '2026-05-02T00:00:01.000Z',
-      durationMs: 500,
-      details: { exitCode: 0 },
-    });
-    await exporter.publish({
-      id: 'event-2',
-      traceId,
-      type: 'chat_turn_completed',
-      sessionId: 'session-1',
-      conversationId: 'conversation-1',
-      createdAt: '2026-05-02T00:00:02.000Z',
-      durationMs: 2000,
-      details: { output: 'world' },
-    });
-    await exporter.publish({
-      id: 'legacy-event-1',
-      traceId: '33333333333333333333333333333333',
-      type: 'subagent_started',
-      sessionId: 'session-2',
-      runId: '20b486e7-8832-45cf-8457-674d17a5f014',
-      createdAt: '2026-05-02T00:00:03.000Z',
-    });
-    await exporter.flush();
-    await exporter.close();
-
-    expect(client.traces).toHaveLength(2);
-    expect(client.flushed).toBe(3);
-    expect(client.closed).toBe(1);
-    expect(client.traces[0]?.body).toMatchObject({
-      sessionId: 'session-1',
-      name: 'chat-turn',
-      input: 'hello',
-      tags: ['pi-task-worker'],
-      metadata: {
-        serviceName: 'pi-task-worker',
-        taskRunId: '003cc514-4f61-4f9c-b497-6ec99967d6d1',
-      },
-    });
-    expect(client.traces[0]?.body.metadata).not.toHaveProperty('serviceVersion');
-    expect(client.traces[1]?.body.metadata).toMatchObject({ taskRunId: '20b486e7' });
-    const traceUpdates = client.traces[0]?.updates ?? [];
-    expect(traceUpdates[traceUpdates.length - 1]).toMatchObject({
-      output: 'world',
-      metadata: { durationMs: 2000 },
-    });
-    const rootSpan = client.traces[0]?.spans[0];
-    const toolSpan = rootSpan?.spans[0];
-    expect(rootSpan?.body).toMatchObject({
-      name: 'chat-turn',
-      input: 'hello',
-      level: 'DEFAULT',
-    });
-    const rootSpanUpdates = rootSpan?.updates ?? [];
-    expect(rootSpanUpdates[rootSpanUpdates.length - 1]).toMatchObject({
-      output: 'world',
-      endTime: '2026-05-02T00:00:02.000Z',
-      level: 'DEFAULT',
-    });
-    expect(toolSpan?.body).toMatchObject({
-      name: 'run_shell [pwd]',
-      input: { args: { command: 'pwd' } },
-      level: 'DEFAULT',
-    });
-    const toolSpanUpdates = toolSpan?.updates ?? [];
-    expect(toolSpanUpdates[toolSpanUpdates.length - 1]).toMatchObject({
-      output: { exitCode: 0 },
-      endTime: '2026-05-02T00:00:01.000Z',
-      level: 'DEFAULT',
-    });
-  });
-
-  it('exports LLM generations as Langfuse generations with usage', async () => {
-    const client = new FakeLangfuseSdkClient();
-    const exporter = new LangfuseSdkRuntimeEventExporter(
-      {
-        enabled: true,
-        publicKey: 'public',
-        secretKey: 'secret',
-        baseUrl: 'https://langfuse.example.com',
-        flushAt: 10,
-        flushIntervalMs: 60_000,
-      },
-      client,
-    );
-
-    await exporter.publish({
-      id: 'event-1',
-      traceId,
-      type: 'chat_turn_started',
-      sessionId: 'session-1',
-      conversationId: 'conversation-1',
-      createdAt: '2026-05-02T00:00:00.000Z',
-      details: { input: 'hello' },
-    });
-    await exporter.publish({
-      id: 'model-event-1',
-      traceId,
-      sessionId: 'session-1',
-      conversationId: 'conversation-1',
-      llmGenerationId: 'call-1',
+      toolName: 'bash',
       status: 'started',
       createdAt: '2026-05-02T00:00:00.100Z',
-      model: { provider: 'anthropic-compatible', model: 'kimi-k2.5', thinkingLevel: 'off' },
-      input: 'hello',
-    });
-    await exporter.publish({
-      id: 'model-event-2',
-      traceId,
-      sessionId: 'session-1',
-      conversationId: 'conversation-1',
-      llmGenerationId: 'call-1',
-      status: 'completed',
-      createdAt: '2026-05-02T00:00:01.000Z',
-      durationMs: 900,
-      model: { provider: 'anthropic-compatible', model: 'kimi-k2.5', thinkingLevel: 'off' },
-      output: 'world',
-      usage: { input: 10, output: 3, cacheRead: 2, cacheWrite: 1, totalTokens: 16 },
-      stopReason: 'stop',
-    });
-
-    const generation = client.traces[0]?.spans[0]?.generations[0];
-    expect(generation?.body).toMatchObject({
-      name: 'llm-generation [main] [hello]',
-      startTime: '2026-05-02T00:00:00.100Z',
-      endTime: '2026-05-02T00:00:01.000Z',
-      model: 'kimi-k2.5',
-      input: 'hello',
-      output: 'world',
-      level: 'DEFAULT',
-      usage: { input: 10, output: 3, total: 16, unit: 'TOKENS' },
-      usageDetails: { input: 10, output: 3, cache_read: 2, cache_write: 1, total: 16 },
-    });
-    expect(generation?.updates).toHaveLength(0);
-  });
-
-  it('keeps generation start and terminal data in one SDK create event', async () => {
-    const client = new FakeLangfuseSdkClient();
-    const exporter = new LangfuseSdkRuntimeEventExporter(
-      {
-        enabled: true,
-        publicKey: 'public',
-        secretKey: 'secret',
-        baseUrl: 'https://langfuse.example.com',
-        flushAt: 20,
-        flushIntervalMs: 5_000,
-        includePayloads: true,
-      },
-      client,
-    );
-
-    await exporter.publish({
-      id: 'turn-start',
-      traceId,
-      type: 'chat_turn_started',
-      sessionId: 'session-1',
-      conversationId: 'conversation-1',
-      createdAt: '2026-05-02T00:00:00.000Z',
-    });
-    await exporter.publish({
-      id: 'generation-start',
-      traceId,
-      sessionId: 'session-1',
-      conversationId: 'conversation-1',
-      llmGenerationId: 'call-1',
-      status: 'started',
-      createdAt: '2026-05-02T00:00:00.100Z',
-      model: {
-        provider: 'anthropic-compatible',
-        model: 'kimi-k2.5',
-        thinkingLevel: 'off',
-      },
-      input: { messages: [{ role: 'user', content: 'hello' }] },
-    });
-
-    expect(client.traces[0]?.spans[0]?.generations).toHaveLength(0);
-
-    await exporter.publish({
-      id: 'generation-complete',
-      traceId,
-      sessionId: 'session-1',
-      conversationId: 'conversation-1',
-      llmGenerationId: 'call-1',
-      status: 'completed',
-      createdAt: '2026-05-02T00:00:01.000Z',
-      model: { provider: 'fallback-provider', model: 'fallback-model' },
-      output: 'world',
-      usage: { input: 10, output: 3, totalTokens: 13 },
-    });
-
-    const generation = client.traces[0]?.spans[0]?.generations[0];
-    expect(generation?.body).toMatchObject({
-      startTime: '2026-05-02T00:00:00.100Z',
-      endTime: '2026-05-02T00:00:01.000Z',
-      input: { messages: [{ role: 'user', content: 'hello' }] },
-      output: 'world',
-      usage: { input: 10, output: 3, total: 13, unit: 'TOKENS' },
-      model: 'kimi-k2.5',
-      modelParameters: { provider: 'anthropic-compatible', thinkingLevel: 'off' },
-      metadata: {
-        llmGenerationId: 'call-1',
-        status: 'completed',
-        model: 'anthropic-compatible/kimi-k2.5',
-        thinkingLevel: 'off',
-      },
-    });
-    expect(generation?.updates).toHaveLength(0);
-  });
-
-  it('keeps interleaved sessions isolated while completing generations', async () => {
-    const client = new FakeLangfuseSdkClient();
-    const exporter = new LangfuseSdkRuntimeEventExporter(
-      {
-        enabled: true,
-        publicKey: 'public',
-        secretKey: 'secret',
-        baseUrl: 'https://langfuse.example.com',
-        flushAt: 20,
-        flushIntervalMs: 5_000,
-        includePayloads: true,
-      },
-      client,
-    );
-    const otherTraceId = '22222222222222222222222222222222';
-
-    for (const [sessionId, sessionTraceId, input] of [
-      ['session-a', traceId, 'alpha'],
-      ['session-b', otherTraceId, 'beta'],
-    ] as const) {
-      await exporter.publish({
-        id: `turn-${sessionId}`,
-        traceId: sessionTraceId,
-        type: 'chat_turn_started',
-        sessionId,
-        conversationId: sessionId,
-        createdAt: '2026-05-02T00:00:00.000Z',
-      });
-      await exporter.publish({
-        id: `start-${sessionId}`,
-        traceId: sessionTraceId,
-        sessionId,
-        conversationId: sessionId,
-        llmGenerationId: 'call-1',
-        status: 'started',
-        createdAt: '2026-05-02T00:00:00.100Z',
-        model: { provider: 'anthropic-compatible', model: 'kimi-k2.5' },
-        input,
-      });
-    }
-
-    for (const [sessionId, sessionTraceId, output] of [
-      ['session-b', otherTraceId, 'beta-result'],
-      ['session-a', traceId, 'alpha-result'],
-    ] as const) {
-      await exporter.publish({
-        id: `complete-${sessionId}`,
-        traceId: sessionTraceId,
-        sessionId,
-        conversationId: sessionId,
-        llmGenerationId: 'call-1',
-        status: 'completed',
-        createdAt: '2026-05-02T00:00:01.000Z',
-        model: { provider: 'anthropic-compatible', model: 'kimi-k2.5' },
-        output,
-        usage: { input: 10, output: 2, totalTokens: 12 },
-      });
-    }
-
-    const generationBySession = new Map(
-      client.traces.map((candidate) => [
-        candidate.body.sessionId,
-        candidate.spans[0]?.generations[0],
-      ]),
-    );
-    expect(generationBySession.get('session-a')?.body).toMatchObject({
-      input: 'alpha',
-      output: 'alpha-result',
-      endTime: '2026-05-02T00:00:01.000Z',
-    });
-    expect(generationBySession.get('session-b')?.body).toMatchObject({
-      input: 'beta',
-      output: 'beta-result',
-      endTime: '2026-05-02T00:00:01.000Z',
-    });
-    expect(generationBySession.get('session-a')?.updates).toHaveLength(0);
-    expect(generationBySession.get('session-b')?.updates).toHaveLength(0);
-  });
-
-  it('creates one closed error generation when the provider request fails', async () => {
-    const client = new FakeLangfuseSdkClient();
-    const exporter = new LangfuseSdkRuntimeEventExporter(
-      {
-        enabled: true,
-        publicKey: 'public',
-        secretKey: 'secret',
-        baseUrl: 'https://langfuse.example.com',
-        flushAt: 20,
-        flushIntervalMs: 5_000,
-        includePayloads: true,
-      },
-      client,
-    );
-
-    await exporter.publish({
-      id: 'turn-start',
-      traceId,
-      type: 'chat_turn_started',
-      sessionId: 'session-1',
-      conversationId: 'conversation-1',
-      createdAt: '2026-05-02T00:00:00.000Z',
-    });
-    await exporter.publish({
-      id: 'generation-start',
-      traceId,
-      sessionId: 'session-1',
-      conversationId: 'session-1',
-      llmGenerationId: 'call-1',
-      status: 'started',
-      createdAt: '2026-05-02T00:00:00.100Z',
-      model: { provider: 'anthropic-compatible', model: 'kimi-k2.5' },
-      input: 'hello',
-    });
-    await exporter.publish({
-      id: 'generation-failed',
-      traceId,
-      sessionId: 'session-1',
-      conversationId: 'conversation-1',
-      llmGenerationId: 'call-1',
-      status: 'failed',
-      createdAt: '2026-05-02T00:00:01.000Z',
-      model: { provider: 'anthropic-compatible', model: 'kimi-k2.5' },
-      error: 'HTTP 503',
-    });
-
-    const generation = client.traces[0]?.spans[0]?.generations[0];
-    expect(generation?.body).toMatchObject({
-      startTime: '2026-05-02T00:00:00.100Z',
-      endTime: '2026-05-02T00:00:01.000Z',
-      input: 'hello',
-      output: { error: 'HTTP 503' },
-      level: 'ERROR',
-      statusMessage: 'HTTP 503',
-      metadata: { llmGenerationId: 'call-1', status: 'failed' },
-    });
-    expect(generation?.updates).toHaveLength(0);
-  });
-
-  it('drops abandoned starts when their chat turn closes', async () => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const client = new FakeLangfuseSdkClient();
-    const exporter = new LangfuseSdkRuntimeEventExporter(
-      {
-        enabled: true,
-        publicKey: 'public',
-        secretKey: 'secret',
-        baseUrl: 'https://langfuse.example.com',
-        flushAt: 20,
-        flushIntervalMs: 5_000,
-        includePayloads: true,
-      },
-      client,
-    );
-
-    await exporter.publish({
-      id: 'turn-start',
-      traceId,
-      type: 'chat_turn_started',
-      sessionId: 'session-1',
-      createdAt: '2026-05-02T00:00:00.000Z',
-    });
-    await exporter.publish({
-      id: 'generation-start',
-      traceId,
-      sessionId: 'session-1',
-      conversationId: 'conversation-1',
-      llmGenerationId: 'call-1',
-      status: 'started',
-      createdAt: '2026-05-02T00:00:00.100Z',
-      model: { provider: 'anthropic-compatible', model: 'kimi-k2.5' },
-      input: 'abandoned input',
-    });
-    await exporter.publish({
-      id: 'turn-failed',
-      traceId,
-      type: 'chat_turn_failed',
-      sessionId: 'session-1',
-      createdAt: '2026-05-02T00:00:00.500Z',
-      error: 'cancelled',
-    });
-    await exporter.publish({
-      id: 'late-generation-terminal',
-      traceId,
-      sessionId: 'session-1',
-      conversationId: 'session-1',
-      llmGenerationId: 'call-1',
-      status: 'failed',
-      createdAt: '2026-05-02T00:00:01.000Z',
-      model: { provider: 'anthropic-compatible', model: 'kimi-k2.5' },
-      error: 'cancelled',
-    });
-
-    const generation = client.traces[0]?.spans[0]?.generations[0];
-    expect(generation?.body).toMatchObject({
-      startTime: '2026-05-02T00:00:01.000Z',
-      endTime: '2026-05-02T00:00:01.000Z',
-      output: { error: 'cancelled' },
-    });
-    expect(generation?.body.input).toBeUndefined();
-    expect(errorSpy).toHaveBeenCalledWith(
-      '[pi-telemetry] dropped 1 pending Langfuse generation start during lifecycle cleanup; late terminal events will be output-only',
-    );
-  });
-
-  it('drops abandoned starts when their subagent lifecycle closes', async () => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const client = new FakeLangfuseSdkClient();
-    const exporter = new LangfuseSdkRuntimeEventExporter(
-      {
-        enabled: true,
-        publicKey: 'public',
-        secretKey: 'secret',
-        baseUrl: 'https://langfuse.example.com',
-        flushAt: 20,
-        flushIntervalMs: 5_000,
-        includePayloads: true,
-      },
-      client,
-    );
-
-    await exporter.publish({
-      id: 'turn-start',
-      traceId,
-      type: 'chat_turn_started',
-      sessionId: 'parent',
-      conversationId: 'parent',
-      createdAt: '2026-05-02T00:00:00.000Z',
-    });
-    await exporter.publish({
-      id: 'subagent-start',
-      traceId,
-      type: 'subagent_started',
-      sessionId: 'parent:subagent:1',
-      conversationId: 'parent:subagent:1',
-      parentSessionId: 'parent',
-      childSessionId: 'parent:subagent:1',
-      runId: 'run-1',
-      createdAt: '2026-05-02T00:00:00.050Z',
-    });
-    await exporter.publish({
-      id: 'generation-start',
-      traceId,
-      sessionId: 'parent:subagent:1',
-      conversationId: 'parent:subagent:1',
-      parentSessionId: 'parent',
-      childSessionId: 'parent:subagent:1',
-      runId: 'run-1',
-      llmGenerationId: 'call-1',
-      status: 'started',
-      createdAt: '2026-05-02T00:00:00.100Z',
-      model: { provider: 'anthropic-compatible', model: 'kimi-k2.5' },
-      input: 'abandoned subagent input',
-    });
-    await exporter.publish({
-      id: 'subagent-cancelled',
-      traceId,
-      type: 'subagent_cancelled',
-      sessionId: 'parent:subagent:1',
-      conversationId: 'parent:subagent:1',
-      parentSessionId: 'parent',
-      childSessionId: 'parent:subagent:1',
-      runId: 'run-1',
-      createdAt: '2026-05-02T00:00:00.500Z',
-      error: 'cancelled',
-    });
-    await exporter.publish({
-      id: 'late-generation-terminal',
-      traceId,
-      sessionId: 'parent:subagent:1',
-      conversationId: 'parent:subagent:1',
-      parentSessionId: 'parent',
-      childSessionId: 'parent:subagent:1',
-      runId: 'run-1',
-      llmGenerationId: 'call-1',
-      status: 'failed',
-      createdAt: '2026-05-02T00:00:01.000Z',
-      model: { provider: 'anthropic-compatible', model: 'kimi-k2.5' },
-      error: 'cancelled',
-    });
-
-    const rootSpan = client.traces[0]?.spans[0];
-    const subagentSpan = rootSpan?.spans.find((span) => span.body.name === 'subagent');
-    const generation = subagentSpan?.generations[0];
-    expect(generation?.body).toMatchObject({
-      startTime: '2026-05-02T00:00:01.000Z',
-      endTime: '2026-05-02T00:00:01.000Z',
-      output: { error: 'cancelled' },
-    });
-    expect(generation?.body.input).toBeUndefined();
-    expect(errorSpy).toHaveBeenCalledWith(
-      '[pi-telemetry] dropped 1 pending Langfuse generation start during lifecycle cleanup; late terminal events will be output-only',
-    );
-  });
-
-  it('clears abandoned starts when the exporter closes', async () => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const client = new FakeLangfuseSdkClient();
-    const exporter = new LangfuseSdkRuntimeEventExporter(
-      {
-        enabled: true,
-        publicKey: 'public',
-        secretKey: 'secret',
-        baseUrl: 'https://langfuse.example.com',
-        flushAt: 20,
-        flushIntervalMs: 5_000,
-        includePayloads: true,
-      },
-      client,
-    );
-
-    await exporter.publish({
-      id: 'turn-start',
-      traceId,
-      type: 'chat_turn_started',
-      sessionId: 'session-1',
-      createdAt: '2026-05-02T00:00:00.000Z',
-    });
-    await exporter.publish({
-      id: 'generation-start',
-      traceId,
-      sessionId: 'session-1',
-      conversationId: 'session-1',
-      llmGenerationId: 'call-1',
-      status: 'started',
-      createdAt: '2026-05-02T00:00:00.100Z',
-      model: { provider: 'anthropic-compatible', model: 'kimi-k2.5' },
-      input: 'abandoned input',
-    });
-
-    const pendingGenerations = (
-      exporter as unknown as {
-        pendingGenerations: Map<string, unknown>;
-      }
-    ).pendingGenerations;
-    expect(pendingGenerations).toHaveLength(1);
-    await exporter.close();
-
-    expect(client.closed).toBe(1);
-    expect(pendingGenerations).toHaveLength(0);
-    expect(errorSpy).toHaveBeenCalledWith(
-      '[pi-telemetry] dropped 1 pending Langfuse generation start during exporter close; late terminal events will be output-only',
-    );
-  });
-
-  it('bounds abandoned starts and degrades evicted terminals to closed output-only records', async () => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const client = new FakeLangfuseSdkClient();
-    const exporter = new LangfuseSdkRuntimeEventExporter(
-      {
-        enabled: true,
-        publicKey: 'public',
-        secretKey: 'secret',
-        baseUrl: 'https://langfuse.example.com',
-        flushAt: 20,
-        flushIntervalMs: 5_000,
-        includePayloads: true,
-      },
-      client,
-    );
-
-    await exporter.publish({
-      id: 'turn-start',
-      traceId,
-      type: 'chat_turn_started',
-      sessionId: 'session-0',
-      createdAt: '2026-05-02T00:00:00.000Z',
-    });
-    for (let index = 0; index <= 128; index += 1) {
-      await exporter.publish({
-        id: `generation-start-${index}`,
-        traceId,
-        sessionId: `session-${index}`,
-        conversationId: `session-${index}`,
-        llmGenerationId: 'call-1',
-        status: 'started',
-        createdAt: '2026-05-02T00:00:00.100Z',
-        model: { provider: 'anthropic-compatible', model: 'kimi-k2.5' },
-        input: `input-${index}`,
-      });
-    }
-    await exporter.publish({
-      id: 'evicted-generation-terminal',
-      traceId,
-      sessionId: 'session-0',
-      conversationId: 'session-0',
-      llmGenerationId: 'call-1',
-      status: 'completed',
-      createdAt: '2026-05-02T00:00:01.000Z',
-      model: { provider: 'anthropic-compatible', model: 'kimi-k2.5' },
-      output: 'completed after eviction',
-      usage: { input: 1, output: 1, totalTokens: 2 },
-    });
-
-    const generation = client.traces[0]?.spans[0]?.generations[0];
-    expect(generation?.body).toMatchObject({
-      startTime: '2026-05-02T00:00:01.000Z',
-      endTime: '2026-05-02T00:00:01.000Z',
-      output: 'completed after eviction',
-    });
-    expect(generation?.body.input).toBeUndefined();
-    expect(errorSpy).toHaveBeenCalledWith(
-      '[pi-telemetry] dropped 1 pending Langfuse generation start during capacity eviction; late terminal events will be output-only',
-    );
-  });
-
-  it('nests subagent model and tool observations under the subagent span', async () => {
-    const client = new FakeLangfuseSdkClient();
-    const exporter = new LangfuseSdkRuntimeEventExporter(
-      {
-        enabled: true,
-        publicKey: 'public',
-        secretKey: 'secret',
-        baseUrl: 'https://langfuse.example.com',
-        flushAt: 10,
-        flushIntervalMs: 60_000,
-      },
-      client,
-    );
-
-    await exporter.publish({
-      id: 'root-start',
-      traceId,
-      type: 'chat_turn_started',
-      sessionId: 'parent',
-      conversationId: 'parent',
-      createdAt: '2026-05-02T00:00:00.000Z',
-      details: { input: 'parent task' },
-    });
-    await exporter.publish({
-      id: 'spawn-tool-start',
-      traceId,
-      sessionId: 'parent',
-      conversationId: 'parent',
-      toolCallId: 'spawn-call-1',
-      toolName: 'sessions_spawn',
-      status: 'started',
-      createdAt: '2026-05-02T00:00:00.050Z',
-      args: { task: 'child task' },
-    });
-    await exporter.publish({
-      id: 'subagent-start',
-      traceId,
-      type: 'subagent_started',
-      sessionId: 'parent:subagent:1',
-      conversationId: 'parent:subagent:1',
-      parentSessionId: 'parent',
-      childSessionId: 'parent:subagent:1',
-      runId: 'run-1',
-      taskRunId: 'run-1',
-      spawnBatchId: 'trace:11111111111111111111111111111111',
-      parentToolCallId: 'spawn-call-1',
-      createdAt: '2026-05-02T00:00:00.100Z',
-      details: {
-        agent: 'legal',
-        input: 'child task',
-        taskRunId: 'run-1',
-        spawnBatchId: 'trace:11111111111111111111111111111111',
-      },
-    });
-    await exporter.publish({
-      id: 'child-model-start',
-      traceId,
-      sessionId: 'parent:subagent:1',
-      conversationId: 'parent:subagent:1',
-      parentSessionId: 'parent',
-      childSessionId: 'parent:subagent:1',
-      runId: 'run-1',
-      taskRunId: 'run-1',
-      spawnBatchId: 'trace:11111111111111111111111111111111',
-      llmGenerationId: 'child-call-1',
-      status: 'started',
-      createdAt: '2026-05-02T00:00:00.200Z',
-      model: { provider: 'anthropic-compatible', model: 'kimi-k2.5', thinkingLevel: 'off' },
-      input: 'child task',
-    });
-    await exporter.publish({
-      id: 'child-model-done',
-      traceId,
-      sessionId: 'parent:subagent:1',
-      conversationId: 'parent:subagent:1',
-      parentSessionId: 'parent',
-      childSessionId: 'parent:subagent:1',
-      runId: 'run-1',
-      taskRunId: 'run-1',
-      spawnBatchId: 'trace:11111111111111111111111111111111',
-      llmGenerationId: 'child-call-1',
-      status: 'completed',
-      createdAt: '2026-05-02T00:00:00.500Z',
-      model: { provider: 'anthropic-compatible', model: 'kimi-k2.5', thinkingLevel: 'off' },
-      output: 'child answer',
-    });
-    await exporter.publish({
-      id: 'child-tool-start',
-      traceId,
-      sessionId: 'parent:subagent:1',
-      conversationId: 'parent:subagent:1',
-      parentSessionId: 'parent',
-      childSessionId: 'parent:subagent:1',
-      runId: 'run-1',
-      taskRunId: 'run-1',
-      spawnBatchId: 'trace:11111111111111111111111111111111',
-      toolCallId: 'tool-1',
-      toolName: 'read_file',
-      status: 'started',
-      createdAt: '2026-05-02T00:00:00.600Z',
-      args: { path: 'README.md' },
-    });
-    await exporter.publish({
-      id: 'child-tool-done',
-      traceId,
-      sessionId: 'parent:subagent:1',
-      conversationId: 'parent:subagent:1',
-      parentSessionId: 'parent',
-      childSessionId: 'parent:subagent:1',
-      runId: 'run-1',
-      taskRunId: 'run-1',
-      spawnBatchId: 'trace:11111111111111111111111111111111',
-      toolCallId: 'tool-1',
-      toolName: 'read_file',
-      status: 'completed',
-      createdAt: '2026-05-02T00:00:00.700Z',
-      details: { policy: 'allow' },
-    });
-
-    const trace = client.traces.find((candidate) => candidate.body.sessionId === 'parent');
-    const rootSpan = trace?.spans[0];
-    const spawnToolSpan = rootSpan?.spans.find(
-      (span) => span.body.name === 'sessions_spawn [child task]',
-    );
-    const batchSpan = rootSpan?.spans.find((span) => span.body.name === 'subagent fan-out');
-    const subagentSpan = batchSpan?.spans[0];
-    expect(trace?.body).toMatchObject({ sessionId: 'parent' });
-    expect(rootSpan?.body).toMatchObject({ name: 'chat-turn' });
-    expect(spawnToolSpan?.body).toMatchObject({ name: 'sessions_spawn [child task]' });
-    expect(batchSpan?.body).toMatchObject({
-      name: 'subagent fan-out',
-      metadata: { spawnBatchId: '11111111' },
-    });
-    expect(subagentSpan?.body).toMatchObject({ name: 'subagent [legal]' });
-    expect(subagentSpan?.generations[0]?.body).toMatchObject({
-      name: 'llm-generation [subagent] [child task]',
-      input: 'child task',
-    });
-    expect(subagentSpan?.spans[0]?.body).toMatchObject({
-      name: 'read_file [README.md]',
-      input: { args: { path: 'README.md' } },
-    });
-  });
-
-  it('keeps nesting tool and LLM events under root span across multiple turns', async () => {
-    const client = new FakeLangfuseSdkClient();
-    const exporter = new LangfuseSdkRuntimeEventExporter(
-      {
-        enabled: true,
-        publicKey: 'public',
-        secretKey: 'secret',
-        baseUrl: 'https://langfuse.example.com',
-        flushAt: 10,
-        flushIntervalMs: 60_000,
-      },
-      client,
-    );
-
-    await exporter.publish({
-      id: 'event-start',
-      traceId,
-      type: 'chat_turn_started',
-      sessionId: 'session-1',
-      conversationId: 'conversation-1',
-      createdAt: '2026-05-02T00:00:00.000Z',
-      details: { input: 'hello' },
+      args: { command: 'echo hi' },
     });
     await exporter.publish({
       id: 'gen-1-start',
@@ -1275,483 +395,469 @@ describe('telemetry', () => {
       conversationId: 'conversation-1',
       llmGenerationId: 'gen-1',
       status: 'started',
-      createdAt: '2026-05-02T00:00:00.100Z',
-      model: { provider: 'anthropic', model: 'claude-4' },
+      createdAt: '2026-05-02T00:00:00.200Z',
+      model: { provider: 'deepseek', model: 'deepseek-v4-flash' },
       input: 'hello',
     });
     await exporter.publish({
-      id: 'gen-1-done',
+      id: 'gen-1-end',
       traceId,
       sessionId: 'session-1',
       conversationId: 'conversation-1',
       llmGenerationId: 'gen-1',
       status: 'completed',
-      createdAt: '2026-05-02T00:00:01.000Z',
-      model: { provider: 'anthropic', model: 'claude-4' },
-      output: 'I will use a tool',
+      createdAt: '2026-05-02T00:00:00.800Z',
+      model: { provider: 'deepseek', model: 'deepseek-v4-flash' },
+      output: { content: 'world' },
+      usage: { input: 3, output: 4, totalTokens: 7, cost: { total: 0.01 } },
     });
     await exporter.publish({
-      id: 'turn-end-1',
+      id: 'tool-1-end',
+      traceId,
+      sessionId: 'session-1',
+      conversationId: 'conversation-1',
+      toolCallId: 'call-1',
+      toolName: 'bash',
+      status: 'completed',
+      createdAt: '2026-05-02T00:00:00.900Z',
+      details: { output: 'hi' },
+    });
+    await exporter.publish({
+      id: 'turn-1-end',
       traceId,
       type: 'chat_turn_completed',
       sessionId: 'session-1',
       conversationId: 'conversation-1',
-      createdAt: '2026-05-02T00:00:01.100Z',
-      durationMs: 1100,
-      details: { output: 'I will use a tool' },
+      createdAt: '2026-05-02T00:00:01.000Z',
+      details: { output: 'world' },
     });
 
+    const spans = inMemory.getFinishedSpans();
+    // End order: generation, tool, root.
+    const [generation, tool, root] = spans as [ReadableSpan, ReadableSpan, ReadableSpan];
+    expect(root.name).toBe('chat-turn');
+    expect(tool.name).toBe('bash [echo hi]');
+    expect(generation.name).toBe('llm-generation [main] [hello]');
+    expect(root.parentSpanContext).toBeUndefined();
+    expect(tool.parentSpanContext?.spanId).toBe(root.spanContext().spanId);
+    expect(generation.parentSpanContext?.spanId).toBe(root.spanContext().spanId);
+    expect(new Set(spans.map((span) => span.spanContext().traceId)).size).toBe(1);
+
+    expect(hrTimeToMs(root.startTime)).toBe(Date.parse('2026-05-02T00:00:00.000Z'));
+    expect(hrTimeToMs(root.endTime)).toBe(Date.parse('2026-05-02T00:00:01.000Z'));
+    expect(root.status.code).toBe(SpanStatusCode.OK);
+    expect(root.attributes['langfuse.observation.input']).toBe(JSON.stringify('hello'));
+    expect(root.attributes['langfuse.observation.output']).toBe(JSON.stringify('world'));
+    expect(root.attributes['langfuse.trace.input']).toBe('hello');
+    expect(root.attributes['langfuse.trace.output']).toBe('world');
+    // The root span advertises itself so a nested pi process can parent to it.
+    expect(process.env.PI_TELEMETRY_TRACEPARENT).toBe(
+      `00-${root.spanContext().traceId}-${root.spanContext().spanId}-01`,
+    );
+
+    expect(generation.attributes['langfuse.observation.type']).toBe('generation');
+    expect(
+      JSON.parse(String(generation.attributes['langfuse.observation.usage_details'])),
+    ).toMatchObject({ input: 3, output: 4, total: 7 });
+    expect(
+      JSON.parse(String(generation.attributes['langfuse.observation.cost_details'])),
+    ).toMatchObject({ total: 0.01 });
+    expect(
+      JSON.parse(String(generation.attributes['langfuse.observation.model.parameters'])),
+    ).toMatchObject({ provider: 'deepseek' });
+    expect(generation.attributes['langfuse.observation.model.name']).toBe('deepseek-v4-flash');
+    expect(generation.attributes['langfuse.session.id']).toBe('session-1');
+    expect(generation.attributes['langfuse.trace.metadata.serviceName']).toBe('pi-test');
+    expect(generation.attributes['langfuse.observation.metadata.serviceName']).toBe('pi-test');
+    expect(generation.attributes['langfuse.trace.tags']).toEqual(['pi-test']);
+    expect(tool.attributes['langfuse.observation.input']).toBe(
+      JSON.stringify({ command: 'echo hi' }),
+    );
+    expect(tool.attributes['langfuse.observation.output']).toBe(JSON.stringify({ output: 'hi' }));
+  });
+
+  it('keeps SDK metadata fields filterable on the OTEL path', async () => {
+    const { exporter, inMemory } = makeExporter();
+
     await exporter.publish({
-      id: 'tool-start-1',
+      id: 'turn-1',
+      traceId,
+      type: 'chat_turn_failed',
+      sessionId: 'session-1',
+      createdAt: '2026-05-02T00:00:01.000Z',
+      durationMs: 250,
+      toolPolicyProfile: 'trusted',
+      details: { phase: 'provider' },
+      error: 'request failed',
+    });
+
+    const [span] = inMemory.getFinishedSpans() as [ReadableSpan];
+    // Scalars are promoted to filterable observation metadata...
+    expect(span.attributes['langfuse.observation.metadata.durationMs']).toBe('250');
+    expect(span.attributes['langfuse.observation.metadata.toolPolicyProfile']).toBe('trusted');
+    expect(span.attributes['langfuse.observation.metadata.eventType']).toBe('chat_turn_failed');
+    // ...while object/long-string payloads (details, usage, error) are not:
+    // unusable as filters and they duplicate the trace's largest values.
+    expect(span.attributes['langfuse.observation.metadata.details']).toBeUndefined();
+    expect(span.attributes['langfuse.observation.metadata.error']).toBeUndefined();
+    // They remain in the plain (catch-all) attributes.
+    expect(JSON.parse(String(span.attributes.details))).toEqual({ phase: 'provider' });
+    // Explicit errors are sanitized before they reach any attribute.
+    expect(span.attributes.error).toBe('Telemetry operation failed');
+    expect(span.status.code).toBe(SpanStatusCode.ERROR);
+    expect(span.status.message).toBe('Telemetry operation failed');
+  });
+
+  it('sanitizes explicit telemetry errors before export', async () => {
+    const { exporter, inMemory } = makeExporter({ includePayloads: true });
+    await exporter.publish({
+      id: 'failed-tool',
       traceId,
       sessionId: 'session-1',
-      conversationId: 'conversation-1',
+      conversationId: 'session-1',
       toolCallId: 'call-1',
-      toolName: 'run_shell',
-      status: 'started',
-      createdAt: '2026-05-02T00:00:01.200Z',
-      args: { command: 'ls' },
+      toolName: 'bash',
+      status: 'failed',
+      createdAt: '2026-05-02T00:00:01.000Z',
+      error: 'Authorization: Bearer super-secret-token\ninternal stack trace',
     });
+
+    const [span] = inMemory.getFinishedSpans() as [ReadableSpan];
+    const serialized = JSON.stringify(span.attributes);
+    expect(serialized).toContain('Telemetry operation failed');
+    expect(serialized).not.toContain('super-secret-token');
+    expect(serialized).not.toContain('internal stack trace');
+    expect(span.status.code).toBe(SpanStatusCode.ERROR);
+    expect(span.status.message).toBe('Telemetry operation failed');
+  });
+
+  it('strips payloads when includePayloads is false', async () => {
+    const { exporter, inMemory } = makeExporter({ includePayloads: false });
     await exporter.publish({
-      id: 'tool-done-1',
+      id: 'turn-1-start',
       traceId,
+      type: 'chat_turn_started',
       sessionId: 'session-1',
       conversationId: 'conversation-1',
-      toolCallId: 'call-1',
-      toolName: 'run_shell',
-      status: 'completed',
-      createdAt: '2026-05-02T00:00:01.500Z',
-      details: { exitCode: 0 },
+      createdAt: '2026-05-02T00:00:00.000Z',
+      details: { input: 'hello' },
     });
     await exporter.publish({
-      id: 'gen-2-start',
-      traceId,
-      sessionId: 'session-1',
-      conversationId: 'conversation-1',
-      llmGenerationId: 'gen-2',
-      status: 'started',
-      createdAt: '2026-05-02T00:00:01.600Z',
-      model: { provider: 'anthropic', model: 'claude-4' },
-      input: 'tool result',
-    });
-    await exporter.publish({
-      id: 'gen-2-done',
-      traceId,
-      sessionId: 'session-1',
-      conversationId: 'conversation-1',
-      llmGenerationId: 'gen-2',
-      status: 'completed',
-      createdAt: '2026-05-02T00:00:02.000Z',
-      model: { provider: 'anthropic', model: 'claude-4' },
-      output: 'done',
-    });
-    await exporter.publish({
-      id: 'turn-end-2',
+      id: 'turn-1-end',
       traceId,
       type: 'chat_turn_completed',
       sessionId: 'session-1',
       conversationId: 'conversation-1',
-      createdAt: '2026-05-02T00:00:02.100Z',
-      durationMs: 2100,
+      createdAt: '2026-05-02T00:00:01.000Z',
+      details: { output: 'world' },
+    });
+
+    const [span] = inMemory.getFinishedSpans() as [ReadableSpan];
+    expect(span.attributes['langfuse.observation.input']).toBeUndefined();
+    expect(span.attributes['langfuse.observation.output']).toBeUndefined();
+    const serialized = JSON.stringify(span.attributes);
+    expect(serialized).not.toContain('hello');
+    expect(serialized).not.toContain('world');
+  });
+
+  it('truncates oversized attribute values at set time', async () => {
+    const { exporter, inMemory } = makeExporter();
+
+    await exporter.publish({
+      id: 'gen-1-start',
+      traceId,
+      sessionId: 'session-1',
+      conversationId: 'session-1',
+      llmGenerationId: 'gen-1',
+      status: 'started',
+      createdAt: '2026-05-02T00:00:00.000Z',
+      model: { provider: 'deepseek', model: 'deepseek-v4-flash' },
+      input: { content: '你'.repeat(500_000) },
+    });
+    await exporter.publish({
+      id: 'gen-1-end',
+      traceId,
+      sessionId: 'session-1',
+      conversationId: 'session-1',
+      llmGenerationId: 'gen-1',
+      status: 'completed',
+      createdAt: '2026-05-02T00:00:01.000Z',
+      model: { provider: 'deepseek', model: 'deepseek-v4-flash' },
+      output: 'done',
+    });
+
+    const [span] = inMemory.getFinishedSpans() as [ReadableSpan];
+    // Truncated structured payloads stay valid JSON.
+    expect(JSON.parse(String(span.attributes['langfuse.observation.input']))).toMatchObject({
+      truncated: true,
+    });
+    expect(span.attributes['langfuse.observation.output']).toBe(JSON.stringify('done'));
+  });
+
+  it('emits an output-only span when the terminal event has no start', async () => {
+    const { exporter, inMemory } = makeExporter();
+
+    await exporter.publish({
+      ...completedTurnEvent('turn-1'),
+      details: { output: 'world' },
+    });
+
+    const [span] = inMemory.getFinishedSpans() as [ReadableSpan];
+    expect(span.name).toBe('chat-turn');
+    expect(span.attributes['langfuse.observation.output']).toBe(JSON.stringify('world'));
+    expect(span.attributes['langfuse.observation.input']).toBeUndefined();
+    expect(span.parentSpanContext).toBeUndefined();
+    expect(hrTimeToMs(span.startTime)).toBe(hrTimeToMs(span.endTime));
+  });
+
+  it('keeps an output-only LLM event classified as a generation', async () => {
+    const { exporter, inMemory } = makeExporter();
+
+    await exporter.publish({
+      id: 'gen-1-end',
+      traceId,
+      sessionId: 'session-1',
+      conversationId: 'session-1',
+      llmGenerationId: 'gen-1',
+      status: 'completed',
+      createdAt: '2026-05-02T00:00:01.000Z',
+      model: { provider: 'deepseek', model: 'deepseek-v4-flash' },
+      output: 'done',
+    });
+
+    const [span] = inMemory.getFinishedSpans() as [ReadableSpan];
+    expect(span.attributes['langfuse.observation.type']).toBe('generation');
+  });
+
+  it('emits short chat-input spans parented to the root span', async () => {
+    const { exporter, inMemory } = makeExporter();
+
+    await exporter.publish({
+      id: 'turn-1-start',
+      traceId,
+      type: 'chat_turn_started',
+      sessionId: 'session-1',
+      createdAt: '2026-05-02T00:00:00.000Z',
+    });
+    await exporter.publish({
+      id: 'steer-1',
+      traceId,
+      type: 'chat_turn_steered',
+      sessionId: 'session-1',
+      createdAt: '2026-05-02T00:00:00.500Z',
+      details: { input: 'actually, use zsh' },
+    });
+    await exporter.publish(completedTurnEvent('turn-1-end'));
+
+    const [steer, root] = inMemory.getFinishedSpans() as [ReadableSpan, ReadableSpan];
+    expect(steer.name).toBe('chat-steer [actually, use zsh]');
+    expect(steer.parentSpanContext?.spanId).toBe(root.spanContext().spanId);
+    expect(hrTimeToMs(steer.startTime)).toBe(hrTimeToMs(steer.endTime));
+    expect(steer.attributes['langfuse.observation.input']).toBe(
+      JSON.stringify('actually, use zsh'),
+    );
+  });
+
+  it('parents subagent spans to the local root span', async () => {
+    const { exporter, inMemory } = makeExporter();
+
+    await exporter.publish({
+      id: 'turn-1-start',
+      traceId,
+      type: 'chat_turn_started',
+      sessionId: 'session-1',
+      createdAt: '2026-05-02T00:00:00.000Z',
+    });
+    await exporter.publish({
+      id: 'sub-1-start',
+      traceId,
+      type: 'subagent_spawned',
+      sessionId: 'session-1',
+      runId: 'run-1',
+      createdAt: '2026-05-02T00:00:00.100Z',
+      details: { agent: 'research' },
+    });
+    await exporter.publish({
+      id: 'sub-1-tool-start',
+      traceId,
+      sessionId: 'session-1',
+      conversationId: 'session-1',
+      runId: 'run-1',
+      toolCallId: 'call-1',
+      toolName: 'web_search',
+      status: 'started',
+      createdAt: '2026-05-02T00:00:00.200Z',
+      args: { query: 'pi telemetry' },
+    });
+    await exporter.publish({
+      id: 'sub-1-tool-end',
+      traceId,
+      sessionId: 'session-1',
+      conversationId: 'session-1',
+      runId: 'run-1',
+      toolCallId: 'call-1',
+      toolName: 'web_search',
+      status: 'completed',
+      createdAt: '2026-05-02T00:00:00.800Z',
+    });
+    await exporter.publish({
+      id: 'sub-1-end',
+      traceId,
+      type: 'subagent_completed',
+      sessionId: 'session-1',
+      runId: 'run-1',
+      createdAt: '2026-05-02T00:00:00.900Z',
+      details: { output: 'found it' },
+    });
+    await exporter.publish(completedTurnEvent('turn-1-end'));
+
+    // End order: tool, subagent, root.
+    const [tool, subagent, root] = inMemory.getFinishedSpans() as [
+      ReadableSpan,
+      ReadableSpan,
+      ReadableSpan,
+    ];
+    expect(subagent.name).toBe('subagent [research]');
+    expect(subagent.parentSpanContext?.spanId).toBe(root.spanContext().spanId);
+    expect(tool.parentSpanContext?.spanId).toBe(subagent.spanContext().spanId);
+    expect(new Set(inMemory.getFinishedSpans().map((s) => s.spanContext().traceId)).size).toBe(1);
+  });
+
+  it('parents subagent spans to PI_TELEMETRY_TRACEPARENT in a child process', async () => {
+    const { exporter, inMemory } = makeExporter();
+    process.env.PI_TELEMETRY_TRACEPARENT =
+      '00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01';
+
+    await exporter.publish({
+      id: 'sub-1-start',
+      traceId,
+      type: 'subagent_started',
+      sessionId: 'parent-session',
+      parentSessionId: 'parent-session',
+      childSessionId: 'child-session',
+      createdAt: '2026-05-02T00:00:00.000Z',
+      details: { agent: 'legal', input: 'review this' },
+    });
+    // The env var now points at the subagent span, so grandchildren parent to it.
+    const written = process.env.PI_TELEMETRY_TRACEPARENT;
+    expect(written).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
+    expect(written).not.toContain('bbbbbbbbbbbbbbbb');
+
+    await exporter.publish({
+      id: 'sub-1-end',
+      traceId,
+      type: 'subagent_completed',
+      sessionId: 'parent-session',
+      parentSessionId: 'parent-session',
+      childSessionId: 'child-session',
+      createdAt: '2026-05-02T00:00:01.000Z',
+      details: { agent: 'legal', output: 'done' },
+    });
+
+    const [span] = inMemory.getFinishedSpans() as [ReadableSpan];
+    expect(span.name).toBe('subagent [legal]');
+    expect(span.spanContext().traceId).toBe('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+    expect(span.parentSpanContext?.spanId).toBe('bbbbbbbbbbbbbbbb');
+    expect(span.parentSpanContext?.isRemote).toBe(true);
+    expect(written).toBe(`00-${span.spanContext().traceId}-${span.spanContext().spanId}-01`);
+  });
+
+  it('caps open spans, dropping the oldest with one stderr log', async () => {
+    const { exporter, inMemory } = makeExporter();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const toolStarted = (index: number): RuntimeTelemetryEvent => ({
+      id: `tool-start-${index}`,
+      traceId,
+      sessionId: 'session-1',
+      conversationId: 'session-1',
+      toolCallId: `call-${index}`,
+      toolName: 'bash',
+      status: 'started',
+      createdAt: '2026-05-02T00:00:00.000Z',
+      args: { command: `cmd-${index}` },
+    });
+    const toolCompleted = (index: number): RuntimeTelemetryEvent => ({
+      id: `tool-end-${index}`,
+      traceId,
+      sessionId: 'session-1',
+      conversationId: 'session-1',
+      toolCallId: `call-${index}`,
+      toolName: 'bash',
+      status: 'completed',
+      createdAt: '2026-05-02T00:00:01.000Z',
       details: { output: 'done' },
     });
 
-    const rootSpan = client.traces[0]?.spans[0];
-    expect(rootSpan?.body).toMatchObject({ name: 'chat-turn' });
-    expect(rootSpan?.generations).toHaveLength(2);
-    expect(rootSpan?.generations[0]?.body).toMatchObject({ name: 'llm-generation [main] [hello]' });
-    expect(rootSpan?.generations[1]?.body).toMatchObject({
-      name: 'llm-generation [main] [tool result]',
-    });
-    expect(rootSpan?.spans).toHaveLength(1);
-    expect(rootSpan?.spans[0]?.body).toMatchObject({ name: 'run_shell [ls]' });
+    // 512 is the open-span cap; the first start is evicted by the 513th.
+    for (let index = 0; index <= 512; index += 1) {
+      await exporter.publish(toolStarted(index));
+    }
+    await exporter.publish(toolCompleted(0)); // evicted → output-only span
+    await exporter.publish(toolCompleted(512)); // still open → input survives
+
+    const [evicted, kept] = inMemory.getFinishedSpans() as [ReadableSpan, ReadableSpan];
+    expect(evicted.attributes['langfuse.observation.input']).toBeUndefined();
+    expect(evicted.attributes['langfuse.observation.output']).toBe(
+      JSON.stringify({ output: 'done' }),
+    );
+    expect(kept.attributes['langfuse.observation.input']).toBe(
+      JSON.stringify({ command: 'cmd-512' }),
+    );
+    const capLogs = errorSpy.mock.calls.filter((args) =>
+      String(args[0]).includes('too many open spans'),
+    );
+    expect(capLogs).toHaveLength(1);
   });
 
-  it('keeps nesting subagent events under the subagent span across multiple turns', async () => {
-    const client = new FakeLangfuseSdkClient();
-    const exporter = new LangfuseSdkRuntimeEventExporter(
-      {
-        enabled: true,
-        publicKey: 'public',
-        secretKey: 'secret',
-        baseUrl: 'https://langfuse.example.com',
-        flushAt: 10,
-        flushIntervalMs: 60_000,
-      },
-      client,
-    );
+  it('drops events with invalid or future-dated createdAt', async () => {
+    const { exporter, inMemory } = makeExporter();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     await exporter.publish({
-      id: 'root-start',
-      traceId,
-      type: 'chat_turn_started',
-      sessionId: 'parent',
-      conversationId: 'parent',
-      createdAt: '2026-05-02T00:00:00.000Z',
-      details: { input: 'parent task' },
+      ...completedTurnEvent('invalid-timestamp'),
+      createdAt: 'not-a-timestamp',
     });
     await exporter.publish({
-      id: 'subagent-start',
-      traceId,
-      type: 'subagent_started',
-      sessionId: 'parent:subagent:1',
-      conversationId: 'parent:subagent:1',
-      parentSessionId: 'parent',
-      childSessionId: 'parent:subagent:1',
-      runId: 'run-1',
-      taskRunId: 'run-1',
-      spawnBatchId: 'trace:11111111111111111111111111111111',
-      parentToolCallId: 'spawn-call-1',
-      createdAt: '2026-05-02T00:00:00.100Z',
-      details: { input: 'child task' },
+      ...completedTurnEvent('future-timestamp'),
+      createdAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
     });
 
-    await exporter.publish({
-      id: 'child-gen-1-start',
-      traceId,
-      sessionId: 'parent:subagent:1',
-      conversationId: 'parent:subagent:1',
-      parentSessionId: 'parent',
-      childSessionId: 'parent:subagent:1',
-      runId: 'run-1',
-      taskRunId: 'run-1',
-      spawnBatchId: 'trace:11111111111111111111111111111111',
-      llmGenerationId: 'child-gen-1',
-      status: 'started',
-      createdAt: '2026-05-02T00:00:00.200Z',
-      model: { provider: 'anthropic', model: 'claude-4' },
-      input: 'child task',
-    });
-    await exporter.publish({
-      id: 'child-gen-1-done',
-      traceId,
-      sessionId: 'parent:subagent:1',
-      conversationId: 'parent:subagent:1',
-      parentSessionId: 'parent',
-      childSessionId: 'parent:subagent:1',
-      runId: 'run-1',
-      taskRunId: 'run-1',
-      spawnBatchId: 'trace:11111111111111111111111111111111',
-      llmGenerationId: 'child-gen-1',
-      status: 'completed',
-      createdAt: '2026-05-02T00:00:00.500Z',
-      model: { provider: 'anthropic', model: 'claude-4' },
-      output: 'using tool',
-    });
-
-    await exporter.publish({
-      id: 'subagent-completed-1',
-      traceId,
-      type: 'subagent_completed',
-      sessionId: 'parent:subagent:1',
-      conversationId: 'parent:subagent:1',
-      parentSessionId: 'parent',
-      childSessionId: 'parent:subagent:1',
-      runId: 'run-1',
-      taskRunId: 'run-1',
-      spawnBatchId: 'trace:11111111111111111111111111111111',
-      parentToolCallId: 'spawn-call-1',
-      createdAt: '2026-05-02T00:00:00.600Z',
-      details: { output: 'using tool' },
-    });
-
-    await exporter.publish({
-      id: 'child-tool-start',
-      traceId,
-      sessionId: 'parent:subagent:1',
-      conversationId: 'parent:subagent:1',
-      parentSessionId: 'parent',
-      childSessionId: 'parent:subagent:1',
-      runId: 'run-1',
-      taskRunId: 'run-1',
-      spawnBatchId: 'trace:11111111111111111111111111111111',
-      toolCallId: 'tool-1',
-      toolName: 'read_file',
-      status: 'started',
-      createdAt: '2026-05-02T00:00:00.700Z',
-      args: { path: 'src/index.ts' },
-    });
-    await exporter.publish({
-      id: 'child-tool-done',
-      traceId,
-      sessionId: 'parent:subagent:1',
-      conversationId: 'parent:subagent:1',
-      parentSessionId: 'parent',
-      childSessionId: 'parent:subagent:1',
-      runId: 'run-1',
-      taskRunId: 'run-1',
-      spawnBatchId: 'trace:11111111111111111111111111111111',
-      toolCallId: 'tool-1',
-      toolName: 'read_file',
-      status: 'completed',
-      createdAt: '2026-05-02T00:00:00.900Z',
-      details: { policy: 'allow' },
-    });
-
-    await exporter.publish({
-      id: 'child-gen-2-start',
-      traceId,
-      sessionId: 'parent:subagent:1',
-      conversationId: 'parent:subagent:1',
-      parentSessionId: 'parent',
-      childSessionId: 'parent:subagent:1',
-      runId: 'run-1',
-      taskRunId: 'run-1',
-      spawnBatchId: 'trace:11111111111111111111111111111111',
-      llmGenerationId: 'child-gen-2',
-      status: 'started',
-      createdAt: '2026-05-02T00:00:01.000Z',
-      model: { provider: 'anthropic', model: 'claude-4' },
-      input: 'tool result',
-    });
-    await exporter.publish({
-      id: 'child-gen-2-done',
-      traceId,
-      sessionId: 'parent:subagent:1',
-      conversationId: 'parent:subagent:1',
-      parentSessionId: 'parent',
-      childSessionId: 'parent:subagent:1',
-      runId: 'run-1',
-      taskRunId: 'run-1',
-      spawnBatchId: 'trace:11111111111111111111111111111111',
-      llmGenerationId: 'child-gen-2',
-      status: 'completed',
-      createdAt: '2026-05-02T00:00:01.300Z',
-      model: { provider: 'anthropic', model: 'claude-4' },
-      output: 'final answer',
-    });
-
-    await exporter.publish({
-      id: 'subagent-completed-2',
-      traceId,
-      type: 'subagent_completed',
-      sessionId: 'parent:subagent:1',
-      conversationId: 'parent:subagent:1',
-      parentSessionId: 'parent',
-      childSessionId: 'parent:subagent:1',
-      runId: 'run-1',
-      taskRunId: 'run-1',
-      spawnBatchId: 'trace:11111111111111111111111111111111',
-      parentToolCallId: 'spawn-call-1',
-      createdAt: '2026-05-02T00:00:01.400Z',
-      details: { output: 'final answer' },
-    });
-
-    const trace = client.traces.find((candidate) => candidate.body.sessionId === 'parent');
-    const rootSpan = trace?.spans[0];
-    const batchSpan = rootSpan?.spans.find((span) => span.body.name === 'subagent fan-out');
-    const subagentSpan = batchSpan?.spans[0];
-
-    expect(subagentSpan?.body).toMatchObject({ name: 'subagent' });
-    expect(subagentSpan?.generations).toHaveLength(2);
-    expect(subagentSpan?.generations[0]?.body).toMatchObject({
-      name: 'llm-generation [subagent] [child task]',
-    });
-    expect(subagentSpan?.generations[1]?.body).toMatchObject({
-      name: 'llm-generation [subagent] [tool result]',
-    });
-    expect(subagentSpan?.spans).toHaveLength(1);
-    expect(subagentSpan?.spans[0]?.body).toMatchObject({
-      name: 'read_file [src/index.ts]',
-    });
+    expect(inMemory.getFinishedSpans()).toHaveLength(0);
+    expect(errorSpy).toHaveBeenCalledTimes(2);
   });
 
-  it('preserves batch span for new subagents after closeSdkSubagentBatchSpans', async () => {
-    const client = new FakeLangfuseSdkClient();
-    const exporter = new LangfuseSdkRuntimeEventExporter(
-      {
-        enabled: true,
-        publicKey: 'public',
-        secretKey: 'secret',
-        baseUrl: 'https://langfuse.example.com',
-        flushAt: 10,
-        flushIntervalMs: 60_000,
-      },
-      client,
+  it('flushes and closes through the SDK provider', async () => {
+    const { exporter, inMemory } = makeExporter();
+
+    await exporter.publish(completedTurnEvent('turn-1'));
+    await expect(exporter.flush()).resolves.toBeUndefined();
+    expect(inMemory.getFinishedSpans()).toHaveLength(1);
+    // InMemorySpanExporter.shutdown() clears its buffer, so assert before close.
+    await expect(exporter.close()).resolves.toBeUndefined();
+  });
+
+  it('bounds a hung SDK flush with the lifecycle deadline', async () => {
+    const provider = new BasicTracerProvider();
+    vi.spyOn(provider, 'forceFlush').mockReturnValue(new Promise<void>(() => {}));
+    const exporter = new OtelRuntimeEventExporter(
+      { enabled: true, endpoint: '', flushAt: 10, flushIntervalMs: 1000 },
+      { provider },
     );
 
-    await exporter.publish({
-      id: 'root-start',
-      traceId,
-      type: 'chat_turn_started',
-      sessionId: 'parent',
-      conversationId: 'parent',
-      createdAt: '2026-05-02T00:00:00.000Z',
-      details: { input: 'spawn agents' },
-    });
-
-    await exporter.publish({
-      id: 'subagent-1-start',
-      traceId,
-      type: 'subagent_started',
-      sessionId: 'parent:subagent:1',
-      conversationId: 'parent:subagent:1',
-      parentSessionId: 'parent',
-      childSessionId: 'parent:subagent:1',
-      runId: 'run-1',
-      taskRunId: 'run-1',
-      spawnBatchId: 'trace:11111111111111111111111111111111',
-      parentToolCallId: 'spawn-call-1',
-      createdAt: '2026-05-02T00:00:00.100Z',
-      details: { agent: 'legal', input: 'task-1' },
-    });
-    await exporter.publish({
-      id: 'subagent-1-done',
-      traceId,
-      type: 'subagent_completed',
-      sessionId: 'parent:subagent:1',
-      conversationId: 'parent:subagent:1',
-      parentSessionId: 'parent',
-      childSessionId: 'parent:subagent:1',
-      runId: 'run-1',
-      taskRunId: 'run-1',
-      spawnBatchId: 'trace:11111111111111111111111111111111',
-      parentToolCallId: 'spawn-call-1',
-      createdAt: '2026-05-02T00:00:01.000Z',
-      details: { output: 'result-1' },
-    });
-
-    await exporter.publish({
-      id: 'turn-end-1',
-      traceId,
-      type: 'chat_turn_completed',
-      sessionId: 'parent',
-      conversationId: 'parent',
-      createdAt: '2026-05-02T00:00:01.100Z',
-      durationMs: 1100,
-      details: { output: 'partial' },
-    });
-
-    await exporter.publish({
-      id: 'subagent-2-start',
-      traceId,
-      type: 'subagent_started',
-      sessionId: 'parent:subagent:2',
-      conversationId: 'parent:subagent:2',
-      parentSessionId: 'parent',
-      childSessionId: 'parent:subagent:2',
-      runId: 'run-2',
-      taskRunId: 'run-2',
-      spawnBatchId: 'trace:11111111111111111111111111111111',
-      parentToolCallId: 'spawn-call-2',
-      createdAt: '2026-05-02T00:00:01.200Z',
-      details: { agent: 'finance', input: 'task-2' },
-    });
-    await exporter.publish({
-      id: 'subagent-2-done',
-      traceId,
-      type: 'subagent_completed',
-      sessionId: 'parent:subagent:2',
-      conversationId: 'parent:subagent:2',
-      parentSessionId: 'parent',
-      childSessionId: 'parent:subagent:2',
-      runId: 'run-2',
-      taskRunId: 'run-2',
-      spawnBatchId: 'trace:11111111111111111111111111111111',
-      parentToolCallId: 'spawn-call-2',
-      createdAt: '2026-05-02T00:00:02.000Z',
-      details: { output: 'result-2' },
-    });
-
-    const trace = client.traces.find((candidate) => candidate.body.sessionId === 'parent');
-    const rootSpan = trace?.spans[0];
-    const batchSpan = rootSpan?.spans.find((span) => span.body.name === 'subagent fan-out');
-
-    expect(batchSpan).toBeDefined();
-    expect(batchSpan?.spans).toHaveLength(2);
-    expect(batchSpan?.spans[0]?.body).toMatchObject({ name: 'subagent [legal]' });
-    expect(batchSpan?.spans[1]?.body).toMatchObject({ name: 'subagent [finance]' });
-    const sub0Updates = batchSpan?.spans[0]?.updates ?? [];
-    const sub1Updates = batchSpan?.spans[1]?.updates ?? [];
-    expect(sub0Updates[sub0Updates.length - 1]).toMatchObject({ output: 'result-1' });
-    expect(sub1Updates[sub1Updates.length - 1]).toMatchObject({ output: 'result-2' });
+    await expect(exporter.flush()).resolves.toBeUndefined();
+    expect(delayMock).toHaveBeenCalledWith(MAX_CLOSE_MS, undefined, { ref: false });
   });
 });
 
-function getStringAttribute(
-  span: { attributes: Array<{ key: string; value: { stringValue?: string } }> },
-  key: string,
-): string | undefined {
-  return span.attributes.find((attribute) => attribute.key === key)?.value.stringValue;
-}
-
-class FakeLangfuseSdkClient implements LangfuseSdkClient {
-  readonly traces: FakeLangfuseSdkTraceClient[] = [];
-  flushed = 0;
-  closed = 0;
-
-  trace(body?: Record<string, unknown>): LangfuseSdkTraceClient {
-    const trace = new FakeLangfuseSdkTraceClient(body ?? {});
-    this.traces.push(trace);
-    return trace;
-  }
-
-  async flushAsync(): Promise<void> {
-    this.flushed += 1;
-  }
-
-  async shutdownAsync(): Promise<void> {
-    this.closed += 1;
-  }
-}
-
-class FakeLangfuseSdkTraceClient implements LangfuseSdkTraceClient {
-  readonly updates: Array<Record<string, unknown>> = [];
-  readonly spans: FakeLangfuseSdkSpanClient[] = [];
-  readonly generations: FakeLangfuseSdkGenerationClient[] = [];
-
-  constructor(readonly body: Record<string, unknown>) {}
-
-  update(body: Record<string, unknown>): unknown {
-    this.updates.push(body);
-    return this;
-  }
-
-  span(body: Record<string, unknown>): LangfuseSdkSpanClient {
-    const span = new FakeLangfuseSdkSpanClient(body);
-    this.spans.push(span);
-    return span;
-  }
-
-  generation(body: Record<string, unknown>): LangfuseSdkGenerationClient {
-    const generation = new FakeLangfuseSdkGenerationClient(body);
-    this.generations.push(generation);
-    return generation;
-  }
-}
-
-class FakeLangfuseSdkSpanClient implements LangfuseSdkSpanClient {
-  readonly updates: Array<Record<string, unknown>> = [];
-  readonly spans: FakeLangfuseSdkSpanClient[] = [];
-  readonly generations: FakeLangfuseSdkGenerationClient[] = [];
-
-  constructor(readonly body: Record<string, unknown>) {}
-
-  update(body: Record<string, unknown>): unknown {
-    this.updates.push(body);
-    return this;
-  }
-
-  span(body: Record<string, unknown>): LangfuseSdkSpanClient {
-    const span = new FakeLangfuseSdkSpanClient(body);
-    this.spans.push(span);
-    return span;
-  }
-
-  generation(body: Record<string, unknown>): LangfuseSdkGenerationClient {
-    const generation = new FakeLangfuseSdkGenerationClient(body);
-    this.generations.push(generation);
-    return generation;
-  }
-}
-
-class FakeLangfuseSdkGenerationClient implements LangfuseSdkGenerationClient {
-  readonly updates: Array<Record<string, unknown>> = [];
-
-  constructor(readonly body: Record<string, unknown>) {}
-
-  update(body: Record<string, unknown>): unknown {
-    this.updates.push(body);
-    return this;
-  }
-}
+describe('TelemetryIdGenerator', () => {
+  it('consumes a seeded trace id once, then falls back to random ids', () => {
+    const generator = new TelemetryIdGenerator();
+    generator.nextTraceId = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    expect(generator.generateTraceId()).toBe('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+    expect(generator.generateTraceId()).toMatch(/^[0-9a-f]{32}$/);
+    expect(generator.generateTraceId()).not.toBe('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+    generator.nextTraceId = 'not-a-hex-trace-id';
+    expect(generator.generateTraceId()).toMatch(/^[0-9a-f]{32}$/);
+    expect(generator.generateSpanId()).toMatch(/^[0-9a-f]{16}$/);
+  });
+});

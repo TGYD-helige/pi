@@ -225,6 +225,8 @@ jobs:
       FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
       UNSPLASH_TOKEN: ${{ secrets.UNSPLASH_TOKEN }}
       BROWSERLESS_TOKEN: ${{ secrets.BROWSERLESS_TOKEN }}
+      # LANGFUSE_* is NOT job-level: only the pi-telemetry settings/run/verify
+      # steps receive it, so other extensions and steps never see the keys.
       PI_OFFLINE: '0'
 
     steps:
@@ -404,6 +406,8 @@ jobs:
           #    concurrent better-sqlite3 writers on one shared file segfault
           #    the pi process (exit 139), so nothing may point at a default
           #    location like ~/.pi/agent/memories/.
+          # ${LANGFUSE_*} stays literal for pi's settings resolver. Other
+          # matrix legs do not install pi-telemetry and ignore this block.
           cat > "$PI_CODING_AGENT_DIR/settings.json" <<EOF
           {
             "pi-teamwork": {
@@ -482,6 +486,16 @@ jobs:
               "visionModel": {
                 "provider": "deepseek-integration",
                 "model": "kimi-k2.6"
+              }
+            },
+            "pi-telemetry": {
+              "serviceName": "pi-telemetry-ci",
+              "includePayloads": true,
+              "langfuse": {
+                "enabled": true,
+                "publicKey": "\${LANGFUSE_PUBLIC_KEY}",
+                "secretKey": "\${LANGFUSE_SECRET_KEY}",
+                "baseUrl": "\${LANGFUSE_BASE_URL}"
               }
             }
           }
@@ -709,6 +723,12 @@ jobs:
           # Lets pi-memory-mem0 log turns whose extraction stored nothing —
           # the difference between a quiet pipeline and a broken one.
           DEBUG: 'pi-memory-mem0'
+          # pi-telemetry only: pi expands the ${LANGFUSE_*} placeholders in
+          # settings.json from this step's env at runtime. Emptied for other
+          # extensions so they never see the keys.
+          LANGFUSE_BASE_URL: ${{ matrix.extension == 'pi-telemetry' && secrets.LANGFUSE_BASE_URL || '' }}
+          LANGFUSE_PUBLIC_KEY: ${{ matrix.extension == 'pi-telemetry' && secrets.LANGFUSE_PUBLIC_KEY || '' }}
+          LANGFUSE_SECRET_KEY: ${{ matrix.extension == 'pi-telemetry' && secrets.LANGFUSE_SECRET_KEY || '' }}
         run: |
           set -euo pipefail
           # The firecrawl matrix entry needs a real Firecrawl API key. Skip it
@@ -723,6 +743,24 @@ jobs:
           if [ "${{ matrix.provider }}" = "unsplash" ] && [ -z "${UNSPLASH_TOKEN:-}" ]; then
             echo "::warning::UNSPLASH_TOKEN secret unset — skipping Unsplash E2E."
             exit 0
+          fi
+          # pi-telemetry's assertion happens against the Langfuse API, so this
+          # step needs the keys (step-scoped env above). The trace is found by
+          # a per-run codeword plus a start-timestamp lower bound.
+          if [ "${{ matrix.extension }}" = "pi-telemetry" ]; then
+            if [ -z "${LANGFUSE_PUBLIC_KEY:-}" ] || [ -z "${LANGFUSE_SECRET_KEY:-}" ]; then
+              echo "::warning::LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY secrets unset — skipping pi-telemetry E2E."
+              exit 0
+            fi
+            echo "TELEMETRY_TRACE_FROM=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+            # Unique codeword per run so concurrent jobs against the same
+            # Langfuse project can't cross-match; the child script and the
+            # verify script both read TELEMETRY_CODEWORD from the env.
+            SCENARIO="${{ matrix.scenario || 'basic' }}"
+            CODEWORD="ci-langfuse-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${SCENARIO}"
+            export TELEMETRY_CODEWORD="$CODEWORD"
+            echo "TELEMETRY_CODEWORD=$CODEWORD" >> "$GITHUB_ENV"
+            EXTENSION_PROMPT="${EXTENSION_PROMPT//ci-langfuse-probe/$CODEWORD}"
           fi
           unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY
           unset http_proxy https_proxy all_proxy no_proxy
@@ -971,6 +1009,27 @@ jobs:
             echo "✓ pi-goal wrote $GOAL_FILE and the goal engine derived+evaluated a condition."
             rm -f "$GOAL_FILE"
           fi
+
+      - name: Verify Langfuse trace (pi-telemetry only)
+        if: >
+          matrix.extension == 'pi-telemetry' &&
+          env.PI_INTEGRATION_BASE_URL != '' &&
+          env.PI_INTEGRATION_API_KEY != ''
+        # Bounds the step independently of the shared 15min job timeout: the
+        # verifier's own deadline is 5min, so 8 covers polling plus startup.
+        timeout-minutes: 8
+        env:
+          LANGFUSE_BASE_URL: ${{ secrets.LANGFUSE_BASE_URL }}
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          TELEMETRY_SCENARIO: ${{ matrix.scenario || 'basic' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${LANGFUSE_PUBLIC_KEY:-}" ] || [ -z "${LANGFUSE_SECRET_KEY:-}" ]; then
+            echo "::warning::LANGFUSE_* secrets unset — the Stage C run skipped too, nothing to verify."
+            exit 0
+          fi
+          node .github/scripts/telemetry-langfuse-verify.mjs
 
       - name: Verify pi-memory-mem0 captured turn (mem0 jobs only)
         if: (matrix.extension == 'pi-memory' || matrix.extension == 'pi-memory-mem0') && env.PI_INTEGRATION_BASE_URL != ''

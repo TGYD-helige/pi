@@ -8,13 +8,8 @@ import type {
 import { isProjectTrusted } from '@amaster.ai/pi-shared/settings';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { loadConfigFromFile, resolveConfig } from './config.js';
-import {
-  CompositeRuntimeEventExporter,
-  NoopRuntimeEventExporter,
-  type RuntimeEventExporter,
-} from './index.js';
-import { createLangfuseExporter } from './langfuse.js';
-import { createOtelExporter } from './otel.js';
+import { NoopRuntimeEventExporter, type RuntimeEventExporter } from './index.js';
+import { createTelemetryExporter } from './otel.js';
 
 function modelConfigFromCtx(ctx: ExtensionContext): RuntimeModelConfig {
   const model = ctx.model;
@@ -30,7 +25,9 @@ function modelConfigFromCtx(ctx: ExtensionContext): RuntimeModelConfig {
 function extractOutput(message: unknown): string | undefined {
   if (!message || typeof message !== 'object') return undefined;
   const msg = message as Record<string, unknown>;
-  if (msg.role !== 'assistant' || !Array.isArray(msg.content)) return undefined;
+  if (msg.role !== 'assistant') return undefined;
+  if (typeof msg.content === 'string') return msg.content;
+  if (!Array.isArray(msg.content)) return undefined;
   const texts: string[] = [];
   for (const block of msg.content) {
     if (
@@ -44,6 +41,14 @@ function extractOutput(message: unknown): string | undefined {
     }
   }
   return texts.length > 0 ? texts.join('\n') : undefined;
+}
+
+function extractLastOutput(messages: readonly unknown[]): string | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const output = extractOutput(messages[index]);
+    if (output !== undefined) return output;
+  }
+  return undefined;
 }
 
 function simplifyContent(content: unknown): JsonValue | undefined {
@@ -224,14 +229,10 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
         projectTrusted: isProjectTrusted(ctx),
       }),
     );
-    const langfuse = createLangfuseExporter(config);
-    const otel = createOtelExporter(config);
-
-    const active = [langfuse, otel].filter((e) => !(e instanceof NoopRuntimeEventExporter));
-    exporter =
-      active.length > 1
-        ? new CompositeRuntimeEventExporter(active)
-        : (active[0] ?? new NoopRuntimeEventExporter());
+    // One exporter/provider even when both Langfuse and a generic OTLP
+    // endpoint are configured: two providers would mint different span ids for
+    // the same logical span and cross-wire PI_TELEMETRY_TRACEPARENT.
+    exporter = createTelemetryExporter(config);
   });
 
   pi.on('input', async (event) => {
@@ -290,11 +291,11 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     }
   });
 
-  pi.on('turn_end', async (event) => {
+  pi.on('agent_end', async (event) => {
     if (!currentTraceId) return;
     const now = Date.now();
     const durationMs = traceStartTime ? now - traceStartTime : undefined;
-    const output = extractOutput(event.message);
+    const output = extractLastOutput(event.messages);
 
     if (isSubagent) {
       const details = subagentLifecycleDetails({
@@ -349,7 +350,9 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
 
   pi.on('tool_execution_end', async (event) => {
     if (!currentTraceId) return;
-    const details = toolEventDetails(event.result);
+    // Failed tool results can contain credentials, internal paths, or stacks.
+    // Keep the failure signal but never forward the raw result as telemetry.
+    const details = event.isError ? undefined : toolEventDetails(event.result);
 
     await exporter.publish({
       id: randomUUID(),
@@ -365,9 +368,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
       status: event.isError ? 'failed' : 'completed',
       createdAt: new Date().toISOString(),
       ...(details ? { details } : {}),
-      ...(event.isError
-        ? { error: typeof event.result === 'string' ? event.result : JSON.stringify(event.result) }
-        : {}),
+      ...(event.isError ? { error: 'Tool execution failed' } : {}),
     });
   });
 
@@ -469,7 +470,10 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
             }
           : null,
         to: model
-          ? { provider: String(model.provider ?? 'unknown'), model: String(model.id ?? 'unknown') }
+          ? {
+              provider: String(model.provider ?? 'unknown'),
+              model: String(model.id ?? 'unknown'),
+            }
           : null,
         source: String(evt.source ?? 'unknown'),
       } as JsonObject,
@@ -495,7 +499,6 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   });
 
   pi.on('session_shutdown', async () => {
-    await exporter.flush?.();
     await exporter.close?.();
   });
 }

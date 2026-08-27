@@ -17,15 +17,6 @@ export interface RuntimeEventExporter {
 
 export type TelemetryEnvironment = Record<string, string | undefined>;
 
-export type TelemetryFetch = (
-  input: string,
-  init: {
-    method: 'POST';
-    headers: Record<string, string>;
-    body: string;
-  },
-) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
-
 export type TelemetryRedactor = (event: RuntimeTelemetryEvent) => RuntimeTelemetryEvent | undefined;
 
 export type RuntimeTelemetryOptions = {
@@ -53,6 +44,8 @@ export class CompositeRuntimeEventExporter implements RuntimeEventExporter {
   }
 
   async close(): Promise<void> {
+    // Preserve the public flush-before-close contract. Built-in close()
+    // implementations may flush again, but an already-drained queue is a no-op.
     await this.flush();
     await Promise.allSettled(this.exporters.map((exporter) => exporter.close?.()));
   }

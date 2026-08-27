@@ -17,6 +17,17 @@ test('selects every scenario for a changed extension', () => {
   ]);
 });
 
+test('selects a separate Langfuse hierarchy scenario', () => {
+  const selected = selectIntegrationMatrix(['packages/pi-telemetry/src/extension.ts']);
+  assert.deepEqual(
+    selected.map(({ extension, scenario }) => [extension, scenario]),
+    [
+      ['pi-telemetry', undefined],
+      ['pi-telemetry', 'hierarchy'],
+    ],
+  );
+});
+
 test('routes companion packages and package-specific integration tests', () => {
   assert.deepEqual(
     selectIntegrationMatrix(['packages/pi-memory-mem0/src/index.ts']).map(({ extension }) => extension),
@@ -41,5 +52,13 @@ test('runs the full matrix for shared and integration infrastructure changes', (
 });
 
 test('skips Stage C when no tested extension changed', () => {
-  assert.deepEqual(selectIntegrationMatrix(['README.md', 'packages/pi-telemetry/README.md']), []);
+  assert.deepEqual(selectIntegrationMatrix(['README.md']), []);
+  assert.deepEqual(
+    selectIntegrationMatrix(['packages/pi-telemetry/src/extension.ts']).map(({ extension }) => extension),
+    ['pi-telemetry', 'pi-telemetry'],
+  );
+  assert.deepEqual(
+    selectIntegrationMatrix(['.github/scripts/telemetry-langfuse-verify.mjs']).map(({ extension }) => extension),
+    ['pi-telemetry', 'pi-telemetry'],
+  );
 });
