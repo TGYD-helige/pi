@@ -3,14 +3,17 @@ import { readFile } from 'node:fs/promises';
 import { test } from 'vitest';
 import { fullMatrix, selectIntegrationMatrix } from './integration-matrix.mjs';
 
-test('runs secret-free integration stages for fork pull requests', async () => {
+test('requires environment approval for secret-backed fork integration', async () => {
   const workflow = await readFile(new URL('../workflows/integration.yml', import.meta.url), 'utf8');
-  const secretFreeStages = workflow.slice(0, workflow.indexOf('  pi-runtime-smoke:'));
-  assert.doesNotMatch(secretFreeStages, /github\.event\.pull_request\.head\.repo\.full_name == github\.repository/);
-  assert.equal(
-    workflow.match(/github\.event\.pull_request\.head\.repo\.full_name == github\.repository/g)?.length,
-    2,
-  );
+
+  assert.match(workflow, /pull_request_target:\s+branches: \[master, main\]/);
+  assert.equal(workflow.match(/environment: \$\{\{ github\.event_name == 'pull_request_target' && 'fork-integration' \|\| 'integration' \}\}/g)?.length, 2);
+  assert.equal(workflow.match(/allow-unsafe-pr-checkout:/g)?.length, 4);
+  assert.equal(workflow.match(/persist-credentials: false/g)?.length, 4);
+  assert.equal(workflow.match(/ref: \$\{\{ env\.INTEGRATION_CHECKOUT_REF \}\}/g)?.length, 4);
+  assert.doesNotMatch(workflow, /integration-approved/);
+  assert.match(workflow, /PI_INTEGRATION_BASE_URL and PI_INTEGRATION_API_KEY are required for Stage B/);
+  assert.match(workflow, /PI_INTEGRATION_\* secrets are required for Stage C/);
 });
 
 test('loads pi-telemetry for every model-backed integration run', async () => {
