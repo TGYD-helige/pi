@@ -24,6 +24,17 @@ const finding = {
   fix: 'Move cleanup into a finally block.',
 };
 
+const ponytailFinding = {
+  severity: 'PONYTAIL',
+  axis: 'Ponytail',
+  path: 'src/example.ts',
+  line: 11,
+  side: 'RIGHT',
+  title: 'yagni: wrapper with one caller',
+  body: 'The added wrapper only delegates to the existing helper.',
+  fix: 'Call the helper directly.',
+};
+
 test('combines schema-validated axis outputs from the Pi JSON transcript', async () => {
   const directory = await mkdtemp(path.join(tmpdir(), 'pi-review-transcript-'));
   const transcriptPath = path.join(directory, 'pi.jsonl');
@@ -44,17 +55,25 @@ test('combines schema-validated axis outputs from the Pi JSON transcript', async
             results: [
               { exitCode: 0, structuredOutput: { axis: 'Standards', findings: [finding] } },
               { exitCode: 0, structuredOutput: { axis: 'Spec', findings: [specFinding] } },
+              {
+                exitCode: 0,
+                structuredOutput: { axis: 'Ponytail', findings: [ponytailFinding], netLines: 12 },
+              },
             ],
           },
         },
       }),
     ].join('\n'));
     await combinePiReviewTranscript({ transcriptPath, reviewPath, core });
-    assert.deepEqual(JSON.parse(await readFile(reviewPath, 'utf8')), { findings: [finding, specFinding] });
+    assert.deepEqual(JSON.parse(await readFile(reviewPath, 'utf8')), {
+      findings: [finding, ponytailFinding],
+      ponytailNetLines: 12,
+    });
     assert.deepEqual(infos, [
       'Pi review transcript: 1 completed reviewer subagent run(s)',
       'Pi review Standards reviewer: 1 finding(s)',
       'Pi review Spec reviewer: 1 finding(s)',
+      'Pi review Ponytail reviewer: 1 finding(s)',
       'Pi review combined 2 total finding(s)',
     ]);
     assert.deepEqual(warnings, []);
@@ -63,7 +82,7 @@ test('combines schema-validated axis outputs from the Pi JSON transcript', async
   }
 });
 
-test('accepts a Standards-only run when the skill finds no specification', async () => {
+test('rejects a run when the Spec reviewer produces no result', async () => {
   const directory = await mkdtemp(path.join(tmpdir(), 'pi-review-no-spec-'));
   const transcriptPath = path.join(directory, 'pi.jsonl');
   const reviewPath = path.join(directory, 'review.json');
@@ -77,21 +96,17 @@ test('accepts a Standards-only run when the skill finds no specification', async
       result: {
         details: {
           mode: 'parallel',
-          results: [{ exitCode: 0, structuredOutput: { axis: 'Standards', findings: [finding] } }],
+          results: [
+            { exitCode: 0, structuredOutput: { axis: 'Standards', findings: [finding] } },
+            { exitCode: 0, structuredOutput: { axis: 'Ponytail', findings: [], netLines: 0 } },
+          ],
         },
       },
     }));
-    await combinePiReviewTranscript({ transcriptPath, reviewPath, core });
-    assert.deepEqual(JSON.parse(await readFile(reviewPath, 'utf8')), { findings: [finding] });
-    // A missing axis is tolerated but must be visible, not silent.
-    assert.deepEqual(infos, [
-      'Pi review transcript: 1 completed reviewer subagent run(s)',
-      'Pi review Standards reviewer: 1 finding(s)',
-      'Pi review combined 1 total finding(s)',
-    ]);
-    assert.deepEqual(warnings, [
-      'Pi review Spec reviewer produced no usable result; that axis contributes no findings',
-    ]);
+    await assert.rejects(
+      combinePiReviewTranscript({ transcriptPath, reviewPath, core }),
+      /no valid Spec result/,
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -122,17 +137,22 @@ test('combines workflow-mode runs and ignores management calls', async () => {
             results: [
               { exitCode: 0, structuredOutput: { axis: 'Standards', findings: [finding] } },
               { exitCode: 0, structuredOutput: { axis: 'Spec', findings: [] } },
+              { exitCode: 0, structuredOutput: { axis: 'Ponytail', findings: [], netLines: 0 } },
             ],
           },
         },
       }),
     ].join('\n'));
     await combinePiReviewTranscript({ transcriptPath, reviewPath, core });
-    assert.deepEqual(JSON.parse(await readFile(reviewPath, 'utf8')), { findings: [finding] });
+    assert.deepEqual(JSON.parse(await readFile(reviewPath, 'utf8')), {
+      findings: [finding],
+      ponytailNetLines: 0,
+    });
     assert.deepEqual(infos, [
       'Pi review transcript: 1 completed reviewer subagent run(s)',
       'Pi review Standards reviewer: 1 finding(s)',
       'Pi review Spec reviewer: 0 finding(s)',
+      'Pi review Ponytail reviewer: 0 finding(s)',
       'Pi review combined 1 total finding(s)',
     ]);
     assert.deepEqual(warnings, []);
@@ -159,16 +179,21 @@ test('combines successful structured outputs across coordinator recovery calls',
       event([{ exitCode: 1, error: 'first attempt failed' }]),
       event([{ exitCode: 0, structuredOutput: { axis: 'Standards', findings: [finding] } }]),
       event([{ exitCode: 0, structuredOutput: { axis: 'Spec', findings: [specFinding] } }]),
+      event([{ exitCode: 0, structuredOutput: { axis: 'Ponytail', findings: [], netLines: 0 } }]),
     ].join('\n'));
     await combinePiReviewTranscript({ transcriptPath, reviewPath, core });
-    assert.deepEqual(JSON.parse(await readFile(reviewPath, 'utf8')), { findings: [finding, specFinding] });
+    assert.deepEqual(JSON.parse(await readFile(reviewPath, 'utf8')), {
+      findings: [finding],
+      ponytailNetLines: 0,
+    });
     // The failed first attempt is surfaced as a warning, not swallowed.
     assert.deepEqual(warnings, ['Pi review discarded reviewer output: first attempt failed']);
     assert.deepEqual(infos, [
-      'Pi review transcript: 3 completed reviewer subagent run(s)',
+      'Pi review transcript: 4 completed reviewer subagent run(s)',
       'Pi review Standards reviewer: 1 finding(s)',
       'Pi review Spec reviewer: 1 finding(s)',
-      'Pi review combined 2 total finding(s)',
+      'Pi review Ponytail reviewer: 0 finding(s)',
+      'Pi review combined 1 total finding(s)',
     ]);
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -213,6 +238,9 @@ test('gives the reviewer exact changed-line coordinates', () => {
 test('prepares the review prompt outside the workflow', async () => {
   const directory = await mkdtemp(path.join(tmpdir(), 'pi-review-context-'));
   const contextPath = path.join(directory, 'context.md');
+  const diffPath = path.join(directory, 'pull-request.diff');
+  const reviewWorkspace = path.join(directory, 'pull-request');
+  const ponytailSkillPath = path.join(directory, 'ponytail-review', 'SKILL.md');
   await writeFile(path.join(directory, 'AGENTS.md'), '# Review rules');
   const listFiles = () => {};
   const listCommits = () => {};
@@ -268,23 +296,33 @@ test('prepares the review prompt outside the workflow', async () => {
       },
       core: { warning: () => {} },
       contextPath,
+      diffPath,
+      reviewWorkspace,
+      ponytailSkillPath,
       workspace: directory,
     });
     const prompt = await readFile(contextPath, 'utf8');
+    const diff = await readFile(diffPath, 'utf8');
     assert.match(prompt, /# Allowed changed-line locations/);
     assert.match(prompt, /src\/example\.ts\tRIGHT\t11/);
-    assert.match(prompt, /\[LARGE JSON DIFF OMITTED: 10001 changed lines\]/);
-    assert.match(prompt, /\+new/);
-    assert.doesNotMatch(prompt, /\+{"id":0}/);
+    assert.match(diff, /\[LARGE JSON DIFF OMITTED: 10001 changed lines\]/);
+    assert.match(diff, /\+new/);
+    assert.doesNotMatch(diff, /\+{"id":0}/);
+    assert.doesNotMatch(prompt, /\+new/);
     assert.doesNotMatch(prompt, /data\/catalog\.json\tRIGHT/);
-    assert.match(prompt, /Copy path, side, and line exactly from this list/);
+    assert.match(prompt, new RegExp(diffPath.replaceAll('/', '\\/')));
+    assert.match(prompt, new RegExp(reviewWorkspace.replaceAll('/', '\\/')));
+    assert.match(prompt, new RegExp(ponytailSkillPath.replaceAll('/', '\\/')));
+    assert.match(prompt, /read the full ponytail-review skill file/);
+    assert.match(prompt, /read, fffind, and ffgrep/);
+    assert.match(prompt, /exactly three tasks/);
     assert.match(prompt, /outputSchema/);
     assert.match(prompt, /structured_output/);
     assert.match(prompt, /"const":"Standards"/);
     assert.match(prompt, /"const":"Spec"/);
-    assert.match(prompt, /Reviewer children have no tools and inherit no context/);
-    assert.match(prompt, /Copy the supplied review data directly into each child task/);
-    assert.match(prompt, /Never tell a child to run git, execute the diff command, read files, or fetch context/);
+    assert.match(prompt, /"const":"Ponytail"/);
+    assert.match(prompt, /"const":"PONYTAIL"/);
+    assert.match(prompt, /"enum":\["P0","P1"\]/);
     assert.match(prompt, /Make exactly one synchronous subagent workflow call/);
     assert.match(prompt, /Set async to false explicitly/);
     assert.match(prompt, /Do not call emit, subagent_wait, status, or list, and do not retry/);
@@ -294,20 +332,42 @@ test('prepares the review prompt outside the workflow', async () => {
   }
 
   const workflow = await readFile(new URL('../workflows/pi-review.yml', import.meta.url), 'utf8');
-  assert.match(workflow, /preparePiReview\(\{ github, context, core/);
+  assert.match(workflow, /preparePiReview\(\{[\s\S]*?github,[\s\S]*?context,[\s\S]*?core,/);
   assert.match(workflow, /PI_REVIEW_TRANSCRIPT/);
   assert.match(workflow, /combinePiReviewTranscript\(\{[^}]*\bcore\b/);
   assert.match(workflow, /--mode json/);
   assert.match(workflow, /> "\$PI_REVIEW_TRANSCRIPT"/);
   assert.match(workflow, /acceptanceRole: read-only/);
   assert.match(workflow, /completionGuard: false/);
+  assert.match(workflow, /path: pull-request/);
+  assert.match(workflow, /repository: \$\{\{ github\.event\.pull_request\.head\.repo\.full_name \}\}/);
+  assert.match(workflow, /pi install npm:@ff-labs\/pi-fff/);
+  assert.match(workflow, /pi install npm:@amaster\.ai\/pi-telemetry/);
+  assert.match(workflow, /tools: read,fffind,ffgrep/);
+  assert.match(workflow, /Read every diff hunk line by line/);
+  assert.match(workflow, /concrete input, state, timing, or platform/);
+  assert.match(workflow, /call structured_output exactly once/);
+  assert.match(workflow, /--tools subagent,read/);
+  assert.match(workflow, /PI_REVIEW_GUARD=.*pi-review-readonly-guard\.mjs/);
+  assert.match(workflow, /extensions:[\s\S]*?- \$PI_REVIEW_GUARD/);
+  assert.match(workflow, /--extension "\$PI_REVIEW_GUARD"/);
+  assert.match(workflow, /PI_PONYTAIL_REVIEW_SKILL/);
+  assert.match(workflow, /LANGFUSE_PUBLIC_KEY: \$\{\{ secrets\.LANGFUSE_PUBLIC_KEY \}\}/);
+  const ceiling = workflow.match(/PI_SUBAGENT_CAPABILITY_CEILING_V1: (\S+)/)?.[1];
+  assert.deepEqual(JSON.parse(Buffer.from(ceiling, 'base64url').toString('utf8')), {
+    version: 1,
+    allowedTools: ['read', 'fffind', 'ffgrep'],
+    allowedAgents: ['general-purpose'],
+    denyExtensions: false,
+    sources: ['pi-review-ci'],
+  });
   assert.doesNotMatch(workflow, /const diffResponse =/);
 });
 
 test('posts one new review per run with the full summary and current findings', async () => {
   const directory = await mkdtemp(path.join(tmpdir(), 'pi-review-'));
   const reviewPath = path.join(directory, 'review.json');
-  await writeFile(reviewPath, JSON.stringify({ findings: [finding] }));
+  await writeFile(reviewPath, JSON.stringify({ findings: [finding, ponytailFinding], ponytailNetLines: 8 }));
   const calls = [];
   const listFiles = () => {};
   const github = {
@@ -365,28 +425,31 @@ test('posts one new review per run with the full summary and current findings', 
 
   assert.equal(first.commit_id, 'abc123');
   assert.equal(first.event, 'COMMENT');
-  assert.equal(first.comments.length, 1);
+  assert.equal(first.comments.length, 2);
   assert.equal(first.comments[0].path, 'src/example.ts');
   assert.equal(first.comments[0].line, 11);
   assert.equal(first.comments[0].side, 'RIGHT');
   assert.match(first.comments[0].body, /\*\*\[P1\] Unchecked failure path\*\* · Standards/);
+  assert.match(first.comments[1].body, /\*\*\[PONYTAIL\] yagni: wrapper with one caller\*\* · Ponytail/);
   assert.match(first.body, /^<!-- pi-code-review -->\n## Standards/);
   assert.match(first.body, /Unchecked failure path/);
-  assert.match(first.body, /\*\*Summary:\*\* Standards: 1 finding, highest P1; Spec: no findings\./);
+  assert.match(first.body, /## Ponytail/);
+  assert.match(first.body, /net: -8 lines possible\./);
+  assert.match(first.body, /\*\*Summary:\*\* Standards: 1 finding, highest P1; Spec: no findings; Ponytail: 1 finding\./);
 
   assert.equal(second.commit_id, 'def456');
-  assert.equal(second.comments.length, 1);
-  assert.match(second.comments[0].body, /\*\*\[P2\] Cleanup can be skipped\*\*/);
+  assert.equal(second.comments.length, 0);
+  assert.doesNotMatch(second.body, /Cleanup can be skipped/);
   // Findings outside changed lines stay summary-only: no inline comment, but
   // still present in the review body.
   assert.match(second.body, /Invalid model location/);
-  assert.match(second.body, /\*\*Summary:\*\* Standards: 2 findings, highest P0; Spec: no findings\./);
+  assert.match(second.body, /\*\*Summary:\*\* Standards: 1 finding, highest P0; Spec: no findings; Ponytail: no findings\./);
 
   // A findings-free run still posts its review, with no inline comments.
   assert.equal(third.comments.length, 0);
   assert.equal(
     third.body,
-    '<!-- pi-code-review -->\n## Standards\n\nNo actionable findings.\n\n## Spec\n\nNo actionable findings.\n\n**Summary:** Standards: no findings; Spec: no findings.',
+    '<!-- pi-code-review -->\n## Standards\n\nNo actionable findings.\n\n## Spec\n\nNo actionable findings.\n\n## Ponytail\n\nLean already. Ship.\n\n**Summary:** Standards: no findings; Spec: no findings; Ponytail: no findings.',
   );
 
   assert.deepEqual(failures, [
@@ -395,8 +458,8 @@ test('posts one new review per run with the full summary and current findings', 
   ]);
   assert.deepEqual(warnings, ['Summary-only Pi review finding outside changed lines: src/example.ts:12 (RIGHT)']);
   assert.deepEqual(infos, [
-    'Pi review published 1 finding(s): 1 inline, 0 summary-only; blocking P0/P1: 1',
-    'Pi review published 2 finding(s): 1 inline, 1 summary-only; blocking P0/P1: 1',
+    'Pi review published 2 finding(s): 2 inline, 0 summary-only; blocking P0/P1: 1',
+    'Pi review published 1 finding(s): 0 inline, 1 summary-only; blocking P0/P1: 1',
     'Pi review published 0 finding(s): 0 inline, 0 summary-only; blocking P0/P1: 0',
   ]);
   const summary = summaryBody(
@@ -420,19 +483,21 @@ test('posts one new review per run with the full summary and current findings', 
       baseSha: 'base123',
       serverUrl: 'https://github.example',
     },
+    { ponytailNetLines: 0 },
   );
   assert.match(summary, /^<!-- pi-code-review -->\n## Standards/m);
   assert.match(summary, /\*\*P1 — \[src\/example\.ts \(line 11\)\]\(https:\/\/github\.example\/owner\/repo\/blob\/abc123\/src\/example\.ts#L11\): Unchecked failure path\.\*\*/);
   assert.match(summary, /The added call can throw before cleanup runs\. \*\*Suggested fix:\*\* Move cleanup into a finally block\./);
   assert.match(summary, /## Spec/);
-  assert.match(summary, /\*\*P2 — \[src\/other\.ts \(line 20\)\]/);
-  assert.match(summary, /\*\*Summary:\*\* Standards: 1 finding, highest P1; Spec: 1 finding, highest P2\./);
+  assert.doesNotMatch(summary, /Documented fallback is missing/);
+  assert.match(summary, /## Ponytail\n\nLean already\. Ship\./);
+  assert.match(summary, /\*\*Summary:\*\* Standards: 1 finding, highest P1; Spec: no findings; Ponytail: no findings\./);
   assert.doesNotMatch(summary, /\| Priority \|/);
   assert.doesNotMatch(summary, /Model:/);
 
   const emptySummary = summaryBody([]);
   assert.equal(
     emptySummary,
-    '<!-- pi-code-review -->\n## Standards\n\nNo actionable findings.\n\n## Spec\n\nNo actionable findings.\n\n**Summary:** Standards: no findings; Spec: no findings.',
+    '<!-- pi-code-review -->\n## Standards\n\nNo actionable findings.\n\n## Spec\n\nNo actionable findings.\n\n## Ponytail\n\nLean already. Ship.\n\n**Summary:** Standards: no findings; Spec: no findings; Ponytail: no findings.',
   );
 });
