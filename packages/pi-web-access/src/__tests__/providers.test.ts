@@ -542,7 +542,7 @@ describe('search - all providers', () => {
     expect(url).toBe('https://dashscope.aliyuncs.com/compatible-mode/v1/responses');
     expect(opts.headers.Authorization).toBe('Bearer dashscope-key');
     const body = JSON.parse(opts.body);
-    expect(body.model).toBe('qwen3.7-plus');
+    expect(body.model).toBe('qwen3.8-flash');
     expect(body.tools[0].type).toBe('web_search');
   });
 

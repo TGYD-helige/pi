@@ -119,7 +119,7 @@ describe('resolveProvider', () => {
       expect(result.id).toBe('dashscope');
       expect(result.baseUrl).toBe('https://dashscope.aliyuncs.com/compatible-mode/v1');
       expect(result.apiKey).toBe('test-dashscope-key');
-      expect(result.model).toBe('qwen3.7-plus');
+      expect(result.model).toBe('qwen3.8-flash');
     }
   });
 

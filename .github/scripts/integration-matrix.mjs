@@ -116,6 +116,27 @@ export const fullMatrix = [
     assert_pattern: 'Promo video ready:',
   },
   {
+    extension: 'pi-telemetry',
+    tools: 'bash',
+    // pi-telemetry is passive — the tool calls are just the vehicle. The real
+    // assertion is the Langfuse verify step in integration.yml, which polls
+    // the Langfuse API for this run's trace and checks it holds a chat-turn
+    // root span, both bash tool spans, main+subagent llm-generations, and a
+    // 'subagent [ci-probe]' span. The second bash call spawns a nested pi
+    // (.github/scripts/telemetry-subagent.sh) which inherits the
+    // PI_TELEMETRY_* env the parent extension set on `input`, so its
+    // telemetry lands in the same trace as subagent events.
+    prompt: 'Step 1 — use the bash tool exactly once to run: echo ci-langfuse-probe parent. Step 2 — use the bash tool exactly once to run: bash .github/scripts/telemetry-subagent.sh. Then reply with the single word TELEMETRY-E2E-DONE.',
+    assert_pattern: 'TELEMETRY-E2E-DONE',
+  },
+  {
+    extension: 'pi-telemetry',
+    scenario: 'hierarchy',
+    tools: 'bash',
+    prompt: 'For hierarchy probe ci-langfuse-probe, use the bash tool exactly once to run: bash .github/scripts/telemetry-subagent.sh hierarchy. Then reply with the single word TELEMETRY-HIERARCHY-DONE.',
+    assert_pattern: 'TELEMETRY-HIERARCHY-DONE',
+  },
+  {
     extension: 'pi-browser-use',
     tools: 'browser_list_pages,browser_navigate_page,browser_take_snapshot',
     prompt: 'Use browser_list_pages first to get the current pageId. Pass that pageId to browser_navigate_page to go to https://example.com, then pass it to browser_take_snapshot and tell me the page title.',
@@ -156,6 +177,7 @@ export function selectIntegrationMatrix(changedFiles, { forceAll = false } = {})
     // companion job (pi-memory-mem0 runs both pi-memory and its own).
     if (testedExtensions.has(packageName)) selected.add(packageName);
     if (file === 'tests/computer-use-owner-exit.mjs') selected.add('pi-computer-use');
+    if (file.startsWith('.github/scripts/telemetry-')) selected.add('pi-telemetry');
   }
   return fullMatrix.filter((entry) => selected.has(entry.extension));
 }

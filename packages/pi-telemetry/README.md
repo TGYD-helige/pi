@@ -4,13 +4,13 @@
 
 Runtime telemetry contracts and exporters for pi.
 
-The root package exposes stable exporter contracts plus no-op and composite exporters. Provider-specific implementations live behind explicit subpath entry points so applications can depend on the smallest public surface they need.
+Uses the official Langfuse JS v5 and OpenTelemetry SDKs. Langfuse export runs through `@langfuse/tracing` and `@langfuse/otel`; generic OTLP export uses `OTLPTraceExporter`. Requests time out after 15 seconds and lifecycle flushes are capped at 30 seconds.
 
 ## Entry Points
 
 - `@amaster.ai/pi-telemetry`: stable contracts, `NoopRuntimeEventExporter`, and `CompositeRuntimeEventExporter`.
 - `@amaster.ai/pi-telemetry/config`: `TelemetryConfig` type, `resolveConfig`, and `loadConfigFromFile`.
-- `@amaster.ai/pi-telemetry/langfuse`: Langfuse SDK exporter.
+- `@amaster.ai/pi-telemetry/langfuse`: Langfuse JS v5 exporter using `@langfuse/tracing` and `@langfuse/otel`.
 - `@amaster.ai/pi-telemetry/otel`: generic OTLP/HTTP traces exporter.
 
 ## Events
@@ -21,22 +21,23 @@ The extension hooks into the following Pi lifecycle events:
 |-------|-----------------|
 | `session_start` | Initialize exporters from config |
 | `input` | Start a new trace (traceId boundary = user input) |
-| `turn_start` | Begin a generation span |
-| `before_provider_request` | Record model input |
-| `after_provider_response` | Record model output, usage, latency |
-| `turn_end` | End generation span |
+| `turn_start` | Begin the root or subagent span on the first turn |
+| `before_provider_request` | Begin an LLM generation span and record model input |
+| `after_provider_response` | Mark failed provider responses |
+| `message_update` | Record provider stream events beneath the active LLM generation |
+| `agent_end` | Complete the root or subagent span once per user prompt |
 | `tool_execution_start` | Begin tool span |
 | `tool_execution_end` | End tool span with result |
-| `message_end` | Publish accumulated trace to exporters |
+| `message_end` | Complete an LLM generation span with output and usage |
 | `model_select` | Record model switch events |
 | `session_compact` | Record context compaction events |
 | `session_shutdown` | Flush and shutdown exporters |
 
 ### Trace lifecycle
 
-Traces are scoped to user input boundaries (not individual turns). A single user message may trigger multiple LLM turns and tool calls — all grouped under one trace. The trace is published on `message_end`.
+Traces are scoped to user input boundaries (not individual turns). A single user message may trigger multiple LLM turns and tool calls — all grouped under one trace and completed once on `agent_end`.
 
-Langfuse traces include the configured `serviceName` as both a tag and metadata so shared projects can filter traces by runtime. The extension also adds `taskRunId` correlation metadata when `PI_TELEMETRY_TASK_RUN_ID` is present.
+Langfuse traces carry the configured `serviceName` as resource/metadata attributes and `langfuse.session.id` on every span so shared projects can filter traces by runtime and session. The extension also adds `taskRunId` correlation metadata when `PI_TELEMETRY_TASK_RUN_ID` is present.
 
 ## Configuration
 
@@ -95,7 +96,6 @@ Configuration is read from the `"pi-telemetry"` section of, in increasing priori
 | `headers` | `Record<string, string>` | — | Request headers |
 | `flushAt` | `number` | `20` | Batch size before flush |
 | `flushIntervalMs` | `number` | `5000` | Flush interval in ms |
-| `errorLabel` | `string` | — | Custom label for error messages |
 
 When the endpoint does not end with `/v1/traces`, the exporter appends `/v1/traces`.
 
@@ -103,12 +103,10 @@ When the endpoint does not end with `/v1/traces`, the exporter appends `/v1/trac
 
 ```ts
 import { loadConfigFromFile, resolveConfig } from "@amaster.ai/pi-telemetry/config";
-import { createLangfuseExporter } from "@amaster.ai/pi-telemetry/langfuse";
-import { createOtelExporter } from "@amaster.ai/pi-telemetry/otel";
+import { createTelemetryExporter } from "@amaster.ai/pi-telemetry/otel";
 
 const config = resolveConfig(loadConfigFromFile());
-const langfuse = createLangfuseExporter(config);
-const otel = createOtelExporter(config);
+const telemetry = createTelemetryExporter(config); // one provider for both destinations
 ```
 
 ## Privacy

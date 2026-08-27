@@ -3,23 +3,56 @@ import {
   NoopRuntimeEventExporter,
   type RuntimeEventExporter,
   type TelemetryEnvironment,
-  type TelemetryFetch,
 } from './index.js';
-import { type OtelExporterConfig, OtelRuntimeEventExporter } from './langfuse.js';
+import {
+  type OtelExporterConfig,
+  OtelRuntimeEventExporter,
+  resolveLangfuseExporterConfig,
+} from './langfuse.js';
+import { parseBoolean, parsePositiveInteger, trim } from './parse.js';
 
 const DEFAULT_OTEL_FLUSH_AT = 20;
 const DEFAULT_OTEL_FLUSH_INTERVAL_MS = 5000;
 
-export { type OtelExporterConfig, OtelRuntimeEventExporter, type TelemetryFetch };
+export { type OtelExporterConfig, OtelRuntimeEventExporter };
 
-export function createOtelExporter(
-  telemetryConfig: TelemetryConfig,
-  fetchImpl?: TelemetryFetch,
-): RuntimeEventExporter {
+// Combined factory for the extension: when BOTH langfuse and a generic otel
+// endpoint are configured, both span processors must ride on ONE provider —
+// two providers would mint different span ids for the same logical span and
+// cross-wire the PI_TELEMETRY_TRACEPARENT written for child processes.
+export function createTelemetryExporter(telemetryConfig: TelemetryConfig): RuntimeEventExporter {
+  const langfuse = resolveLangfuseExporterConfig(telemetryConfig);
+  const otel = resolveOtelExporterConfig(telemetryConfig);
+  if (!langfuse.enabled && !otel.enabled) {
+    return new NoopRuntimeEventExporter();
+  }
+  const primary = langfuse.enabled ? langfuse : otel;
+  return new OtelRuntimeEventExporter({
+    enabled: true,
+    endpoint: otel.enabled ? otel.endpoint : '',
+    ...(otel.headers ? { headers: otel.headers } : {}),
+    ...(langfuse.enabled
+      ? {
+          langfuse: {
+            publicKey: langfuse.publicKey,
+            secretKey: langfuse.secretKey,
+            baseUrl: langfuse.baseUrl,
+            flushAt: langfuse.flushAt,
+            flushIntervalMs: langfuse.flushIntervalMs,
+          },
+        }
+      : {}),
+    flushAt: otel.flushAt,
+    flushIntervalMs: otel.flushIntervalMs,
+    ...(primary.serviceName !== undefined ? { serviceName: primary.serviceName } : {}),
+    ...(primary.serviceVersion !== undefined ? { serviceVersion: primary.serviceVersion } : {}),
+    ...(primary.includePayloads ? { includePayloads: true } : {}),
+  });
+}
+
+export function createOtelExporter(telemetryConfig: TelemetryConfig): RuntimeEventExporter {
   const config = resolveOtelExporterConfig(telemetryConfig);
-  return config.enabled
-    ? new OtelRuntimeEventExporter(config, fetchImpl)
-    : new NoopRuntimeEventExporter();
+  return config.enabled ? new OtelRuntimeEventExporter(config) : new NoopRuntimeEventExporter();
 }
 
 export function resolveOtelExporterConfig(telemetryConfig: TelemetryConfig): OtelExporterConfig {
@@ -29,9 +62,8 @@ export function resolveOtelExporterConfig(telemetryConfig: TelemetryConfig): Ote
     enabled: Boolean(otel?.enabled && endpoint),
     endpoint,
     ...(otel?.headers ? { headers: otel.headers } : {}),
-    flushAt: otel?.flushAt ?? DEFAULT_OTEL_FLUSH_AT,
-    flushIntervalMs: otel?.flushIntervalMs ?? DEFAULT_OTEL_FLUSH_INTERVAL_MS,
-    ...(otel?.errorLabel ? { errorLabel: otel.errorLabel } : {}),
+    flushAt: parsePositiveInteger(otel?.flushAt, DEFAULT_OTEL_FLUSH_AT),
+    flushIntervalMs: parsePositiveInteger(otel?.flushIntervalMs, DEFAULT_OTEL_FLUSH_INTERVAL_MS),
     serviceName: telemetryConfig.serviceName ?? 'pi',
     ...(telemetryConfig.serviceVersion ? { serviceVersion: telemetryConfig.serviceVersion } : {}),
     includePayloads: telemetryConfig.includePayloads ?? false,
@@ -40,12 +72,9 @@ export function resolveOtelExporterConfig(telemetryConfig: TelemetryConfig): Ote
 
 export function createOtelRuntimeEventExporterFromEnv(
   env: TelemetryEnvironment,
-  fetchImpl?: TelemetryFetch,
 ): RuntimeEventExporter {
   const config = resolveOtelConfig(env);
-  return config.enabled
-    ? new OtelRuntimeEventExporter(config, fetchImpl)
-    : new NoopRuntimeEventExporter();
+  return config.enabled ? new OtelRuntimeEventExporter(config) : new NoopRuntimeEventExporter();
 }
 
 export function resolveOtelConfig(env: TelemetryEnvironment): OtelExporterConfig {
@@ -70,7 +99,7 @@ export function resolveOtelConfig(env: TelemetryEnvironment): OtelExporterConfig
     ),
     serviceName,
     ...(serviceVersion ? { serviceVersion } : {}),
-    includePayloads: parseBooleanWithDefault(env.TELEMETRY_INCLUDE_PAYLOADS, false),
+    includePayloads: parseBoolean(env.TELEMETRY_INCLUDE_PAYLOADS),
   };
 }
 
@@ -92,25 +121,4 @@ function parseHeaderList(value: string | undefined): Record<string, string> | un
     }
   }
   return Object.keys(headers).length > 0 ? headers : undefined;
-}
-
-function parseBoolean(value: string | undefined): boolean {
-  return value === '1' || value === 'true' || value === 'TRUE' || value === 'yes';
-}
-
-function parseBooleanWithDefault(value: string | undefined, fallback: boolean): boolean {
-  if (value === undefined) {
-    return fallback;
-  }
-  return parseBoolean(value);
-}
-
-function parsePositiveInteger(value: string | undefined, fallback: number): number {
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
-}
-
-function trim(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
 }
