@@ -5,18 +5,28 @@ on:
     branches: [master, main]
   pull_request:
     branches: [master, main]
+  pull_request_target:
+    branches: [master, main]
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
+env:
+  INTEGRATION_CHECKOUT_REPOSITORY: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name || github.repository }}
+  INTEGRATION_CHECKOUT_REF: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
+
 jobs:
   detect-extension-matrix:
     name: Detect extension E2E matrix
+    if: >
+      github.event_name != 'pull_request_target' ||
+      github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.select.outputs.matrix }}
@@ -24,7 +34,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          repository: ${{ env.INTEGRATION_CHECKOUT_REPOSITORY }}
+          ref: ${{ env.INTEGRATION_CHECKOUT_REF }}
           fetch-depth: 0
+          persist-credentials: false
+          allow-unsafe-pr-checkout: ${{ github.event_name == 'pull_request_target' }}
       - name: Select changed extension scenarios
         id: select
         env:
@@ -39,15 +53,21 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────
   pi-runtime:
     name: Pi runtime integration
+    if: >
+      github.event_name != 'pull_request_target' ||
+      github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      PI_INTEGRATION_BASE_URL: ${{ secrets.PI_INTEGRATION_BASE_URL }}
-      PI_INTEGRATION_API_KEY: ${{ secrets.PI_INTEGRATION_API_KEY }}
       PI_OFFLINE: '0'
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          repository: ${{ env.INTEGRATION_CHECKOUT_REPOSITORY }}
+          ref: ${{ env.INTEGRATION_CHECKOUT_REF }}
+          persist-credentials: false
+          allow-unsafe-pr-checkout: ${{ github.event_name == 'pull_request_target' }}
       - name: Setup pi build environment
         uses: ./.github/actions/setup-pi-build
         with:
@@ -96,6 +116,7 @@ jobs:
     if: >
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
+    environment: ${{ github.event_name == 'pull_request_target' && 'fork-integration' || 'integration' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -108,6 +129,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          repository: ${{ env.INTEGRATION_CHECKOUT_REPOSITORY }}
+          ref: ${{ env.INTEGRATION_CHECKOUT_REF }}
+          persist-credentials: false
+          allow-unsafe-pr-checkout: ${{ github.event_name == 'pull_request_target' }}
       - name: Setup pi build environment
         uses: ./.github/actions/setup-pi-build
         with:
@@ -204,20 +230,21 @@ jobs:
             exit 1
           fi
 
-      - name: Skipped — Stage B (secrets unavailable)
+      - name: Fail — Stage B secrets unavailable
         if: env.PI_INTEGRATION_BASE_URL == '' || env.PI_INTEGRATION_API_KEY == ''
         run: |
-          echo "::warning::PI_INTEGRATION_BASE_URL or PI_INTEGRATION_API_KEY secret not set — skipping Stage B."
+          echo "::error::PI_INTEGRATION_BASE_URL and PI_INTEGRATION_API_KEY are required for Stage B."
+          exit 1
 
   # ──────────────────────────────────────────────────────────────────────
   # Stage C: per-extension E2E. Most entries constrain the LLM to a tiny tool
   # allowlist and assert the tool result; pi-video-gen uses RPC commands
   # instead so local composition never needs a model call.
   #
-  # Skipped on fork PRs because GitHub does not expose repository secrets to
-  # pull_request workflows from forks. The secret-free selector and Stage A
-  # still run for those PRs. Each matrix job duplicates Stage A setup because
-  # jobs don't share workspace state.
+  # Fork pull_request runs do not receive repository secrets, so their normal
+  # Stage B/C jobs remain skipped. A parallel pull_request_target run checks
+  # out the exact fork SHA and waits for approval on the protected
+  # `fork-integration` environment before either secret-backed job starts.
   # ──────────────────────────────────────────────────────────────────────
   extension-tool-matrix:
     name: Extension E2E (${{ matrix.extension }}${{ matrix.provider && format('-{0}', matrix.provider) || '' }}${{ matrix.scenario && format('-{0}', matrix.scenario) || '' }})
@@ -227,6 +254,7 @@ jobs:
        github.event.pull_request.head.repo.full_name == github.repository) &&
       needs.detect-extension-matrix.outputs.has_extensions == 'true' &&
       vars.PI_INTEGRATION_SKIP_STAGE_C != 'true'
+    environment: ${{ github.event_name == 'pull_request_target' && 'fork-integration' || 'integration' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -250,6 +278,11 @@ jobs:
           echo "TMPDIR=$job_tmp" >> "$GITHUB_ENV"
 
       - uses: actions/checkout@v7
+        with:
+          repository: ${{ env.INTEGRATION_CHECKOUT_REPOSITORY }}
+          ref: ${{ env.INTEGRATION_CHECKOUT_REF }}
+          persist-credentials: false
+          allow-unsafe-pr-checkout: ${{ github.event_name == 'pull_request_target' }}
       - name: Setup pi build environment
         uses: ./.github/actions/setup-pi-build
         with:
@@ -756,26 +789,23 @@ jobs:
           LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
         run: |
           set -euo pipefail
-          # The firecrawl matrix entry needs a real Firecrawl API key. Skip it
-          # cleanly (rather than fail) when the secret isn't configured yet.
+          # Provider-backed scenarios are merge gates: missing credentials are
+          # configuration failures, not successful skips.
           if [ "${{ matrix.provider }}" = "firecrawl" ] && [ -z "${FIRECRAWL_API_KEY:-}" ]; then
-            echo "::warning::FIRECRAWL_API_KEY secret unset — skipping Firecrawl E2E."
-            exit 0
+            echo "::error::FIRECRAWL_API_KEY is required for Firecrawl E2E."
+            exit 1
           fi
-          # Same for the unsplash entry: without UNSPLASH_TOKEN the
-          # image_search tool never registers, and constraining --tools to a
-          # missing tool hangs pi.
           if [ "${{ matrix.provider }}" = "unsplash" ] && [ -z "${UNSPLASH_TOKEN:-}" ]; then
-            echo "::warning::UNSPLASH_TOKEN secret unset — skipping Unsplash E2E."
-            exit 0
+            echo "::error::UNSPLASH_TOKEN is required for Unsplash E2E."
+            exit 1
           fi
           # pi-telemetry's assertion happens against the Langfuse API, so this
           # step needs the keys (step-scoped env above). The trace is found by
           # a per-run codeword plus a start-timestamp lower bound.
           if [ "${{ matrix.extension }}" = "pi-telemetry" ]; then
             if [ -z "${LANGFUSE_PUBLIC_KEY:-}" ] || [ -z "${LANGFUSE_SECRET_KEY:-}" ]; then
-              echo "::warning::LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY secrets unset — skipping pi-telemetry E2E."
-              exit 0
+              echo "::error::LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY are required for pi-telemetry E2E."
+              exit 1
             fi
             echo "TELEMETRY_TRACE_FROM=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
             # Unique codeword per run so concurrent jobs against the same
@@ -1052,8 +1082,8 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${LANGFUSE_PUBLIC_KEY:-}" ] || [ -z "${LANGFUSE_SECRET_KEY:-}" ]; then
-            echo "::warning::LANGFUSE_* secrets unset — the Stage C run skipped too, nothing to verify."
-            exit 0
+            echo "::error::LANGFUSE_* secrets are required for the Stage C trace assertion."
+            exit 1
           fi
           node .github/scripts/telemetry-langfuse-verify.mjs
 
@@ -1186,9 +1216,10 @@ jobs:
           fi
           echo "✓ pi-memory mem0 vector dedup verification passed."
 
-      - name: Skipped (secrets unavailable)
+      - name: Fail — Stage C secrets unavailable
         if: >
           matrix.extension != 'pi-video-gen' &&
           (env.PI_INTEGRATION_BASE_URL == '' || env.PI_INTEGRATION_API_KEY == '')
         run: |
-          echo "::warning::PI_INTEGRATION_* secrets unset — skipping Stage C ${{ matrix.extension }}."
+          echo "::error::PI_INTEGRATION_* secrets are required for Stage C ${{ matrix.extension }}."
+          exit 1
