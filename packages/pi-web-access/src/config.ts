@@ -89,7 +89,8 @@ export function resolveProvider(
 
   const config = settings.providers?.[requested] ?? {};
   const environmentVariable = ENV_VARS[requested];
-  const apiKey = config.apiKey || (environmentVariable ? process.env[environmentVariable] : undefined);
+  const apiKey =
+    config.apiKey || (environmentVariable ? process.env[environmentVariable] : undefined);
   const baseUrl = config.baseUrl || DEFAULT_BASE_URL[requested];
 
   const provider: ResolvedProvider = {

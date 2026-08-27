@@ -59,7 +59,11 @@ export interface ImageSearchParams {
 
 export interface WebProvider {
   readonly id: BuiltInProviderId;
-  search(params: SearchParams, provider: ResolvedProvider, signal?: AbortSignal): Promise<SearchResponse>;
+  search(
+    params: SearchParams,
+    provider: ResolvedProvider,
+    signal?: AbortSignal,
+  ): Promise<SearchResponse>;
   fetch(url: string, provider: ResolvedProvider): Promise<FetchResponse>;
   imageSearch(params: ImageSearchParams, provider: ResolvedProvider): Promise<SearchResponse>;
 }
