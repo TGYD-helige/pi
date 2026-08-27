@@ -7,7 +7,10 @@ test('requires environment approval for secret-backed fork integration', async (
   const workflow = await readFile(new URL('../workflows/integration.yml', import.meta.url), 'utf8');
 
   assert.match(workflow, /pull_request_target:\s+branches: \[master, main\]/);
-  assert.equal(workflow.match(/environment: \$\{\{ github\.event_name == 'pull_request_target' && 'fork-integration' \|\| 'integration' \}\}/g)?.length, 2);
+  assert.doesNotMatch(workflow, /\n  pull_request:\n/);
+  assert.doesNotMatch(workflow, /github\.event_name != 'pull_request_target' \|\|/);
+  assert.equal(workflow.match(/name: \$\{\{ github\.event_name == 'pull_request_target' && github\.event\.pull_request\.head\.repo\.full_name != github\.repository && 'fork-integration' \|\| 'integration' \}\}/g)?.length, 2);
+  assert.equal(workflow.match(/deployment: false/g)?.length, 2);
   assert.equal(workflow.match(/allow-unsafe-pr-checkout:/g)?.length, 4);
   assert.equal(workflow.match(/persist-credentials: false/g)?.length, 4);
   assert.equal(workflow.match(/ref: \$\{\{ env\.INTEGRATION_CHECKOUT_REF \}\}/g)?.length, 4);
