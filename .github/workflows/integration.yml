@@ -116,7 +116,9 @@ jobs:
     if: >
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
-    environment: ${{ github.event_name == 'pull_request_target' && 'fork-integration' || 'integration' }}
+    environment:
+      name: ${{ github.event_name == 'pull_request_target' && 'fork-integration' || 'integration' }}
+      deployment: false
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -254,7 +256,9 @@ jobs:
        github.event.pull_request.head.repo.full_name == github.repository) &&
       needs.detect-extension-matrix.outputs.has_extensions == 'true' &&
       vars.PI_INTEGRATION_SKIP_STAGE_C != 'true'
-    environment: ${{ github.event_name == 'pull_request_target' && 'fork-integration' || 'integration' }}
+    environment:
+      name: ${{ github.event_name == 'pull_request_target' && 'fork-integration' || 'integration' }}
+      deployment: false
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
