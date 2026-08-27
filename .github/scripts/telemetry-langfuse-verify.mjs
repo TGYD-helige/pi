@@ -10,9 +10,11 @@
 //   ├─ span       bash [echo <codeword> parent]                    (endTime set)
 //   ├─ span       bash [bash .github/scripts/telemetry-…]          (endTime set)
 //   ├─ generation llm-generation [main] …                          (endTime set)
+//   │  └─ span       llm-stream                                 (endTime set)
 //   └─ span       subagent [ci-probe]                              (endTime set)
 //      ├─ span       bash [echo <codeword> child]                  (endTime set)
 //      └─ generation llm-generation [subagent] …                   (endTime set)
+//         └─ span       llm-stream                                  (endTime set)
 //
 // The hierarchy scenario adds a second nested pi and verifies:
 // chat-turn → subagent [ci-hierarchy] → subagent [ci-probe] → child work.
@@ -25,12 +27,10 @@
 //
 // Polling realities:
 // - pi-telemetry writes via OTLP with the x-langfuse-ingestion-version: 4
-//   header, so data is real-time on the v2 read APIs; ingestion still lands
-//   piecemeal, so a poll that finds the trace but not the full shape is
-//   retried, never failed immediately.
-// - Polls are spaced 15s apart (~8 req/min) because Langfuse Cloud rate
-//   limits are shared per organization; a 429 is answered with the
-//   Retry-After header instead of a hard failure.
+//   header, so data is real-time on the v2 read APIs. The exporter and verifier
+//   share a deterministic trace ID, avoiding an expensive project-wide scan.
+// - Ingestion still lands piecemeal, so incomplete traces are retried every 5s.
+//   A 429 is answered with Retry-After instead of a hard failure.
 //
 // Required env: LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY.
 // Optional env: LANGFUSE_BASE_URL (default https://cloud.langfuse.com),
@@ -38,12 +38,13 @@
 //               TELEMETRY_CODEWORD (default ci-langfuse-probe),
 //               TELEMETRY_SCENARIO (basic or hierarchy; default basic).
 
+import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 
 const DEFAULT_BASE_URL = 'https://cloud.langfuse.com';
-const DEFAULT_DEADLINE_MS = 5 * 60 * 1000;
-const POLL_INTERVAL_MS = 15_000;
+const DEFAULT_DEADLINE_MS = 90_000;
+const POLL_INTERVAL_MS = 5_000;
 const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_PAGES = 20;
 const SERVICE_NAME = 'pi-telemetry-ci';
@@ -53,6 +54,10 @@ const MODEL_PROVIDER = 'deepseek-integration';
 // Non-empty trimmed value or fallback — `''` is falsy, so `||` suffices.
 export function envOr(value, fallback) {
   return value?.trim() || fallback;
+}
+
+export function traceIdForCodeword(codeword) {
+  return createHash('sha256').update(`trace:${codeword}`).digest('hex').slice(0, 32);
 }
 
 // io-carrying pages can hold large model inputs/outputs; cap what we buffer.
@@ -114,6 +119,15 @@ export function evaluateTrace(observations, codeword, scenario = 'basic') {
       `${label} is missing input/output/total usage`,
     );
     need(isCount(costDetails.total), `${label} is missing total cost`);
+
+    const streams = spans.filter(
+      (observation) =>
+        observation.name === 'llm-stream' && observation.parentObservationId === generation.id,
+    );
+    need(streams.length === 1, `${label} expected exactly 1 child "llm-stream", found ${streams.length}`);
+    for (const stream of streams) {
+      need(stream.endTime != null, `${label} child "llm-stream" has no endTime`);
+    }
   }
 
   const roots = spans.filter((o) => o.name === 'chat-turn' && o.parentObservationId == null);
@@ -268,6 +282,7 @@ export async function runVerification({
   publicKey,
   secretKey,
   fromStartTime,
+  traceId,
   codeword,
   scenario = 'basic',
   deadlineMs = DEFAULT_DEADLINE_MS,
@@ -276,6 +291,7 @@ export async function runVerification({
   log = () => {},
 }) {
   const origin = envOr(baseUrl, DEFAULT_BASE_URL).replace(/\/+$/, '');
+  const targetTraceId = envOr(traceId, traceIdForCodeword(codeword));
   const deadline = Date.now() + deadlineMs;
   const auth = `Basic ${Buffer.from(`${publicKey}:${secretKey}`).toString('base64')}`;
 
@@ -331,7 +347,7 @@ export async function runVerification({
   }
 
   async function normalizeLegacyRows(rows, traceId) {
-    if (apiVersion !== 'v1' || !traceId) return rows;
+    if (apiVersion !== 'v1' || !traceId || rows.length === 0) return rows;
     const response = await fetchWithDeadline(
       `${origin}/api/public/traces/${encodeURIComponent(traceId)}`,
     );
@@ -390,30 +406,20 @@ export async function runVerification({
     }
     let waitMs = POLL_INTERVAL_MS;
     try {
-      // Discovery: root spans carry the prompt (with the codeword) as input.
-      const candidates = await fetchObservations({ type: 'SPAN', name: 'chat-turn' });
-      const traceIds = [
-        ...new Set(
-          candidates.filter((o) => JSON.stringify(o).includes(codeword)).map((o) => o.traceId),
-        ),
-      ];
-
-      for (const traceId of traceIds) {
-        const observations = await fetchObservations({ traceId });
-        log(`--- candidate trace ${traceId}: ${observations.length} observation(s) ---`);
-        for (const o of observations) {
-          log(`  ${o.type}:${o.name} parent=${o.parentObservationId ?? 'null'} end=${o.endTime ?? 'null'}`);
-        }
-        const problems = evaluateTrace(observations, codeword, scenario);
-        if (problems.length === 0) {
-          return { ok: true, state: `trace ${traceId} matches the expected pi-telemetry shape` };
-        }
-        lastState = `trace ${traceId} incomplete: ${problems.join('; ')}`;
-        log(`  not complete yet: ${problems.join('; ')}`);
+      const observations = await fetchObservations({ traceId: targetTraceId });
+      log(`--- trace ${targetTraceId}: ${observations.length} observation(s) ---`);
+      for (const o of observations) {
+        log(`  ${o.type}:${o.name} parent=${o.parentObservationId ?? 'null'} end=${o.endTime ?? 'null'}`);
       }
-      if (traceIds.length === 0) {
-        lastState = 'no trace with the codeword seen yet';
+      const problems = evaluateTrace(observations, codeword, scenario);
+      if (problems.length === 0) {
+        return { ok: true, state: `trace ${targetTraceId} matches the expected pi-telemetry shape` };
       }
+      lastState =
+        observations.length === 0
+          ? `trace ${targetTraceId} is not visible yet`
+          : `trace ${targetTraceId} incomplete: ${problems.join('; ')}`;
+      log(`  not complete yet: ${problems.join('; ')}`);
     } catch (error) {
       log(`Langfuse poll failed: ${error.message}`);
       lastState = `poll error: ${error.message}`;
@@ -447,6 +453,7 @@ async function main() {
     secretKey,
     fromStartTime,
     codeword,
+    traceId: traceIdForCodeword(codeword),
     scenario,
     // Diagnostics go to stderr; stdout stays reserved for the final verdict.
     log: (message) => console.error(message),

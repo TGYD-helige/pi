@@ -72,6 +72,7 @@ describe('telemetryExtension', () => {
     expect(registered).toContain('tool_execution_end');
     expect(registered).toContain('before_provider_request');
     expect(registered).toContain('after_provider_response');
+    expect(registered).toContain('message_update');
     expect(registered).toContain('message_end');
     expect(registered).toContain('model_select');
     expect(registered).toContain('session_compact');
@@ -127,6 +128,34 @@ describe('telemetryExtension', () => {
     });
     expect(events[0]!.traceId).toMatch(/^[0-9a-f]{32}$/);
     expect(events[0]!.sessionId).toBeTruthy();
+  });
+
+  it('uses a preset root trace id once when provided by the caller', async () => {
+    process.env.PI_TELEMETRY_TRACE_ID = 'ci-known-trace';
+    try {
+      telemetryExtension(mockPi as any);
+      await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
+      await fireEvent('input', { type: 'input', text: 'first' });
+      await fireEvent('turn_start', {
+        type: 'turn_start',
+        turnIndex: 0,
+        timestamp: 1700000000000,
+      });
+      expect(getPublishedEvents()[0]!.traceId).toBe('ci-known-trace');
+
+      await fireEvent('input', { type: 'input', text: 'second' });
+      await fireEvent('turn_start', {
+        type: 'turn_start',
+        turnIndex: 1,
+        timestamp: 1700000001000,
+      });
+      expect(getPublishedEvents()[1]!.traceId).toMatch(/^[0-9a-f]{32}$/);
+      expect(getPublishedEvents()[1]!.traceId).not.toBe('ci-known-trace');
+    } finally {
+      delete process.env.PI_TELEMETRY_TRACE_ID;
+      delete process.env.PI_TELEMETRY_SESSION_ID;
+      delete process.env.PI_TELEMETRY_OWNER_PID;
+    }
   });
 
   it('correlates runtime events with the telemetry task run', async () => {
@@ -299,6 +328,24 @@ describe('telemetryExtension', () => {
     });
   });
 
+  it('preserves tool output beyond the old 500-character preview', async () => {
+    telemetryExtension(mockPi as any);
+    await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
+    await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
+    const output = 'x'.repeat(20_000);
+
+    await fireEvent('tool_execution_end', {
+      type: 'tool_execution_end',
+      toolCallId: 'call-1',
+      toolName: 'read_file',
+      result: { content: [{ type: 'text', text: output }] },
+      isError: false,
+    });
+
+    const toolEvent = getPublishedEvents().find((event) => 'toolCallId' in event);
+    expect(toolEvent).toMatchObject({ details: { output } });
+  });
+
   it('preserves sanitized tool details and does not overwrite explicit output', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
@@ -414,6 +461,41 @@ describe('telemetryExtension', () => {
     const llmEvents = events.filter((e) => 'llmGenerationId' in e);
     expect(llmEvents).toHaveLength(1);
     expect(llmEvents[0]).toMatchObject({ status: 'started' });
+  });
+
+  it('publishes stream frames only when message_update events were received', async () => {
+    telemetryExtension(mockPi as any);
+    await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
+    await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
+    await fireEvent('before_provider_request', { type: 'before_provider_request', payload: {} });
+    await fireEvent('message_update', {
+      type: 'message_update',
+      assistantMessageEvent: {
+        type: 'text_delta',
+        contentIndex: 0,
+        delta: 'hello',
+        partial: { role: 'assistant', content: [{ type: 'text', text: 'hello' }] },
+      },
+    });
+    await fireEvent('message_end', {
+      type: 'message_end',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'hello' }], usage: {} },
+    });
+
+    const events = getPublishedEvents();
+    const streamEvent = events.find((event) => 'streamEvents' in event);
+    expect(streamEvent).toMatchObject({
+      llmGenerationId: 'gen-1',
+      streamEvents: [{ type: 'text_delta', contentIndex: 0, delta: 'hello' }],
+    });
+    expect(events.at(-1)).toMatchObject({ llmGenerationId: 'gen-1', status: 'completed' });
+
+    await fireEvent('before_provider_request', { type: 'before_provider_request', payload: {} });
+    await fireEvent('message_end', {
+      type: 'message_end',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'done' }], usage: {} },
+    });
+    expect(getPublishedEvents().filter((event) => 'streamEvents' in event)).toHaveLength(1);
   });
 
   it('publishes LLM generation failed for 4xx/5xx responses', async () => {

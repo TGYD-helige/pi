@@ -448,8 +448,7 @@ describe('telemetry', () => {
     expect(root.status.code).toBe(SpanStatusCode.OK);
     expect(root.attributes['langfuse.observation.input']).toBe(JSON.stringify('hello'));
     expect(root.attributes['langfuse.observation.output']).toBe(JSON.stringify('world'));
-    expect(root.attributes['langfuse.trace.input']).toBe('hello');
-    expect(root.attributes['langfuse.trace.output']).toBe('world');
+    expect(root.attributes['langfuse.trace.name']).toBe('chat-turn');
     // The root span advertises itself so a nested pi process can parent to it.
     expect(process.env.PI_TELEMETRY_TRACEPARENT).toBe(
       `00-${root.spanContext().traceId}-${root.spanContext().spanId}-01`,
@@ -627,6 +626,54 @@ describe('telemetry', () => {
 
     const [span] = inMemory.getFinishedSpans() as [ReadableSpan];
     expect(span.attributes['langfuse.observation.type']).toBe('generation');
+  });
+
+  it('parents captured stream frames beneath the active generation', async () => {
+    const { exporter, inMemory } = makeExporter();
+    await exporter.publish({
+      id: 'turn-start',
+      traceId,
+      type: 'chat_turn_started',
+      sessionId: 'session-1',
+      createdAt: '2026-05-02T00:00:00.000Z',
+    });
+    await exporter.publish({
+      id: 'gen-start',
+      traceId,
+      sessionId: 'session-1',
+      conversationId: 'session-1',
+      llmGenerationId: 'gen-1',
+      status: 'started',
+      createdAt: '2026-05-02T00:00:00.100Z',
+      model: { provider: 'deepseek', model: 'deepseek-v4-flash' },
+    });
+    await exporter.publish({
+      id: 'stream',
+      traceId,
+      sessionId: 'session-1',
+      conversationId: 'session-1',
+      llmGenerationId: 'gen-1',
+      createdAt: '2026-05-02T00:00:00.200Z',
+      durationMs: 300,
+      streamEvents: [{ type: 'text_delta', delta: 'hello' }],
+    });
+    await exporter.publish({
+      id: 'gen-end',
+      traceId,
+      sessionId: 'session-1',
+      conversationId: 'session-1',
+      llmGenerationId: 'gen-1',
+      status: 'completed',
+      createdAt: '2026-05-02T00:00:00.600Z',
+      model: { provider: 'deepseek', model: 'deepseek-v4-flash' },
+    });
+
+    const [stream, generation] = inMemory.getFinishedSpans() as [ReadableSpan, ReadableSpan];
+    expect(stream.name).toBe('llm-stream');
+    expect(stream.parentSpanContext?.spanId).toBe(generation.spanContext().spanId);
+    expect(JSON.parse(String(stream.attributes['langfuse.observation.output']))).toEqual([
+      { type: 'text_delta', delta: 'hello' },
+    ]);
   });
 
   it('emits short chat-input spans parented to the root span', async () => {

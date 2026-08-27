@@ -1,13 +1,23 @@
 import type {
+  JsonValue,
   RuntimeLifecycleEvent,
   RuntimeLlmGenerationEvent,
   RuntimeToolEvent,
 } from '@amaster.ai/pi-shared';
 
+export type RuntimeLlmStreamEvent = Omit<
+  RuntimeLlmGenerationEvent,
+  'status' | 'model' | 'input' | 'output' | 'usage' | 'responseId' | 'stopReason' | 'error'
+> & {
+  streamEvents: JsonValue[];
+  error?: string;
+};
+
 export type RuntimeTelemetryEvent =
   | RuntimeLifecycleEvent
   | RuntimeToolEvent
-  | RuntimeLlmGenerationEvent;
+  | RuntimeLlmGenerationEvent
+  | RuntimeLlmStreamEvent;
 
 export interface RuntimeEventExporter {
   publish(event: RuntimeTelemetryEvent): Promise<void>;

@@ -24,6 +24,7 @@ The extension hooks into the following Pi lifecycle events:
 | `turn_start` | Begin the root or subagent span on the first turn |
 | `before_provider_request` | Begin an LLM generation span and record model input |
 | `after_provider_response` | Mark failed provider responses |
+| `message_update` | Record provider stream events beneath the active LLM generation |
 | `agent_end` | Complete the root or subagent span once per user prompt |
 | `tool_execution_start` | Begin tool span |
 | `tool_execution_end` | End tool span with result |

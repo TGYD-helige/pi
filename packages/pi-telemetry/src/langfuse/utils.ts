@@ -1,5 +1,5 @@
 import type { RuntimeLlmGenerationEvent, RuntimeToolEvent } from '@amaster.ai/pi-shared';
-import type { RuntimeTelemetryEvent } from '../index.js';
+import type { RuntimeLlmStreamEvent, RuntimeTelemetryEvent } from '../index.js';
 import { type LangfuseExporterConfig, MAX_ATTRIBUTE_VALUE_BYTES } from './types.js';
 
 export function utf8Prefix(value: string, maxBytes: number): string {
@@ -93,7 +93,11 @@ export function isToolEvent(event: RuntimeTelemetryEvent): event is RuntimeToolE
 export function isLlmGenerationEvent(
   event: RuntimeTelemetryEvent,
 ): event is RuntimeLlmGenerationEvent {
-  return 'llmGenerationId' in event;
+  return 'llmGenerationId' in event && !('streamEvents' in event);
+}
+
+export function isLlmStreamEvent(event: RuntimeTelemetryEvent): event is RuntimeLlmStreamEvent {
+  return 'streamEvents' in event;
 }
 
 export function applyTelemetryRedaction(
@@ -111,6 +115,10 @@ export function applyTelemetryRedaction(
 }
 
 export function stripTelemetryPayloads(event: RuntimeTelemetryEvent): RuntimeTelemetryEvent {
+  if (isLlmStreamEvent(event)) {
+    const { streamEvents: _streamEvents, ...rest } = event;
+    return { ...rest, streamEvents: [] };
+  }
   if (isLlmGenerationEvent(event)) {
     const { input: _input, output: _output, error: _error, ...rest } = event;
     return rest as RuntimeTelemetryEvent;

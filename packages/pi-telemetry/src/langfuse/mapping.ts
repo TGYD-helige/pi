@@ -30,24 +30,6 @@ export function langfuseObservationAttributes(input: {
   };
 }
 
-export function langfuseTraceAttributes(input: {
-  input?: JsonValue | undefined;
-  output?: JsonValue | undefined;
-}): JsonObject {
-  return {
-    ...(input.input !== undefined
-      ? { 'langfuse.trace.input': toLangfuseTracePayload(input.input) }
-      : {}),
-    ...(input.output !== undefined
-      ? { 'langfuse.trace.output': toLangfuseTracePayload(input.output) }
-      : {}),
-  };
-}
-
-export function toLangfuseTracePayload(value: JsonValue): string {
-  return typeof value === 'string' ? value : JSON.stringify(value);
-}
-
 export function chatSpanKey(
   event: Pick<RuntimeLifecycleEvent, 'sessionId' | 'conversationId' | 'parentSessionId'>,
 ): string {

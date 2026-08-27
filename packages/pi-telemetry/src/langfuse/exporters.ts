@@ -26,14 +26,17 @@ import {
   type IdGenerator,
   type SpanProcessor,
 } from '@opentelemetry/sdk-trace-base';
-import type { RuntimeEventExporter, RuntimeTelemetryEvent } from '../index.js';
+import type {
+  RuntimeEventExporter,
+  RuntimeLlmStreamEvent,
+  RuntimeTelemetryEvent,
+} from '../index.js';
 import { parsePositiveInteger } from '../parse.js';
 import {
   chatInputLifecycleOutput,
   chatInputObservationName,
   chatSpanKey,
   langfuseObservationAttributes,
-  langfuseTraceAttributes,
   llmGenerationKey,
   llmGenerationObservationName,
   subagentObservationName,
@@ -47,6 +50,7 @@ import {
   langfuseTraceId,
   langfuseUsageAttributes,
   lifecycleMetadata,
+  lineageMetadata,
   llmGenerationMetadata,
   toolMetadata,
 } from './metadata.js';
@@ -62,6 +66,7 @@ import {
   applyTelemetryRedaction,
   assertNever,
   isLlmGenerationEvent,
+  isLlmStreamEvent,
   isToolEvent,
   normalizeOtelTracesEndpoint,
   requireTraceId,
@@ -130,7 +135,9 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
       console.error('[pi-telemetry] dropping event with invalid or future createdAt timestamp');
       return;
     }
-    if (isLlmGenerationEvent(redactedEvent)) {
+    if (isLlmStreamEvent(redactedEvent)) {
+      this.publishLlmStreamEvent(redactedEvent, createdAtMs);
+    } else if (isLlmGenerationEvent(redactedEvent)) {
       this.publishLlmGenerationEvent(redactedEvent, createdAtMs);
     } else if (isToolEvent(redactedEvent)) {
       this.publishToolEvent(redactedEvent, createdAtMs);
@@ -170,7 +177,6 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
             {
               ...lifecycleMetadata(event),
               ...langfuseObservationAttributes({ input: event.details?.input, level: 'DEFAULT' }),
-              ...langfuseTraceAttributes({ input: event.details?.input }),
             },
             event,
           ),
@@ -190,7 +196,6 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
               output,
               level: event.error ? 'ERROR' : 'DEFAULT',
             }),
-            ...langfuseTraceAttributes({ output }),
           },
           event,
         );
@@ -382,6 +387,27 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
     }
   }
 
+  private publishLlmStreamEvent(event: RuntimeLlmStreamEvent, createdAtMs: number): void {
+    const span = this.startSpan(
+      'llm-stream',
+      event,
+      createdAtMs,
+      this.enrichSpanAttributes(
+        {
+          ...lineageMetadata(event),
+          llmGenerationId: event.llmGenerationId,
+          ...langfuseObservationAttributes({
+            output: event.streamEvents,
+            level: 'DEFAULT',
+          }),
+        },
+        event,
+      ),
+      parentContextOf(this.openSpans.get(llmGenerationKey(event))),
+    );
+    span.end(createdAtMs + (event.durationMs ?? 0));
+  }
+
   private startSpan(
     name: string,
     event: RuntimeTelemetryEvent,
@@ -489,7 +515,7 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
   // catch-all and are not. Set them on every span because Langfuse reads
   // trace-level attributes from any span in the trace.
   private enrichSpanAttributes(base: JsonObject, event: RuntimeTelemetryEvent): Attributes {
-    const enriched: JsonObject = { ...base };
+    const enriched: JsonObject = { ...base, 'langfuse.trace.name': 'chat-turn' };
     if (this.config.serviceName) {
       enriched['langfuse.trace.metadata.serviceName'] = this.config.serviceName;
       enriched['langfuse.observation.metadata.serviceName'] = this.config.serviceName;

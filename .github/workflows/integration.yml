@@ -784,6 +784,7 @@ jobs:
             SCENARIO="${{ matrix.scenario || 'basic' }}"
             CODEWORD="ci-langfuse-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${SCENARIO}"
             export TELEMETRY_CODEWORD="$CODEWORD"
+            export PI_TELEMETRY_TRACE_ID="$CODEWORD"
             echo "TELEMETRY_CODEWORD=$CODEWORD" >> "$GITHUB_ENV"
             EXTENSION_PROMPT="${EXTENSION_PROMPT//ci-langfuse-probe/$CODEWORD}"
           fi
@@ -1040,9 +1041,9 @@ jobs:
           matrix.extension == 'pi-telemetry' &&
           env.PI_INTEGRATION_BASE_URL != '' &&
           env.PI_INTEGRATION_API_KEY != ''
-        # Bounds the step independently of the shared 15min job timeout: the
-        # verifier's own deadline is 5min, so 8 covers polling plus startup.
-        timeout-minutes: 8
+        # The verifier queries the known trace id directly; two minutes covers
+        # the 90s ingestion deadline plus process startup.
+        timeout-minutes: 2
         env:
           LANGFUSE_BASE_URL: ${{ secrets.LANGFUSE_BASE_URL }}
           LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}

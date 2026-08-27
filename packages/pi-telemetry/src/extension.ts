@@ -11,6 +11,8 @@ import { loadConfigFromFile, resolveConfig } from './config.js';
 import { NoopRuntimeEventExporter, type RuntimeEventExporter } from './index.js';
 import { createTelemetryExporter } from './otel.js';
 
+const MAX_STREAM_CAPTURE_BYTES = 1_000_000;
+
 function modelConfigFromCtx(ctx: ExtensionContext): RuntimeModelConfig {
   const model = ctx.model;
   if (!model) {
@@ -97,7 +99,7 @@ function summarizeToolResultOutput(result: unknown, details: unknown): JsonValue
     return undefined;
   }
   if (typeof result === 'string') {
-    return summarizeString(result);
+    return result;
   }
   if (!result || typeof result !== 'object' || Array.isArray(result)) {
     return toTelemetryValue(result);
@@ -108,7 +110,7 @@ function summarizeToolResultOutput(result: unknown, details: unknown): JsonValue
   }
   const text = textContentFromToolResult(resultRecord);
   if (text) {
-    return summarizeString(text);
+    return text;
   }
   return resultRecord.content !== undefined ? toTelemetryValue(resultRecord.content) : undefined;
 }
@@ -145,7 +147,7 @@ function toTelemetryValue(value: unknown): JsonValue | undefined {
     return value;
   }
   if (typeof value === 'string') {
-    return summarizeString(value);
+    return value;
   }
   if (Array.isArray(value)) {
     return value.map(toTelemetryValue).filter((item) => item !== undefined);
@@ -156,12 +158,6 @@ function toTelemetryValue(value: unknown): JsonValue | undefined {
     );
   }
   return String(value);
-}
-
-function summarizeString(value: string): string {
-  return value.length > 500
-    ? `${value.slice(0, 500)}... [truncated ${value.length - 500} chars]`
-    : value;
 }
 
 function mapUsage(usage: Record<string, unknown>): RuntimeLlmUsage {
@@ -210,6 +206,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   const taskRunId = nonEmptyEnv('PI_TELEMETRY_TASK_RUN_ID');
   const runtimeCorrelation = taskRunId ? { taskRunId } : {};
   const isSubagent = Boolean(inheritedTraceId && ownerPid && ownerPid !== String(process.pid));
+  let presetRootTraceId = isSubagent ? undefined : inheritedTraceId;
 
   let exporter: RuntimeEventExporter = new NoopRuntimeEventExporter();
   const localSessionId = randomUUID();
@@ -221,6 +218,10 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   let llmGenerationCounter = 0;
   let pendingInput: string | undefined;
   let lastModelConfig: RuntimeModelConfig = { provider: 'unknown', model: 'unknown' };
+  let streamStartedAt: number | undefined;
+  let streamEvents: JsonValue[] = [];
+  let streamBytes = 0;
+  let streamTruncated = false;
 
   pi.on('session_start', async (_event, ctx) => {
     const config = resolveConfig(
@@ -238,7 +239,8 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   pi.on('input', async (event) => {
     pendingInput = event.text;
     if (!isSubagent) {
-      currentTraceId = randomUUID().replace(/-/g, '');
+      currentTraceId = presetRootTraceId ?? randomUUID().replace(/-/g, '');
+      presetRootTraceId = undefined;
       process.env.PI_TELEMETRY_TRACE_ID = currentTraceId;
       process.env.PI_TELEMETRY_SESSION_ID = sessionId;
       process.env.PI_TELEMETRY_OWNER_PID = String(process.pid);
@@ -376,6 +378,10 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     if (!currentTraceId) return;
     llmGenerationCounter++;
     lastModelConfig = modelConfigFromCtx(ctx);
+    streamStartedAt = undefined;
+    streamEvents = [];
+    streamBytes = 0;
+    streamTruncated = false;
 
     await exporter.publish({
       id: randomUUID(),
@@ -415,6 +421,23 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     });
   });
 
+  pi.on('message_update', async (event) => {
+    if (!currentTraceId || llmGenerationCounter === 0) return;
+    const update = event.assistantMessageEvent as unknown as Record<string, unknown>;
+    const { partial: _partial, message: _message, error: _error, ...frame } = update;
+    const value = toTelemetryValue(frame);
+    if (value === undefined) return;
+    streamStartedAt ??= Date.now();
+    const bytes = Buffer.byteLength(JSON.stringify(value));
+    if (!streamTruncated && streamBytes + bytes <= MAX_STREAM_CAPTURE_BYTES) {
+      streamEvents.push(value);
+      streamBytes += bytes;
+    } else if (!streamTruncated) {
+      streamEvents.push({ type: 'truncated', maxBytes: MAX_STREAM_CAPTURE_BYTES });
+      streamTruncated = true;
+    }
+  });
+
   pi.on('message_end', async (event) => {
     if (!currentTraceId) return;
     const msg = event.message as unknown as Record<string, unknown>;
@@ -423,6 +446,28 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     const content = simplifyContent(msg.content) ?? extractOutput(event.message);
     const usage = msg.usage as Record<string, unknown> | undefined;
     const mapped = usage ? mapUsage(usage) : undefined;
+
+    if (streamStartedAt !== undefined && streamEvents.length > 0) {
+      const endedAt = Date.now();
+      await exporter.publish({
+        id: randomUUID(),
+        traceId: currentTraceId,
+        ...runtimeCorrelation,
+        sessionId: localSessionId,
+        conversationId: localSessionId,
+        ...(isSubagent
+          ? { ...(parentSessionId ? { parentSessionId } : {}), childSessionId: localSessionId }
+          : {}),
+        llmGenerationId: `gen-${llmGenerationCounter}`,
+        createdAt: new Date(streamStartedAt).toISOString(),
+        durationMs: endedAt - streamStartedAt,
+        streamEvents,
+      });
+      streamStartedAt = undefined;
+      streamEvents = [];
+      streamBytes = 0;
+      streamTruncated = false;
+    }
 
     const output: JsonObject = {};
     if (content !== undefined) output.content = content;
