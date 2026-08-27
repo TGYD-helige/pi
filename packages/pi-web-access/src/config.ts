@@ -52,7 +52,7 @@ const DEFAULT_MODEL: Partial<Record<BuiltInProviderId, string>> = {
   xai: 'grok-4.3',
   openai: 'gpt-5.5',
   anthropic: 'claude-sonnet-4-6',
-  dashscope: 'qwen3.7-plus',
+  dashscope: 'qwen3.8-flash',
 };
 
 // ─── Settings loading ────────────────────────────────────────────────────────

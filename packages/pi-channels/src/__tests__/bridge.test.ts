@@ -1,13 +1,14 @@
 import { EventEmitter } from 'node:events';
-import { mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getPackageDir } from '@earendil-works/pi-coding-agent';
-import { beforeEach, describe, expect, it, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, test, vi } from 'vitest';
 
 const mockSpawn = vi.fn();
 const trustedRuntime = realpathSync.native(process.execPath);
 const trustedCli = realpathSync.native(join(getPackageDir(), 'dist', 'cli.js'));
+const temporaryDirectories = new Set<string>();
 
 vi.mock('node:child_process', () => ({
   spawn: (...args: unknown[]) => mockSpawn(...args),
@@ -31,6 +32,28 @@ function createChild(stdoutText: string, exitCode = 0) {
   return child;
 }
 
+function createPendingChild() {
+  const child = new EventEmitter() as EventEmitter & {
+    stdout: EventEmitter;
+    stderr: EventEmitter;
+    kill: ReturnType<typeof vi.fn>;
+  };
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.kill = vi.fn(() => {
+    setTimeout(() => child.emit('close', null), 0);
+  });
+  return child;
+}
+
+function createTemporaryImage(): { directory: string; path: string } {
+  const directory = mkdtempSync(join(tmpdir(), 'pi-channels-feishu-image-'));
+  const path = join(directory, 'image');
+  writeFileSync(path, 'fake-png');
+  temporaryDirectories.add(directory);
+  return { directory, path };
+}
+
 function sessionFileArg(call: unknown[] | undefined): string {
   const args = call?.[1] as string[] | undefined;
   const index = args?.indexOf('--session') ?? -1;
@@ -52,6 +75,13 @@ describe('ChatBridge', () => {
     ]) {
       vi.stubEnv(key, '');
     }
+  });
+
+  afterEach(() => {
+    for (const directory of temporaryDirectories) {
+      rmSync(directory, { recursive: true, force: true });
+    }
+    temporaryDirectories.clear();
   });
 
   test('runs pi prompt and sends reply with original metadata', async () => {
@@ -91,6 +121,157 @@ describe('ChatBridge', () => {
         metadata: { messageId: 'om_1', threadId: 'omt_1' },
       });
     });
+  });
+
+  it('passes image attachments to the Pi CLI as @file arguments', async () => {
+    mockSpawn.mockReturnValue(createChild('pong'));
+    const registry = {
+      getAdapter: vi.fn(() => ({ sendTyping: vi.fn(() => Promise.resolve()) })),
+      send: vi.fn(() => Promise.resolve({ ok: true })),
+    };
+    const bridge = new ChatBridge({ enabled: true }, '/workspace', registry as never);
+    bridge.start();
+
+    await bridge.handleMessage({
+      adapter: 'feishu',
+      sender: 'oc_chat',
+      text: '请看图',
+      attachments: [{ type: 'image', path: '/tmp/feishu-image.png', mimeType: 'image/png' }],
+    });
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      trustedRuntime,
+      [
+        trustedCli,
+        '-p',
+        '--offline',
+        '--no-extensions',
+        '--session',
+        expect.stringMatching(/^\/workspace\/\.pi\/channel-sessions\/feishu-[0-9a-f]{24}\.jsonl$/),
+        '@/tmp/feishu-image.png',
+        '来自即时通讯的用户消息：\n请看图',
+      ],
+      expect.objectContaining({ cwd: '/workspace' }),
+    );
+  });
+
+  it('cleans Feishu temporary image attachments after the prompt finishes', async () => {
+    const { directory: attachmentDir, path: imagePath } = createTemporaryImage();
+    mockSpawn.mockReturnValue(createChild('pong'));
+    const registry = {
+      getAdapter: vi.fn(() => ({ sendTyping: vi.fn(() => Promise.resolve()) })),
+      send: vi.fn(() => Promise.resolve({ ok: true })),
+    };
+    const bridge = new ChatBridge({ enabled: true }, '/workspace', registry as never);
+    bridge.start();
+
+    await bridge.handleMessage({
+      adapter: 'feishu',
+      sender: 'oc_chat',
+      text: '请看图',
+      attachments: [{ type: 'image', path: imagePath, mimeType: 'image/png' }],
+    });
+
+    await vi.waitFor(() =>
+      expect(registry.send).toHaveBeenCalledWith(expect.objectContaining({ text: 'pong' })),
+    );
+    expect(existsSync(attachmentDir)).toBe(false);
+  });
+
+  it('forwards an image attachment when the message text is empty', async () => {
+    const { directory: attachmentDir, path: imagePath } = createTemporaryImage();
+    mockSpawn.mockReturnValue(createChild('pong'));
+    const registry = {
+      getAdapter: vi.fn(() => ({ sendTyping: vi.fn(() => Promise.resolve()) })),
+      send: vi.fn(() => Promise.resolve({ ok: true })),
+    };
+    const bridge = new ChatBridge({ enabled: true }, '/workspace', registry as never);
+    bridge.start();
+
+    await bridge.handleMessage({
+      adapter: 'feishu',
+      sender: 'oc_chat',
+      text: '',
+      attachments: [{ type: 'image', path: imagePath, mimeType: 'image/png' }],
+    });
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      trustedRuntime,
+      [
+        trustedCli,
+        '-p',
+        '--offline',
+        '--no-extensions',
+        '--session',
+        expect.stringMatching(/^\/workspace\/\.pi\/channel-sessions\/feishu-[0-9a-f]{24}\.jsonl$/),
+        `@${imagePath}`,
+        '来自即时通讯的用户消息：\n',
+      ],
+      expect.objectContaining({ cwd: '/workspace' }),
+    );
+    await vi.waitFor(() =>
+      expect(registry.send).toHaveBeenCalledWith(expect.objectContaining({ text: 'pong' })),
+    );
+    expect(existsSync(attachmentDir)).toBe(false);
+  });
+
+  it('cleans a rejected image attachment when the sender queue is full', async () => {
+    const pendingChild = createPendingChild();
+    mockSpawn.mockReturnValue(pendingChild);
+    const registry = {
+      getAdapter: vi.fn(() => ({ sendTyping: vi.fn(() => Promise.resolve()) })),
+      send: vi.fn(() => Promise.resolve({ ok: true })),
+    };
+    const bridge = new ChatBridge(
+      { enabled: true, maxConcurrent: 1, maxQueuePerSender: 1 },
+      '/workspace',
+      registry as never,
+    );
+    bridge.start();
+
+    await bridge.handleMessage({ adapter: 'feishu', sender: 'oc_chat', text: 'first' });
+    await bridge.handleMessage({ adapter: 'feishu', sender: 'oc_chat', text: 'queued' });
+    const { directory, path } = createTemporaryImage();
+    await bridge.handleMessage({
+      adapter: 'feishu',
+      sender: 'oc_chat',
+      text: 'rejected',
+      attachments: [{ type: 'image', path }],
+    });
+
+    expect(registry.send).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'Queue full (1 pending). Wait or send /abort.' }),
+    );
+    expect(existsSync(directory)).toBe(false);
+    bridge.stop();
+  });
+
+  it('cleans queued image attachments when the bridge stops', async () => {
+    const pendingChild = createPendingChild();
+    mockSpawn.mockReturnValue(pendingChild);
+    const registry = {
+      getAdapter: vi.fn(() => ({ sendTyping: vi.fn(() => Promise.resolve()) })),
+      send: vi.fn(() => Promise.resolve({ ok: true })),
+    };
+    const bridge = new ChatBridge(
+      { enabled: true, maxConcurrent: 1 },
+      '/workspace',
+      registry as never,
+    );
+    bridge.start();
+
+    await bridge.handleMessage({ adapter: 'feishu', sender: 'oc_chat', text: 'first' });
+    const { directory, path } = createTemporaryImage();
+    await bridge.handleMessage({
+      adapter: 'feishu',
+      sender: 'oc_chat',
+      text: 'queued',
+      attachments: [{ type: 'image', path }],
+    });
+
+    bridge.stop();
+
+    await vi.waitFor(() => expect(existsSync(directory)).toBe(false));
   });
 
   it('does not execute a project-local Pi binary discovered from cwd', async () => {

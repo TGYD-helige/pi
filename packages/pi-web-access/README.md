@@ -66,7 +66,7 @@ Search the web for images. Only registered when an image search provider (`dashs
 | `xai` | ✓ | ✗ | ✓ | ✗ | `https://api.x.ai/v1` | `XAI_API_KEY` | `grok-4.3` |
 | `openai` | ✓ | ✗ | ✗ | ✗ | `https://api.openai.com/v1` | `OPENAI_API_KEY` | `gpt-5.5` |
 | `anthropic` | ✓ | ✓ | ✗ | ✗ | `https://api.anthropic.com/v1` | `ANTHROPIC_API_KEY` | `claude-sonnet-4-6` |
-| `dashscope` | ✓ | ✓ | ✗ | ✓ | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `DASHSCOPE_API_KEY` | `qwen3.7-plus` |
+| `dashscope` | ✓ | ✓ | ✗ | ✓ | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `DASHSCOPE_API_KEY` | `qwen3.8-flash` |
 | `unsplash` | ✗ | ✗ | ✗ | ✓ | `https://api.unsplash.com` | `UNSPLASH_ACCESS_KEY` | - |
 
 Custom Kimi base URLs must support both `/chat/completions` and `/formulas/*`.

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RuntimeTelemetryEvent } from '../index.js';
 
 vi.mock('../config.js', () => ({
@@ -6,16 +6,8 @@ vi.mock('../config.js', () => ({
   resolveConfig: vi.fn((config: unknown) => config ?? {}),
 }));
 
-vi.mock('../langfuse.js', () => ({
-  createLangfuseExporter: vi.fn(() => ({
-    publish: vi.fn(() => Promise.resolve()),
-    flush: vi.fn(() => Promise.resolve()),
-    close: vi.fn(() => Promise.resolve()),
-  })),
-}));
-
 vi.mock('../otel.js', () => ({
-  createOtelExporter: vi.fn(() => ({
+  createTelemetryExporter: vi.fn(() => ({
     publish: vi.fn(() => Promise.resolve()),
     flush: vi.fn(() => Promise.resolve()),
     close: vi.fn(() => Promise.resolve()),
@@ -24,8 +16,7 @@ vi.mock('../otel.js', () => ({
 
 import { loadConfigFromFile } from '../config.js';
 import { NoopRuntimeEventExporter } from '../index.js';
-import { createLangfuseExporter } from '../langfuse.js';
-import { createOtelExporter } from '../otel.js';
+import { createTelemetryExporter } from '../otel.js';
 
 type EventHandler = (...args: any[]) => Promise<void> | void;
 
@@ -46,10 +37,10 @@ async function fireEvent(name: string, event?: unknown, ctx?: Record<string, unk
 }
 
 function getPublishedEvents(): RuntimeTelemetryEvent[] {
-  const langfuseExporter = (createLangfuseExporter as ReturnType<typeof vi.fn>).mock.results[0]
+  const telemetryExporter = (createTelemetryExporter as ReturnType<typeof vi.fn>).mock.results[0]
     ?.value;
-  if (!langfuseExporter) return [];
-  return (langfuseExporter.publish as ReturnType<typeof vi.fn>).mock.calls.map(
+  if (!telemetryExporter) return [];
+  return (telemetryExporter.publish as ReturnType<typeof vi.fn>).mock.calls.map(
     (call: unknown[]) => call[0] as RuntimeTelemetryEvent,
   );
 }
@@ -60,37 +51,34 @@ describe('telemetryExtension', () => {
     mockPi.on.mockClear();
     mockPi.registerTool.mockClear();
     (loadConfigFromFile as ReturnType<typeof vi.fn>).mockClear();
-    (createLangfuseExporter as ReturnType<typeof vi.fn>).mockClear();
-    (createOtelExporter as ReturnType<typeof vi.fn>).mockClear();
+    (createTelemetryExporter as ReturnType<typeof vi.fn>).mockClear();
 
-    (createLangfuseExporter as ReturnType<typeof vi.fn>).mockReturnValue({
+    (createTelemetryExporter as ReturnType<typeof vi.fn>).mockReturnValue({
       publish: vi.fn(() => Promise.resolve()),
       flush: vi.fn(() => Promise.resolve()),
       close: vi.fn(() => Promise.resolve()),
     });
-    (createOtelExporter as ReturnType<typeof vi.fn>).mockReturnValue(
-      new NoopRuntimeEventExporter(),
-    );
   });
 
-  test('registers expected event handlers', () => {
+  it('registers expected event handlers', () => {
     telemetryExtension(mockPi as any);
 
     const registered = mockPi.on.mock.calls.map((c: unknown[]) => c[0]);
     expect(registered).toContain('session_start');
     expect(registered).toContain('session_shutdown');
     expect(registered).toContain('turn_start');
-    expect(registered).toContain('turn_end');
+    expect(registered).toContain('agent_end');
     expect(registered).toContain('tool_execution_start');
     expect(registered).toContain('tool_execution_end');
     expect(registered).toContain('before_provider_request');
     expect(registered).toContain('after_provider_response');
+    expect(registered).toContain('message_update');
     expect(registered).toContain('message_end');
     expect(registered).toContain('model_select');
     expect(registered).toContain('session_compact');
   });
 
-  test('initializes exporter from config on session_start', async () => {
+  it('initializes exporter from config on session_start', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent(
       'session_start',
@@ -102,17 +90,16 @@ describe('telemetryExtension', () => {
       cwd: '/project',
       projectTrusted: false,
     });
-    expect(createLangfuseExporter).toHaveBeenCalledTimes(1);
-    expect(createOtelExporter).toHaveBeenCalledTimes(1);
+    expect(createTelemetryExporter).toHaveBeenCalledTimes(1);
   });
 
-  test('does not retain an exporter after telemetry is disabled in a later session', async () => {
+  it('does not retain an exporter after telemetry is disabled in a later session', async () => {
     const previousExporter = {
       publish: vi.fn(() => Promise.resolve()),
       flush: vi.fn(() => Promise.resolve()),
       close: vi.fn(() => Promise.resolve()),
     };
-    (createLangfuseExporter as ReturnType<typeof vi.fn>)
+    (createTelemetryExporter as ReturnType<typeof vi.fn>)
       .mockReturnValueOnce(previousExporter)
       .mockReturnValueOnce(new NoopRuntimeEventExporter());
 
@@ -128,7 +115,7 @@ describe('telemetryExtension', () => {
     expect(previousExporter.publish).not.toHaveBeenCalled();
   });
 
-  test('publishes chat_turn_started on turn_start', async () => {
+  it('publishes chat_turn_started on turn_start', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
     await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: 1700000000000 });
@@ -141,6 +128,34 @@ describe('telemetryExtension', () => {
     });
     expect(events[0]!.traceId).toMatch(/^[0-9a-f]{32}$/);
     expect(events[0]!.sessionId).toBeTruthy();
+  });
+
+  it('uses a preset root trace id once when provided by the caller', async () => {
+    process.env.PI_TELEMETRY_TRACE_ID = 'ci-known-trace';
+    try {
+      telemetryExtension(mockPi as any);
+      await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
+      await fireEvent('input', { type: 'input', text: 'first' });
+      await fireEvent('turn_start', {
+        type: 'turn_start',
+        turnIndex: 0,
+        timestamp: 1700000000000,
+      });
+      expect(getPublishedEvents()[0]!.traceId).toBe('ci-known-trace');
+
+      await fireEvent('input', { type: 'input', text: 'second' });
+      await fireEvent('turn_start', {
+        type: 'turn_start',
+        turnIndex: 1,
+        timestamp: 1700000001000,
+      });
+      expect(getPublishedEvents()[1]!.traceId).toMatch(/^[0-9a-f]{32}$/);
+      expect(getPublishedEvents()[1]!.traceId).not.toBe('ci-known-trace');
+    } finally {
+      delete process.env.PI_TELEMETRY_TRACE_ID;
+      delete process.env.PI_TELEMETRY_SESSION_ID;
+      delete process.env.PI_TELEMETRY_OWNER_PID;
+    }
   });
 
   it('correlates runtime events with the telemetry task run', async () => {
@@ -183,17 +198,15 @@ describe('telemetryExtension', () => {
     }
   });
 
-  test('publishes chat_turn_completed on turn_end with durationMs', async () => {
+  it('publishes chat_turn_completed on agent_end with durationMs', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
 
     const startTs = Date.now();
     await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: startTs });
-    await fireEvent('turn_end', {
-      type: 'turn_end',
-      turnIndex: 0,
-      message: {},
-      toolResults: [],
+    await fireEvent('agent_end', {
+      type: 'agent_end',
+      messages: [{ role: 'assistant', content: [{ type: 'text', text: 'done' }] }],
     });
 
     const events = getPublishedEvents();
@@ -204,7 +217,7 @@ describe('telemetryExtension', () => {
     expect(completed.traceId).toBe(events[0]!.traceId);
   });
 
-  test('uses new traceId for each user query', async () => {
+  it('uses new traceId for each user query', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
 
@@ -220,7 +233,7 @@ describe('telemetryExtension', () => {
     expect(started[0]!.traceId).not.toBe(started[1]!.traceId);
   });
 
-  test('reuses same traceId across turns within one query', async () => {
+  it('reuses same traceId across turns within one query', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
 
@@ -229,13 +242,20 @@ describe('telemetryExtension', () => {
     await fireEvent('turn_end', { type: 'turn_end', turnIndex: 0, message: {}, toolResults: [] });
     await fireEvent('turn_start', { type: 'turn_start', turnIndex: 1, timestamp: Date.now() });
     await fireEvent('turn_end', { type: 'turn_end', turnIndex: 1, message: {}, toolResults: [] });
+    await fireEvent('agent_end', {
+      type: 'agent_end',
+      messages: [{ role: 'assistant', content: [{ type: 'text', text: 'done' }] }],
+    });
 
     const events = getPublishedEvents();
     const traceIds = new Set(events.map((e) => e.traceId));
     expect(traceIds.size).toBe(1);
+    expect(
+      events.filter((event) => 'type' in event && event.type === 'chat_turn_completed'),
+    ).toHaveLength(1);
   });
 
-  test('publishes tool started event', async () => {
+  it('publishes tool started event', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
     await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
@@ -257,7 +277,7 @@ describe('telemetryExtension', () => {
     });
   });
 
-  test('publishes tool completed event', async () => {
+  it('publishes tool completed event', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
     await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
@@ -280,7 +300,7 @@ describe('telemetryExtension', () => {
     });
   });
 
-  test('publishes completed tool output from text content blocks', async () => {
+  it('publishes completed tool output from text content blocks', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
     await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
@@ -308,7 +328,25 @@ describe('telemetryExtension', () => {
     });
   });
 
-  test('preserves sanitized tool details and does not overwrite explicit output', async () => {
+  it('preserves tool output beyond the old 500-character preview', async () => {
+    telemetryExtension(mockPi as any);
+    await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
+    await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
+    const output = 'x'.repeat(20_000);
+
+    await fireEvent('tool_execution_end', {
+      type: 'tool_execution_end',
+      toolCallId: 'call-1',
+      toolName: 'read_file',
+      result: { content: [{ type: 'text', text: output }] },
+      isError: false,
+    });
+
+    const toolEvent = getPublishedEvents().find((event) => 'toolCallId' in event);
+    expect(toolEvent).toMatchObject({ details: { output } });
+  });
+
+  it('preserves sanitized tool details and does not overwrite explicit output', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
     await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
@@ -337,7 +375,7 @@ describe('telemetryExtension', () => {
     });
   });
 
-  test('allows tool results to suppress output payloads', async () => {
+  it('allows tool results to suppress output payloads', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
     await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
@@ -361,7 +399,7 @@ describe('telemetryExtension', () => {
     });
   });
 
-  test('publishes tool failed event with error', async () => {
+  it('publishes a sanitized tool failure without raw result details', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
     await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
@@ -370,7 +408,7 @@ describe('telemetryExtension', () => {
       type: 'tool_execution_end',
       toolCallId: 'call-1',
       toolName: 'read_file',
-      result: 'ENOENT: file not found',
+      result: 'Authorization: Bearer super-secret-token\ninternal stack trace',
       isError: true,
     });
 
@@ -378,11 +416,13 @@ describe('telemetryExtension', () => {
     const toolEvent = events.find((e) => 'toolCallId' in e);
     expect(toolEvent).toMatchObject({
       status: 'failed',
-      error: 'ENOENT: file not found',
+      error: 'Tool execution failed',
     });
+    expect(toolEvent).not.toHaveProperty('details');
+    expect(JSON.stringify(toolEvent)).not.toContain('super-secret-token');
   });
 
-  test('publishes LLM generation started from before_provider_request', async () => {
+  it('publishes LLM generation started from before_provider_request', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
     await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
@@ -402,7 +442,7 @@ describe('telemetryExtension', () => {
     });
   });
 
-  test('after_provider_response with 2xx does not publish completed (message_end does)', async () => {
+  it('after_provider_response with 2xx does not publish completed (message_end does)', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
     await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
@@ -423,7 +463,42 @@ describe('telemetryExtension', () => {
     expect(llmEvents[0]).toMatchObject({ status: 'started' });
   });
 
-  test('publishes LLM generation failed for 4xx/5xx responses', async () => {
+  it('publishes stream frames only when message_update events were received', async () => {
+    telemetryExtension(mockPi as any);
+    await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
+    await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
+    await fireEvent('before_provider_request', { type: 'before_provider_request', payload: {} });
+    await fireEvent('message_update', {
+      type: 'message_update',
+      assistantMessageEvent: {
+        type: 'text_delta',
+        contentIndex: 0,
+        delta: 'hello',
+        partial: { role: 'assistant', content: [{ type: 'text', text: 'hello' }] },
+      },
+    });
+    await fireEvent('message_end', {
+      type: 'message_end',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'hello' }], usage: {} },
+    });
+
+    const events = getPublishedEvents();
+    const streamEvent = events.find((event) => 'streamEvents' in event);
+    expect(streamEvent).toMatchObject({
+      llmGenerationId: 'gen-1',
+      streamEvents: [{ type: 'text_delta', contentIndex: 0, delta: 'hello' }],
+    });
+    expect(events.at(-1)).toMatchObject({ llmGenerationId: 'gen-1', status: 'completed' });
+
+    await fireEvent('before_provider_request', { type: 'before_provider_request', payload: {} });
+    await fireEvent('message_end', {
+      type: 'message_end',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'done' }], usage: {} },
+    });
+    expect(getPublishedEvents().filter((event) => 'streamEvents' in event)).toHaveLength(1);
+  });
+
+  it('publishes LLM generation failed for 4xx/5xx responses', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
     await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
@@ -446,7 +521,7 @@ describe('telemetryExtension', () => {
     });
   });
 
-  test('extracts model from ctx.model when present', async () => {
+  it('extracts model from ctx.model when present', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
     await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
@@ -464,7 +539,7 @@ describe('telemetryExtension', () => {
     });
   });
 
-  test('falls back to unknown model when ctx.model is undefined', async () => {
+  it('falls back to unknown model when ctx.model is undefined', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
     await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
@@ -481,7 +556,7 @@ describe('telemetryExtension', () => {
     });
   });
 
-  test('increments llmGenerationId for multiple requests in same turn', async () => {
+  it('increments llmGenerationId for multiple requests in same turn', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
     await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
@@ -509,7 +584,7 @@ describe('telemetryExtension', () => {
     expect(llmEvents[2]).toMatchObject({ llmGenerationId: 'gen-2' });
   });
 
-  test('continues llmGenerationId counter across turns within one query', async () => {
+  it('continues llmGenerationId counter across turns within one query', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
 
@@ -532,7 +607,7 @@ describe('telemetryExtension', () => {
     expect(llmEvents[1]).toMatchObject({ llmGenerationId: 'gen-2' });
   });
 
-  test('resets llmGenerationId counter on new user query', async () => {
+  it('resets llmGenerationId counter on new user query', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
 
@@ -556,20 +631,22 @@ describe('telemetryExtension', () => {
     expect(llmEvents[1]).toMatchObject({ llmGenerationId: 'gen-1' });
   });
 
-  test('flushes and closes exporter on session_shutdown', async () => {
+  it('closes exporter on session_shutdown', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
 
-    const langfuseExporter = (createLangfuseExporter as ReturnType<typeof vi.fn>).mock.results[0]
+    const telemetryExporter = (createTelemetryExporter as ReturnType<typeof vi.fn>).mock.results[0]
       ?.value;
 
     await fireEvent('session_shutdown', { type: 'session_shutdown', reason: 'quit' });
 
-    expect(langfuseExporter.flush).toHaveBeenCalledTimes(1);
-    expect(langfuseExporter.close).toHaveBeenCalledTimes(1);
+    // close() owns the final delivery (it flushes internally), so the
+    // extension must not double-flush.
+    expect(telemetryExporter.close).toHaveBeenCalledTimes(1);
+    expect(telemetryExporter.flush).not.toHaveBeenCalled();
   });
 
-  test('ignores tool events outside of a turn', async () => {
+  it('ignores tool events outside of a turn', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
 
@@ -584,7 +661,7 @@ describe('telemetryExtension', () => {
     expect(events).toHaveLength(0);
   });
 
-  test('ignores LLM events outside of a turn', async () => {
+  it('ignores LLM events outside of a turn', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
 
@@ -597,7 +674,7 @@ describe('telemetryExtension', () => {
     expect(events).toHaveLength(0);
   });
 
-  test('uses same sessionId across queries', async () => {
+  it('uses same sessionId across queries', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
 
@@ -613,7 +690,7 @@ describe('telemetryExtension', () => {
     expect(started[0]!.sessionId).toBe(started[1]!.sessionId);
   });
 
-  test('before_provider_request publishes input payload', async () => {
+  it('before_provider_request publishes input payload', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
     await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
@@ -634,7 +711,7 @@ describe('telemetryExtension', () => {
     expect(llmEvent.input).toEqual(payload);
   });
 
-  test('message_end publishes completed with output, usage, responseId, stopReason', async () => {
+  it('message_end publishes completed with output, usage, responseId, stopReason', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
     await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
@@ -682,7 +759,7 @@ describe('telemetryExtension', () => {
     });
   });
 
-  test('message_end keeps content array when it includes tool_use blocks', async () => {
+  it('message_end keeps content array when it includes tool_use blocks', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
     await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
@@ -707,7 +784,7 @@ describe('telemetryExtension', () => {
     expect(completed.output).toEqual({ content: content, usage: { input: 50, output: 30 } });
   });
 
-  test('message_end ignores non-assistant messages', async () => {
+  it('message_end ignores non-assistant messages', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
     await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
@@ -727,7 +804,7 @@ describe('telemetryExtension', () => {
     expect(llmEvents[0]).toMatchObject({ status: 'started' });
   });
 
-  test('model_select publishes chat_turn_steered event', async () => {
+  it('model_select publishes chat_turn_steered event', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
     await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
@@ -754,7 +831,7 @@ describe('telemetryExtension', () => {
     });
   });
 
-  test('session_compact publishes chat_turn_steered event', async () => {
+  it('session_compact publishes chat_turn_steered event', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
     await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
@@ -774,7 +851,7 @@ describe('telemetryExtension', () => {
     });
   });
 
-  test('model_select ignored outside of a turn', async () => {
+  it('model_select ignored outside of a turn', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
 
@@ -807,7 +884,7 @@ describe('telemetryExtension', () => {
       delete process.env.PI_SUBAGENT_CHILD_AGENT;
     });
 
-    test('uses inherited traceId from parent', async () => {
+    it('uses inherited traceId from parent', async () => {
       telemetryExtension(mockPi as any);
       await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
       await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
@@ -816,7 +893,7 @@ describe('telemetryExtension', () => {
       expect(events[0]!.traceId).toBe(PARENT_TRACE_ID);
     });
 
-    test('publishes subagent_started instead of chat_turn_started', async () => {
+    it('publishes subagent_started instead of chat_turn_started', async () => {
       telemetryExtension(mockPi as any);
       await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
       await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
@@ -828,11 +905,14 @@ describe('telemetryExtension', () => {
       expect((events[0] as any).details).toMatchObject({ agent: 'legal' });
     });
 
-    test('publishes subagent_completed instead of chat_turn_completed', async () => {
+    it('publishes subagent_completed instead of chat_turn_completed', async () => {
       telemetryExtension(mockPi as any);
       await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
       await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
-      await fireEvent('turn_end', { type: 'turn_end', turnIndex: 0, message: {}, toolResults: [] });
+      await fireEvent('agent_end', {
+        type: 'agent_end',
+        messages: [{ role: 'assistant', content: [{ type: 'text', text: 'done' }] }],
+      });
 
       const events = getPublishedEvents();
       const completed = events.find((e) => 'type' in e && e.type === 'subagent_completed');
@@ -842,7 +922,7 @@ describe('telemetryExtension', () => {
       expect((completed as any).details).toMatchObject({ agent: 'legal' });
     });
 
-    test('uses parent sessionId for lifecycle events', async () => {
+    it('uses parent sessionId for lifecycle events', async () => {
       telemetryExtension(mockPi as any);
       await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
       await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
@@ -851,7 +931,7 @@ describe('telemetryExtension', () => {
       expect(events[0]!.sessionId).toBe(PARENT_SESSION_ID);
     });
 
-    test('includes childSessionId on tool events', async () => {
+    it('includes childSessionId on tool events', async () => {
       telemetryExtension(mockPi as any);
       await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
       await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
@@ -870,7 +950,7 @@ describe('telemetryExtension', () => {
       expect(toolEvent.traceId).toBe(PARENT_TRACE_ID);
     });
 
-    test('includes childSessionId on LLM generation events', async () => {
+    it('includes childSessionId on LLM generation events', async () => {
       telemetryExtension(mockPi as any);
       await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
       await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
@@ -887,7 +967,7 @@ describe('telemetryExtension', () => {
       expect(llmEvent.traceId).toBe(PARENT_TRACE_ID);
     });
 
-    test('does not treat same-pid env vars as subagent', async () => {
+    it('does not treat same-pid env vars as subagent', async () => {
       process.env.PI_TELEMETRY_OWNER_PID = String(process.pid);
       telemetryExtension(mockPi as any);
       await fireEvent('session_start', { type: 'session_start', reason: 'startup' });

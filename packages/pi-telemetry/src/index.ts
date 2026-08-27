@@ -1,13 +1,23 @@
 import type {
+  JsonValue,
   RuntimeLifecycleEvent,
   RuntimeLlmGenerationEvent,
   RuntimeToolEvent,
 } from '@amaster.ai/pi-shared';
 
+export type RuntimeLlmStreamEvent = Omit<
+  RuntimeLlmGenerationEvent,
+  'status' | 'model' | 'input' | 'output' | 'usage' | 'responseId' | 'stopReason' | 'error'
+> & {
+  streamEvents: JsonValue[];
+  error?: string;
+};
+
 export type RuntimeTelemetryEvent =
   | RuntimeLifecycleEvent
   | RuntimeToolEvent
-  | RuntimeLlmGenerationEvent;
+  | RuntimeLlmGenerationEvent
+  | RuntimeLlmStreamEvent;
 
 export interface RuntimeEventExporter {
   publish(event: RuntimeTelemetryEvent): Promise<void>;
@@ -16,15 +26,6 @@ export interface RuntimeEventExporter {
 }
 
 export type TelemetryEnvironment = Record<string, string | undefined>;
-
-export type TelemetryFetch = (
-  input: string,
-  init: {
-    method: 'POST';
-    headers: Record<string, string>;
-    body: string;
-  },
-) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
 
 export type TelemetryRedactor = (event: RuntimeTelemetryEvent) => RuntimeTelemetryEvent | undefined;
 
@@ -53,6 +54,8 @@ export class CompositeRuntimeEventExporter implements RuntimeEventExporter {
   }
 
   async close(): Promise<void> {
+    // Preserve the public flush-before-close contract. Built-in close()
+    // implementations may flush again, but an already-drained queue is a no-op.
     await this.flush();
     await Promise.allSettled(this.exporters.map((exporter) => exporter.close?.()));
   }

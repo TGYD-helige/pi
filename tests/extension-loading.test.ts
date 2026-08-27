@@ -335,7 +335,7 @@ describe('Extension loading contract', () => {
       expect(onCalls).toContain('session_start');
       expect(onCalls).toContain('input');
       expect(onCalls).toContain('turn_start');
-      expect(onCalls).toContain('turn_end');
+      expect(onCalls).toContain('agent_end');
       expect(onCalls).toContain('tool_execution_start');
       expect(onCalls).toContain('tool_execution_end');
       expect(onCalls).toContain('before_provider_request');
