@@ -1,5 +1,6 @@
 /** Built-in provider identifiers. */
 export type BuiltInProviderId =
+  | 'parallel'
   | 'tavily'
   | 'brave'
   | 'firecrawl'

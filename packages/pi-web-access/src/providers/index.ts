@@ -9,6 +9,7 @@ import { KimiProvider } from './kimi.js';
 import { MimoProvider } from './mimo.js';
 import { OpenAIProvider } from './openai.js';
 import { OpenRouterProvider } from './openrouter.js';
+import { ParallelProvider } from './parallel.js';
 import { PerplexityProvider } from './perplexity.js';
 import { TavilyProvider } from './tavily.js';
 import { UnsplashProvider } from './unsplash.js';
@@ -29,6 +30,7 @@ export { BaseProvider, getEnvironmentContext, SEARCH_SYSTEM_PROMPT } from './bas
 // ─── Registry ────────────────────────────────────────────────────────────────
 
 const providers: WebProvider[] = [
+  new ParallelProvider(),
   new TavilyProvider(),
   new BraveProvider(),
   new FirecrawlProvider(),

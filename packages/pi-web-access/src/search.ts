@@ -6,6 +6,7 @@ import type { WebToolSettings } from './types.js';
 export async function search(
   params: SearchParams,
   settings: WebToolSettings,
+  signal?: AbortSignal,
 ): Promise<SearchResponse> {
   const resolved = resolveSearchProvider(settings);
   if ('error' in resolved) {
@@ -17,5 +18,5 @@ export async function search(
     throw new Error(`Provider "${resolved.id}" is not registered.`);
   }
 
-  return provider.search(params, resolved);
+  return provider.search(params, resolved, signal);
 }

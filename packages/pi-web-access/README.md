@@ -8,7 +8,7 @@ Pi extension for web search and URL content extraction.
 
 ### `web_search`
 
-Search the web for information. Only registered when a search provider is configured with an API key.
+Search the web for information. Registered when a keyed search provider is available, or when the keyless `parallel` provider is explicitly selected.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -52,6 +52,7 @@ Search the web for images. Only registered when an image search provider (`dashs
 
 | Provider | Search | Fetch | X Search | Image Search | Default Base URL | Env Var | Default Model |
 |----------|:------:|:-----:|:--------:|:------------:|------------------|---------|---------------|
+| `parallel` | ✓ | ✗ | ✗ | ✗ | `https://search.parallel.ai/mcp` | no key | - |
 | `tavily` | ✓ | ✓ | ✗ | ✗ | `https://api.tavily.com` | `TAVILY_API_KEY` | - |
 | `brave` | ✓ | ✗ | ✗ | ✗ | `https://api.search.brave.com` | `BRAVE_API_KEY` | - |
 | `firecrawl` | ✓ | ✓ | ✗ | ✗ | `https://api.firecrawl.dev` | `FIRECRAWL_API_KEY` | - |
@@ -113,7 +114,7 @@ Project `.pi/settings.json` values are loaded only after project trust is accept
 
 | Field | Description |
 |-------|-------------|
-| `provider` | Which provider to use for web search. Not set = auto-select first provider with key. No key at all = tool not registered. |
+| `provider` | Which provider to use for web search. Not set = auto-select first provider with key. Explicitly selecting `parallel` enables keyless search; otherwise no key means the tool is not registered. |
 
 ### `fetch`
 
@@ -145,6 +146,8 @@ Per-provider configuration. Each provider supports:
 
 Environment variables serve as fallbacks when `apiKey` is not set in config.
 
+Parallel is opt-in and supports search only: it never enables image search or `web_fetch`, and it does not perform URL fetching or extraction. When selected, search objectives and queries leave the machine for `https://search.parallel.ai/mcp`; this can include agent-generated repository context and user-supplied URLs contained in those objectives or queries. Existing automatic provider selection, provider order, and keyed provider behavior are unchanged.
+
 ## Architecture
 
 Each provider implements the `WebProvider` interface via `BaseProvider`:
@@ -171,7 +174,7 @@ Providers only override methods they support. Provider-specific capabilities (li
 
 ## Tool Registration Rules
 
-- `web_search` — registered when a search provider has an API key.
+- `web_search` — registered when a search provider has an API key, or when keyless `parallel` is explicitly selected.
 - `web_fetch` — registered when `fetch.provider` or `fetch.summary` is configured.
 - `x_search` — registered when xai provider has an API key.
 - `image_search` — registered when an image search provider (dashscope, unsplash) has an API key; `/image-search` command is registered alongside it. An `imageSearch.provider` that doesn't support image search (e.g. `"openai"`) is treated as unconfigured.
