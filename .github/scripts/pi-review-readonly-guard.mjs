@@ -2,9 +2,8 @@ import { lstatSync, readdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 
 const governedTools = new Set(['read', 'fffind', 'ffgrep', 'subagent']);
-const subagentKeys = ['agentScope', 'artifacts', 'async', 'workflowScript'];
-const workflowChildKeys = ['agent', 'agentScope', 'cwd', 'key', 'outputSchema', 'task'];
-const workflowKeys = new Set(['standards', 'spec', 'ponytail']);
+const subagentKeys = ['agentScope', 'artifacts', 'async', 'cwd', 'tasks'];
+const taskKeys = ['agent', 'outputSchema', 'task'];
 const blocked = {
   block: true,
   reason: 'Read-only review tools may only access the pull request workspace and trusted review inputs',
@@ -36,16 +35,13 @@ function validateSymlinks(directory, root, rootPrefix = `${root}${path.sep}`) {
   }
 }
 
-function safeSearchPath(value, workspace, root) {
+function safeWorkspacePath(value, workspace, root) {
   if (value === undefined || value === '') return true;
   if (typeof value !== 'string' || value.includes('\0')) return false;
   const trimmed = value.trim();
   if (!trimmed) return true;
   const normalized = trimmed.replaceAll('\\', '/');
-  if (/^[A-Za-z]:\//.test(normalized)
-    || normalized.startsWith('~')
-    || /^[A-Za-z][A-Za-z\d+.-]*:/.test(normalized)
-    || normalized.split('/').includes('..')) return false;
+  if (/^[A-Za-z]:\//.test(normalized) || normalized.startsWith('~') || /^[A-Za-z][A-Za-z\d+.-]*:/.test(normalized)) return false;
   const resolved = path.resolve(workspace, trimmed);
   return resolved === workspace
     || resolved.startsWith(`${workspace}${path.sep}`)
@@ -53,30 +49,26 @@ function safeSearchPath(value, workspace, root) {
     || resolved.startsWith(`${root}${path.sep}`);
 }
 
-function safeWorkflowScript(value, workspace) {
-  if (typeof value !== 'string') return false;
-  const match = /^\s*return\s+await\s+runs\.all\(([\s\S]+)\);\s*$/.exec(value);
-  if (!match) return false;
-  try {
-    const tasks = JSON.parse(match[1]);
-    return Array.isArray(tasks)
-      && tasks.length === 3
-      && tasks.every((task) => task
-        && !Array.isArray(task)
-        && Object.keys(task).sort().join('\0') === workflowChildKeys.join('\0')
-        && workflowKeys.has(task.key)
-        && task.agent === 'general-purpose'
-        && task.agentScope === 'user'
-        && task.cwd === workspace
-        && typeof task.task === 'string'
-        && task.task.trim()
-        && task.outputSchema
-        && typeof task.outputSchema === 'object'
-        && !Array.isArray(task.outputSchema))
-      && new Set(tasks.map((task) => task.key)).size === 3;
-  } catch {
-    return false;
-  }
+function hasKeys(value, keys) {
+  return value && !Array.isArray(value) && Object.keys(value).sort().join('\0') === keys.join('\0');
+}
+
+function safeSubagent(input, workspace) {
+  return hasKeys(input, subagentKeys)
+    && input.agentScope === 'user'
+    && input.async === false
+    && input.artifacts === false
+    && typeof input.cwd === 'string'
+    && path.resolve(input.cwd) === workspace
+    && Array.isArray(input.tasks)
+    && input.tasks.length === 3
+    && input.tasks.every((task) => hasKeys(task, taskKeys)
+      && task.agent === 'general-purpose'
+      && typeof task.task === 'string'
+      && task.task.trim()
+      && task.outputSchema
+      && typeof task.outputSchema === 'object'
+      && !Array.isArray(task.outputSchema));
 }
 
 export function createReviewToolGuard({ workspace, diffPath, skillPath }) {
@@ -87,7 +79,6 @@ export function createReviewToolGuard({ workspace, diffPath, skillPath }) {
     realFile(skillPath, 'Ponytail skill'),
   ]);
   validateSymlinks(root, root);
-  const rootPrefix = `${root}${path.sep}`;
 
   return (event, context) => {
     if (!governedTools.has(event?.toolName)) return;
@@ -96,23 +87,15 @@ export function createReviewToolGuard({ workspace, diffPath, skillPath }) {
     } catch {
       return blocked;
     }
-    if (event.toolName === 'subagent') {
-      const input = event.input;
-      if (!input || Object.keys(input).sort().join('\0') !== subagentKeys.join('\0')) return blocked;
-      return input.agentScope === 'user'
-        && input.async === false
-        && input.artifacts === false
-        && safeWorkflowScript(input.workflowScript, workspacePath)
-        ? undefined
-        : blocked;
-    }
-    if (event.toolName !== 'read') return safeSearchPath(event?.input?.path, workspacePath, root) ? undefined : blocked;
+    if (event.toolName === 'subagent') return safeSubagent(event.input, workspacePath) ? undefined : blocked;
+    if (event.toolName !== 'read') return safeWorkspacePath(event?.input?.path, workspacePath, root) ? undefined : blocked;
     const requested = event?.input?.path;
     if (typeof requested !== 'string' || !requested || requested.includes('\0')) return blocked;
+    if (safeWorkspacePath(requested, workspacePath, root)) return;
     try {
       const resolved = path.isAbsolute(requested) ? requested : path.resolve(context.cwd, requested);
       const real = realpathSync(resolved);
-      return real.startsWith(rootPrefix) || allowedFiles.has(real) ? undefined : blocked;
+      return allowedFiles.has(real) ? undefined : blocked;
     } catch {
       return blocked;
     }
