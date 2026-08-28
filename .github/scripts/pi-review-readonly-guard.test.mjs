@@ -20,6 +20,12 @@ async function fixture() {
   return { directory, workspace, diffPath, skillPath, secretPath };
 }
 
+const reviewTasks = () => ['Standards', 'Spec', 'Ponytail'].map((axis) => ({
+  agent: 'general-purpose',
+  task: `Review ${axis}`,
+  outputSchema: { type: 'object' },
+}));
+
 test('allows workspace reads, trusted inputs, and workspace-local searches', async () => {
   const paths = await fixture();
   try {
@@ -36,7 +42,11 @@ test('allows workspace reads, trusted inputs, and workspace-local searches', asy
     assert.equal(guard({
       toolName: 'subagent',
       input: {
-        workflowScript: 'return await runs.all([{ key: "review", task: `Review ${input}` }]);',
+        tasks: reviewTasks(),
+        agentScope: 'user',
+        cwd: paths.workspace,
+        async: false,
+        artifacts: false,
       },
     }, context), undefined);
   } finally {
@@ -59,6 +69,12 @@ test('blocks reads and searches that can escape the PR workspace', async () => {
       { toolName: 'fffind', input: { pattern: 'secret', path: ' ../secret' } },
       { toolName: 'ffgrep', input: { query: 'secret', path: ' /proc/self' } },
       { toolName: 'ffgrep', input: { query: 'secret', path: ' ~/secrets' } },
+      { toolName: 'subagent', input: { action: 'create', agent: 'general-purpose' } },
+      { toolName: 'subagent', input: { workflowScriptPath: paths.secretPath, agentScope: 'user', cwd: paths.workspace, async: false, artifacts: false } },
+      { toolName: 'subagent', input: { tasks: reviewTasks(), agentScope: 'project', cwd: paths.workspace, async: false, artifacts: false } },
+      { toolName: 'subagent', input: { tasks: reviewTasks(), agentScope: 'user', cwd: paths.directory, async: false, artifacts: false } },
+      { toolName: 'subagent', input: { tasks: reviewTasks().map((task, index) => index ? task : { ...task, cwd: paths.directory }), agentScope: 'user', cwd: paths.workspace, async: false, artifacts: false } },
+      { toolName: 'subagent', input: { workflowScript: 'return await runs.all([]);', agentScope: 'user', cwd: paths.workspace, async: false, artifacts: false } },
     ]) {
       assert.deepEqual(guard(event, context), {
         block: true,
