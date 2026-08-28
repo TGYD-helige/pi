@@ -333,6 +333,7 @@ Rules:
 ## Implementation Discipline
 
 - Before modifying code, look at the same package's existing patterns first — match style, naming, structure
+- Keep lifecycle handlers linear and readable: validate shared input first, perform independently configurable side effects independently, then use early returns for disabled or already-completed paths; each flag should govern only its own behavior.
 - Do not hard-wrap Markdown prose. Keep each paragraph on one source line; use line breaks only for Markdown structure such as lists, tables, blockquotes, and code fences.
 - Do not make cross-package refactors unrelated to the current task
 - New config keys must have corresponding test coverage

@@ -4,6 +4,7 @@
 
 export type Mem0Mode = 'platform' | 'embedded' | 'self-hosted';
 export type Mem0MemoryMode = 'hybrid' | 'active' | 'passive';
+export type Mem0RecallFrequency = 'user-input' | 'session';
 export type MemoryUserIdScope = 'project' | 'exact';
 
 export interface Mem0ExtensionConfig {
@@ -16,6 +17,15 @@ export interface Mem0ExtensionConfig {
    * Default: "hybrid".
    */
   memoryMode?: Mem0MemoryMode;
+
+  /** Override automatic turn capture from memoryMode. */
+  autoCapture?: boolean;
+  /** Override automatic recall injection from memoryMode. */
+  autoRecall?: boolean;
+  /** Override mem0_memory tool registration from memoryMode. */
+  toolEnabled?: boolean;
+  /** Automatic recall cadence. Default: "user-input". */
+  recallFrequency?: Mem0RecallFrequency;
 
   // ── Remote modes ─────────────────────────────────────────────────────────
   /** Mem0 API key. Supports ${MEM0_API_KEY}. */
@@ -44,7 +54,7 @@ export interface Mem0ExtensionConfig {
   agentId?: string;
   /** Append a cwd hash (default) or use userId verbatim. */
   userIdScope?: MemoryUserIdScope;
-  /** Max recalled memories per turn. Default: 5 */
+  /** Max results for automatic recall and mem0_memory search. Must be an integer greater than 0. Default: 5 */
   topK?: number;
 
   /**

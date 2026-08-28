@@ -36,10 +36,9 @@ export interface Mem0MemoryToolOptions {
   getUserId: () => string;
   getAgentId: () => string | undefined;
   /**
-   * The runtime keeps tool registrations for the life of the extension — a
-   * tool registered in a hybrid/active session is still callable after a
-   * later session switches to passive. This gate makes the stale registration
-   * report itself disabled instead of acting on the passive session.
+   * The runtime keeps tool registrations for the life of the extension. The
+   * active tool list hides this tool in disabled sessions, while this gate also
+   * protects against already queued or direct calls to the stale registration.
    */
   isEnabled: () => boolean;
   topK?: number;

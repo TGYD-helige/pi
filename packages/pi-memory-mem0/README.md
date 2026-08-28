@@ -29,20 +29,66 @@ Safety boundaries:
 
 ### Memory Modes
 
-| `memoryMode` | Auto capture + recall | `mem0_memory` tool | Use Case |
-|--------------|----------------------|--------------------|----------|
-| `hybrid` (default) | ✅ | ✅ | Best recall: automatic context plus agent-driven lookup |
-| `active` | ❌ | ✅ | No background traffic; the agent decides every read/write |
-| `passive` | ✅ | ❌ | Zero tool surface; fully automatic memory |
+Memory behavior has three independent controls. Each control is optional and falls back to the selected `memoryMode` preset when omitted.
+
+#### Independent Behavior Controls
+
+| Setting | Controls |
+|---------|----------|
+| `autoCapture` | Automatically send each user + assistant turn to Mem0 for extraction and storage |
+| `autoRecall` | Automatically search Mem0 and inject matching memories before the agent starts |
+| `toolEnabled` | Register the model-callable `mem0_memory` tool for search, add, list, and delete operations |
+
+`toolEnabled` affects only the model-callable tool. The user-facing `/mem0` command remains available while the provider is active.
+
+`topK` is the shared result limit for automatic recall and `mem0_memory` search. It must be an integer greater than `0`; use `autoRecall: false`, not `topK: 0`, to disable automatic recall.
+
+#### Presets and Overrides
+
+`memoryMode` remains a convenient preset for the three controls:
+
+| `memoryMode` | Auto capture | Auto recall | `mem0_memory` tool | Use Case |
+|--------------|--------------|-------------|--------------------|----------|
+| `hybrid` (default) | ✅ | ✅ | ✅ | Automatic memory plus agent-driven lookup |
+| `active` | ❌ | ❌ | ✅ | No background traffic; the agent decides every read/write |
+| `passive` | ✅ | ✅ | ❌ | Zero tool surface; fully automatic memory |
+
+Explicit controls override the preset independently. Unset controls continue to inherit their preset values, so a partial override does not replace the entire mode.
 
 ```json
 {
   "pi-memory-mem0": {
-    "mode": "embedded",
-    "memoryMode": "hybrid"
+    "memoryMode": "hybrid",
+    "autoRecall": false
   }
 }
 ```
+
+This keeps the `hybrid` defaults for `autoCapture` and `toolEnabled`, while the explicit `autoRecall: false` disables automatic injection. The agent can still search through `mem0_memory` on demand.
+
+The same rule works with any preset. For example, this starts from `passive` and enables only the tool override:
+
+```json
+{
+  "pi-memory-mem0": {
+    "memoryMode": "passive",
+    "toolEnabled": true
+  }
+}
+```
+
+#### Recall Frequency
+
+`recallFrequency` controls how often automatic recall runs when `autoRecall` resolves to `true`:
+
+| Value | Behavior |
+|-------|----------|
+| `"user-input"` (default) | Search once for each user input and inject the matching memories before that agent run |
+| `"session"` | Search only for the first user input in each persistent session |
+
+Session frequency counts the first search attempt even when it returns no matches or times out. The marker is stored in the Pi session, so switching away and resuming the same session does not search again. `/new` and `/fork` create new session IDs and each search once.
+
+When `autoRecall` is `false`, no automatic search is started and `recallFrequency` has no runtime effect. It does not affect manual `mem0_memory` or `/mem0 search` calls.
 
 ## Architecture (Embedded Mode)
 
@@ -184,14 +230,18 @@ The configured vector store always owns persistence. To request an intentionally
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `mode` | `"platform"` \| `"embedded"` \| `"self-hosted"` | `"platform"` | Operating mode |
-| `memoryMode` | `"hybrid"` \| `"active"` \| `"passive"` | `"hybrid"` | Memory behavior: tool + automation, tool only, or automation only |
+| `memoryMode` | `"hybrid"` \| `"active"` \| `"passive"` | `"hybrid"` | Preset for capture, recall, and tool behavior |
+| `autoCapture` | boolean | selected preset | Override automatic conversation capture |
+| `autoRecall` | boolean | selected preset | Override automatic recall injection |
+| `toolEnabled` | boolean | selected preset | Override `mem0_memory` tool registration |
+| `recallFrequency` | `"user-input"` \| `"session"` | `"user-input"` | Recall on each user input or only the first user input per persistent session; ignored when `autoRecall` is false |
 | `apiKey` | string | — | Platform or self-hosted API key. Supports `${MEM0_API_KEY}` |
 | `baseUrl` | string | `https://api.mem0.ai` | Platform override; required for self-hosted mode |
 | `requestTimeoutMs` | number | `30000` | Self-hosted request timeout |
 | `userId` | string | `$USER` or `"default-user"` | Memory scoping identifier |
 | `agentId` | string | — | Optional agent scope. Supports environment interpolation |
 | `userIdScope` | `"project"` \| `"exact"` | `"project"` | Append the cwd hash or use `userId` verbatim |
-| `topK` | number | `5` | Max recalled memories per turn |
+| `topK` | integer greater than `0` | `5` | Max results for automatic recall and `mem0_memory` search; use `autoRecall: false` to disable automatic recall |
 | `useRegistryKeys` | boolean | `true` | Whether OSS mode resolves keys from pi registry |
 | `oss.llm` | object | OpenAI gpt-4.1-nano | OSS extraction model |
 | `oss.embedder` | object | OpenAI text-embedding-3-small | OSS embedding model |
@@ -247,7 +297,7 @@ If `better-sqlite3` fails to load (for example, because of a Node ABI mismatch),
 
 ## Tools
 
-When `memoryMode` is `hybrid` or `active`, the agent gets one action-dispatched tool:
+When the resolved `toolEnabled` value is true, the agent gets one action-dispatched tool:
 
 ```
 mem0_memory(action="search", query="...")        # Semantic search over memories

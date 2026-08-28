@@ -45,10 +45,11 @@ afterEach(() => {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function createMockPi() {
+function createMockPi(initialActiveTools: string[] = []) {
   const handlers: Record<string, Array<(event: unknown, ctx: unknown) => Promise<unknown>>> = {};
   const commands: Record<string, { handler: (args: string, ctx: unknown) => Promise<void> }> = {};
   const tools: Array<{ name: string }> = [];
+  const activeTools = new Set(initialActiveTools);
 
   return {
     pi: {
@@ -56,13 +57,27 @@ function createMockPi() {
         if (!handlers[event]) handlers[event] = [];
         handlers[event].push(handler);
       },
-      registerTool: (tool: { name: string }) => tools.push(tool),
+      registerTool: (tool: { name: string }) => {
+        const index = tools.findIndex((registered) => registered.name === tool.name);
+        if (index === -1) {
+          tools.push(tool);
+          activeTools.add(tool.name);
+        } else {
+          tools[index] = tool;
+        }
+      },
       registerCommand: (
         name: string,
         opts: { handler: (args: string, ctx: unknown) => Promise<void> },
       ) => {
         commands[name] = opts;
       },
+      appendEntry: vi.fn(),
+      getActiveTools: vi.fn(() => [...activeTools]),
+      setActiveTools: vi.fn((toolNames: string[]) => {
+        activeTools.clear();
+        for (const name of toolNames) activeTools.add(name);
+      }),
     },
     handlers,
     commands,
@@ -70,12 +85,22 @@ function createMockPi() {
   };
 }
 
-function createMockCtx() {
+function createMockCtx({
+  sessionId = 'session-1',
+  entries = [],
+}: {
+  sessionId?: string;
+  entries?: Array<{ type: string; customType?: string; data?: unknown }>;
+} = {}) {
   return {
     cwd: '/tmp',
     ui: { notify: vi.fn(), setStatus: vi.fn() },
     modelRegistry: {
       getApiKeyForProvider: vi.fn().mockResolvedValue(undefined),
+    },
+    sessionManager: {
+      getSessionId: () => sessionId,
+      getEntries: () => entries,
     },
   };
 }
@@ -205,6 +230,71 @@ describe('memoryMode gating', () => {
     expect(provider.add).toHaveBeenCalledTimes(1);
   });
 
+  it('lets autoRecall disable recall without disabling hybrid capture or the tool', async () => {
+    const provider = activateWith('hybrid');
+    vi.mocked(loadPiSettings).mockReturnValue({
+      mode: 'platform',
+      apiKey: 'm0-test',
+      memoryMode: 'hybrid',
+      autoRecall: false,
+    });
+    const { pi, handlers, tools } = createMockPi();
+    mem0Extension(pi as never);
+    const ctx = createMockCtx();
+    await handlers.session_start![0]!({}, ctx);
+
+    await handlers.input![0]!({ text: 'I prefer dark mode' }, ctx);
+    const recall = await handlers.before_agent_start![0]!({}, ctx);
+    await handlers.turn_end![0]!({ message: { role: 'assistant', content: 'Noted.' } }, ctx);
+    await handlers.session_shutdown![0]!({}, ctx);
+
+    expect(provider.search).not.toHaveBeenCalled();
+    expect(recall).toBeUndefined();
+    expect(provider.add).toHaveBeenCalledTimes(1);
+    expect(tools.map((tool) => tool.name)).toEqual(['mem0_memory']);
+  });
+
+  it('lets toolEnabled expose the tool in passive mode', async () => {
+    activateWith('passive');
+    vi.mocked(loadPiSettings).mockReturnValue({
+      mode: 'platform',
+      apiKey: 'm0-test',
+      memoryMode: 'passive',
+      toolEnabled: true,
+    });
+    const { pi, handlers, tools } = createMockPi();
+    mem0Extension(pi as never);
+
+    await handlers.session_start![0]!({}, createMockCtx());
+
+    expect(tools.map((tool) => tool.name)).toEqual(['mem0_memory']);
+  });
+
+  it('lets explicit flags independently override active defaults', async () => {
+    const provider = activateWith('active');
+    vi.mocked(loadPiSettings).mockReturnValue({
+      mode: 'platform',
+      apiKey: 'm0-test',
+      memoryMode: 'active',
+      autoCapture: true,
+      autoRecall: true,
+      toolEnabled: false,
+    });
+    const { pi, handlers, tools } = createMockPi();
+    mem0Extension(pi as never);
+    const ctx = createMockCtx();
+    await handlers.session_start![0]!({}, ctx);
+
+    await handlers.input![0]!({ text: 'I prefer dark mode' }, ctx);
+    await handlers.before_agent_start![0]!({}, ctx);
+    await handlers.turn_end![0]!({ message: { role: 'assistant', content: 'Noted.' } }, ctx);
+    await handlers.session_shutdown![0]!({}, ctx);
+
+    expect(provider.search).toHaveBeenCalledTimes(1);
+    expect(provider.add).toHaveBeenCalledTimes(1);
+    expect(tools).toHaveLength(0);
+  });
+
   it('fails init on an unsupported memoryMode', async () => {
     activateWith('auto');
     const { pi, handlers } = createMockPi();
@@ -215,17 +305,18 @@ describe('memoryMode gating', () => {
     expect(ctx.ui.setStatus).toHaveBeenCalledWith('mem0', 'mem0: init failed');
   });
 
-  it('disables a stale tool registration when a later session switches to passive', async () => {
+  it('removes a stale tool from active tools when a later session disables it', async () => {
     // The runtime keeps tool registrations for the life of the extension —
-    // there is no unregister. A tool registered during a hybrid session must
-    // not stay usable when the next session is passive.
-    const { pi, handlers, tools } = createMockPi();
+    // there is no unregister. A later passive session must remove the tool
+    // from the active list and reject calls through the stale registration.
+    const { pi, handlers, tools } = createMockPi(['read']);
     mem0Extension(pi as never);
     const ctx = createMockCtx();
 
     activateWith('hybrid');
     await handlers.session_start![0]!({}, ctx);
     expect(tools.map((t) => t.name)).toEqual(['mem0_memory']);
+    expect(pi.getActiveTools()).toEqual(['read', 'mem0_memory']);
     const staleTool = tools[0]! as unknown as {
       execute: (
         ...args: unknown[]
@@ -236,6 +327,7 @@ describe('memoryMode gating', () => {
     activateWith('passive');
     await handlers.session_start![0]!({}, ctx);
     expect(tools).toHaveLength(1);
+    expect(pi.getActiveTools()).toEqual(['read']);
 
     const result = await staleTool.execute(
       'call-1',
@@ -246,6 +338,11 @@ describe('memoryMode gating', () => {
     );
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toContain('disabled');
+
+    await handlers.session_shutdown![0]!({}, ctx);
+    activateWith('hybrid');
+    await handlers.session_start![0]!({}, ctx);
+    expect(pi.getActiveTools()).toEqual(['read', 'mem0_memory']);
   });
 
   it('uses the current session agentId from an earlier tool registration', async () => {
@@ -368,6 +465,45 @@ describe('session_start — no config', () => {
 
     expect(ctx.ui.setStatus).toHaveBeenCalledWith('mem0', expect.stringContaining('disabled'));
   });
+
+  it('rejects topK values that are not integers greater than 0', async () => {
+    vi.mocked(loadPiSettings).mockReturnValue({
+      mode: 'platform',
+      apiKey: 'm0-test',
+      topK: 0,
+    });
+    const { pi, handlers } = createMockPi();
+    mem0Extension(pi as never);
+    const ctx = createMockCtx();
+
+    await handlers.session_start![0]!({}, ctx);
+
+    expect(ctx.ui.setStatus).toHaveBeenCalledWith('mem0', 'mem0: init failed');
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      'Mem0 init failed: topK must be an integer greater than 0. Use autoRecall: false to disable automatic recall.',
+      'error',
+    );
+    expect(mockCreateMem0Provider).not.toHaveBeenCalled();
+  });
+
+  it('rejects non-boolean behavior overrides', async () => {
+    vi.mocked(loadPiSettings).mockReturnValue({
+      mode: 'platform',
+      apiKey: 'm0-test',
+      autoRecall: 'false',
+    } as never);
+    const { pi, handlers } = createMockPi();
+    mem0Extension(pi as never);
+    const ctx = createMockCtx();
+
+    await handlers.session_start![0]!({}, ctx);
+
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      'Mem0 init failed: autoRecall must be a boolean.',
+      'error',
+    );
+    expect(mockCreateMem0Provider).not.toHaveBeenCalled();
+  });
 });
 
 describe('session_start — user id compatibility', () => {
@@ -475,6 +611,117 @@ describe('passive recall', () => {
     mockActiveProvider();
     await handlers.session_start![0]!({}, ctx);
     expect(await handlers.before_agent_start![0]!({}, ctx)).toBeUndefined();
+  });
+});
+
+describe('mem0Extension recallFrequency', () => {
+  function mockSessionRecallProvider() {
+    const provider = mockActiveProvider();
+    vi.mocked(loadPiSettings).mockReturnValue({
+      mode: 'platform',
+      apiKey: 'm0-test',
+      recallFrequency: 'session',
+    });
+    return provider;
+  }
+
+  it('user-input recalls once for each user input', async () => {
+    const provider = mockActiveProvider();
+    const { pi, handlers } = createMockPi();
+    mem0Extension(pi as never);
+    const ctx = createMockCtx();
+    await handlers.session_start![0]!({}, ctx);
+
+    await handlers.input![0]!({ text: 'pets' }, ctx);
+    await handlers.before_agent_start![0]!({}, ctx);
+    await handlers.input![0]!({ text: 'food' }, ctx);
+    await handlers.before_agent_start![0]!({}, ctx);
+
+    expect(provider.search).toHaveBeenCalledTimes(2);
+  });
+
+  it('session recalls only on the first user input even when no memory matches', async () => {
+    const provider = mockSessionRecallProvider();
+    const { pi, handlers } = createMockPi();
+    mem0Extension(pi as never);
+    const ctx = createMockCtx();
+    await handlers.session_start![0]!({}, ctx);
+
+    await handlers.input![0]!({ text: 'pets' }, ctx);
+    await handlers.before_agent_start![0]!({}, ctx);
+    await handlers.input![0]!({ text: 'food' }, ctx);
+    await handlers.before_agent_start![0]!({}, ctx);
+
+    expect(provider.search).toHaveBeenCalledTimes(1);
+  });
+
+  it('session ignores blank input before the first recall', async () => {
+    const provider = mockSessionRecallProvider();
+    const { pi, handlers } = createMockPi();
+    mem0Extension(pi as never);
+    const ctx = createMockCtx();
+    await handlers.session_start![0]!({}, ctx);
+
+    await handlers.input![0]!({ text: '   ' }, ctx);
+    await handlers.before_agent_start![0]!({}, ctx);
+    await handlers.input![0]!({ text: 'pets' }, ctx);
+    await handlers.before_agent_start![0]!({}, ctx);
+
+    expect(provider.search).toHaveBeenCalledTimes(1);
+    expect(provider.search).toHaveBeenCalledWith('pets', expect.anything());
+  });
+
+  it('session does not recall again when switching back to the same session', async () => {
+    const provider = mockSessionRecallProvider();
+    const { pi, handlers } = createMockPi();
+    mem0Extension(pi as never);
+    const ctx = createMockCtx({ sessionId: 'session-1' });
+
+    await handlers.session_start![0]!({}, ctx);
+    await handlers.input![0]!({ text: 'pets' }, ctx);
+    await handlers.before_agent_start![0]!({}, ctx);
+    const [customType, data] = pi.appendEntry.mock.calls[0]!;
+    await handlers.session_shutdown![0]!({}, ctx);
+
+    const otherCtx = createMockCtx({ sessionId: 'session-2' });
+    await handlers.session_start![0]!({}, otherCtx);
+    await handlers.input![0]!({ text: 'food' }, otherCtx);
+    await handlers.before_agent_start![0]!({}, otherCtx);
+    await handlers.session_shutdown![0]!({}, otherCtx);
+
+    const resumedCtx = createMockCtx({
+      sessionId: 'session-1',
+      entries: [{ type: 'custom', customType, data }],
+    });
+    await handlers.session_start![0]!({}, resumedCtx);
+    await handlers.input![0]!({ text: 'projects' }, resumedCtx);
+    await handlers.before_agent_start![0]!({}, resumedCtx);
+
+    expect(provider.search).toHaveBeenCalledTimes(2);
+  });
+
+  it('session recalls once in a fork with copied entries', async () => {
+    const provider = mockSessionRecallProvider();
+    const { pi, handlers } = createMockPi();
+    mem0Extension(pi as never);
+    const firstCtx = createMockCtx({ sessionId: 'session-1' });
+
+    await handlers.session_start![0]!({}, firstCtx);
+    await handlers.input![0]!({ text: 'pets' }, firstCtx);
+    await handlers.before_agent_start![0]!({}, firstCtx);
+    const [customType, data] = pi.appendEntry.mock.calls[0]!;
+    await handlers.session_shutdown![0]!({}, firstCtx);
+
+    const forkCtx = createMockCtx({
+      sessionId: 'session-2',
+      entries: [{ type: 'custom', customType, data }],
+    });
+    await handlers.session_start![0]!({}, forkCtx);
+    await handlers.input![0]!({ text: 'food' }, forkCtx);
+    await handlers.before_agent_start![0]!({}, forkCtx);
+
+    expect(provider.search).toHaveBeenCalledTimes(2);
+    expect(pi.appendEntry).toHaveBeenLastCalledWith('mem0-session-recall', 'session-2');
   });
 });
 
@@ -749,8 +996,14 @@ describe('/mem0 command — active subcommands', () => {
     });
   });
 
-  it('status reports both the backend mode and the memory mode', async () => {
+  it('status reports the preset and resolved behavior', async () => {
     mockActiveProvider();
+    vi.mocked(loadPiSettings).mockReturnValue({
+      mode: 'platform',
+      apiKey: 'm0-test',
+      memoryMode: 'hybrid',
+      autoRecall: false,
+    });
     const { pi, handlers, commands } = createMockPi();
     mem0Extension(pi as never);
     const ctx = createMockCtx();
@@ -758,7 +1011,10 @@ describe('/mem0 command — active subcommands', () => {
 
     await commands.mem0!.handler('status', ctx);
 
-    expect(ctx.ui.notify).toHaveBeenCalledWith('Mem0: active (mode: platform/hybrid)', 'info');
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      'Mem0: active (backend: platform, preset: hybrid, capture: on, recall: off, tool: on, recall frequency: disabled)',
+      'info',
+    );
   });
 
   it('add without text shows usage', async () => {
