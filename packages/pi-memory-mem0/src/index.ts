@@ -11,6 +11,10 @@
  * - **active**: LLM-callable mem0_memory tool only
  * - **hybrid** (default): both
  *
+ * autoCapture, autoRecall, and toolEnabled independently override the selected
+ * mode's defaults. recallFrequency controls whether automatic recall runs for
+ * every user input or only the first user input in a session.
+ *
  * Passive side: after each conversation turn, user + assistant messages are
  * sent to Mem0 for fact extraction and storage (credentials are redacted
  * first). Recalled memories are injected as a custom message (delivered to
@@ -36,10 +40,12 @@ import {
   normalizeMemoryMode,
 } from './provider.js';
 import { createMem0MemoryTool } from './tools.js';
-import type { Mem0ExtensionConfig, MemoryUserIdScope } from './types.js';
+import type { Mem0ExtensionConfig, Mem0RecallFrequency, MemoryUserIdScope } from './types.js';
 
 const SETTINGS_KEY = 'pi-memory-mem0';
 const STATUS_KEY = 'mem0';
+const MEMORY_TOOL_NAME = 'mem0_memory';
+const SESSION_RECALL_ENTRY = 'mem0-session-recall';
 
 function loadConfig(cwd: string, projectTrusted = false): Mem0ExtensionConfig {
   try {
@@ -67,7 +73,10 @@ export default function mem0Extension(pi: ExtensionAPI): void {
   let agentId: string | undefined;
   let activeMode = '';
   let activeMemoryMode = '';
+  let activeAutoCapture = false;
   let activeToolEnabled = false;
+  let activeRecallFrequency: Mem0RecallFrequency = 'user-input';
+  let recallQueuedThisSession = false;
   let lastUserText = '';
   let pendingWrite: Promise<void> = Promise.resolve();
   let sessionEpoch = 0;
@@ -81,11 +90,31 @@ export default function mem0Extension(pi: ExtensionAPI): void {
     provider = undefined;
     prefetch = undefined;
     agentId = undefined;
+    activeAutoCapture = false;
     activeToolEnabled = false;
+    activeRecallFrequency = 'user-input';
+    recallQueuedThisSession = false;
+    lastUserText = '';
+    pi.setActiveTools(pi.getActiveTools().filter((name) => name !== MEMORY_TOOL_NAME));
     const config = loadConfig(ctx.cwd, isProjectTrusted(ctx));
     try {
       const mode = normalizeMem0Mode(config.mode);
       const memoryMode = normalizeMemoryMode(config.memoryMode);
+      const recallFrequency = config.recallFrequency ?? 'user-input';
+      if (recallFrequency !== 'user-input' && recallFrequency !== 'session') {
+        throw new Error(`Unsupported recall frequency: ${String(recallFrequency)}`);
+      }
+      const topK = config.topK ?? 5;
+      if (!Number.isInteger(topK) || topK <= 0) {
+        throw new Error(
+          'topK must be an integer greater than 0. Use autoRecall: false to disable automatic recall.',
+        );
+      }
+      for (const key of ['autoCapture', 'autoRecall', 'toolEnabled'] as const) {
+        if (config[key] !== undefined && typeof config[key] !== 'boolean') {
+          throw new Error(`${key} must be a boolean.`);
+        }
+      }
       if (mode === 'platform' && !config.apiKey?.trim()) {
         ctx.ui.setStatus(STATUS_KEY, 'mem0: disabled (no API key)');
         return;
@@ -125,23 +154,39 @@ export default function mem0Extension(pi: ExtensionAPI): void {
       agentId = resolvedAgentId;
       activeMode = mode;
       activeMemoryMode = memoryMode;
-      if (memoryMode !== 'active') {
+      activeAutoCapture = config.autoCapture ?? memoryMode !== 'active';
+      const autoRecall = config.autoRecall ?? memoryMode !== 'active';
+      activeToolEnabled = config.toolEnabled ?? memoryMode !== 'passive';
+      activeRecallFrequency = recallFrequency;
+      const sessionId = ctx.sessionManager.getSessionId();
+      recallQueuedThisSession = ctx.sessionManager
+        .getEntries()
+        .some(
+          (entry) =>
+            entry.type === 'custom' &&
+            entry.customType === SESSION_RECALL_ENTRY &&
+            entry.data === sessionId,
+        );
+      if (autoRecall) {
         prefetch = new Prefetch(provider, userId, {
           ...(agentId ? { agentId } : {}),
-          topK: config.topK ?? 5,
+          topK,
         });
       }
-      if (memoryMode !== 'passive') {
-        activeToolEnabled = true;
+      if (activeToolEnabled) {
         pi.registerTool(
           createMem0MemoryTool({
             getProvider: () => provider,
             getUserId: () => userId,
             getAgentId: () => agentId,
             isEnabled: () => activeToolEnabled,
-            topK: config.topK ?? 5,
+            topK,
           }),
         );
+        pi.setActiveTools([
+          ...pi.getActiveTools().filter((name) => name !== MEMORY_TOOL_NAME),
+          MEMORY_TOOL_NAME,
+        ]);
       }
     } catch (err) {
       if (epoch !== sessionEpoch) return;
@@ -159,17 +204,30 @@ export default function mem0Extension(pi: ExtensionAPI): void {
     ctx.ui.setStatus(STATUS_KEY, `mem0: ${activeMode}/${activeMemoryMode}`);
   });
 
-  pi.on('input', async (event) => {
-    if (!prefetch) return;
+  pi.on('input', async (event, ctx) => {
     const text = event.text ?? '';
-    if (text) {
-      prefetch.queue(redactMemoryText(text));
+    if (!text.trim()) return;
+
+    if (activeAutoCapture) {
       lastUserText = text;
+    }
+
+    if (!prefetch) return;
+
+    if (activeRecallFrequency === 'session' && recallQueuedThisSession) {
+      return;
+    }
+
+    prefetch.queue(redactMemoryText(text));
+
+    if (activeRecallFrequency === 'session') {
+      recallQueuedThisSession = true;
+      pi.appendEntry(SESSION_RECALL_ENTRY, ctx.sessionManager.getSessionId());
     }
   });
 
   pi.on('turn_end', async (event) => {
-    if (!provider || !prefetch || !lastUserText) return;
+    if (!provider || !activeAutoCapture || !lastUserText) return;
 
     const msg = event.message as { role?: string; content?: unknown };
     const text = extractText(msg);
@@ -228,7 +286,10 @@ export default function mem0Extension(pi: ExtensionAPI): void {
     provider = undefined;
     prefetch = undefined;
     agentId = undefined;
+    activeAutoCapture = false;
     activeToolEnabled = false;
+    activeRecallFrequency = 'user-input';
+    recallQueuedThisSession = false;
     lastUserText = '';
     pendingWrite = Promise.resolve();
   });
@@ -249,7 +310,10 @@ export default function mem0Extension(pi: ExtensionAPI): void {
 
       switch (subcommand) {
         case 'status': {
-          ctx.ui.notify(`Mem0: active (mode: ${activeMode}/${activeMemoryMode})`, 'info');
+          ctx.ui.notify(
+            `Mem0: active (backend: ${activeMode}, preset: ${activeMemoryMode}, capture: ${activeAutoCapture ? 'on' : 'off'}, recall: ${prefetch ? 'on' : 'off'}, tool: ${activeToolEnabled ? 'on' : 'off'}, recall frequency: ${prefetch ? activeRecallFrequency : 'disabled'})`,
+            'info',
+          );
           break;
         }
         case 'search': {
