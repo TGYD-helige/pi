@@ -32,6 +32,15 @@ function workflowScript(workspace, overrides = {}) {
   })))});`;
 }
 
+function javascriptWorkflowScript(workspace) {
+  const backtick = '\\`';
+  return `return await runs.all([
+    { key: "standards", agent: "general-purpose", agentScope: "user", cwd: ${JSON.stringify(workspace)}, task: "Review ${backtick}code${backtick} { key: value }", outputSchema: { type: "object" } },
+    { key: "spec", agent: "general-purpose", agentScope: "user", cwd: ${JSON.stringify(workspace)}, task: "Review spec", outputSchema: { type: "object" } },
+    { key: "ponytail", agent: "general-purpose", agentScope: "user", cwd: ${JSON.stringify(workspace)}, task: "Review ponytail", outputSchema: { type: "object" } }
+  ]);`;
+}
+
 test('allows only review files and workspace-local search roots', async () => {
   const paths = await fixture();
   try {
@@ -47,6 +56,15 @@ test('allows only review files and workspace-local search roots', async () => {
       toolName: 'subagent',
       input: {
         workflowScript: workflowScript(paths.workspace),
+        agentScope: 'user',
+        async: false,
+        artifacts: false,
+      },
+    }, context), undefined);
+    assert.equal(guard({
+      toolName: 'subagent',
+      input: {
+        workflowScript: javascriptWorkflowScript(paths.workspace),
         agentScope: 'user',
         async: false,
         artifacts: false,
@@ -75,6 +93,7 @@ test('blocks reads and searches that can escape the PR workspace', async () => {
       { toolName: 'subagent', input: { workflowScript: '', agentScope: 'user', async: false, artifacts: false } },
       { toolName: 'subagent', input: { workflowScript: 'return [];', agentScope: 'both', async: false, artifacts: false } },
       { toolName: 'subagent', input: { workflowScript: workflowScript(paths.workspace, { agentScope: 'project' }), agentScope: 'user', async: false, artifacts: false } },
+      { toolName: 'subagent', input: { workflowScript: javascriptWorkflowScript(paths.workspace).replace('task: "Review spec"', 'task: process.env.SECRET'), agentScope: 'user', async: false, artifacts: false } },
       { toolName: 'subagent', input: { workflowScript: 'return [];', agentScope: 'user', async: true, artifacts: false } },
       { toolName: 'subagent', input: { workflowScript: 'return [];', agentScope: 'user', async: false, artifacts: true } },
       { toolName: 'subagent', input: { workflowScriptPath: paths.secretPath, agentScope: 'user', async: false, artifacts: false } },

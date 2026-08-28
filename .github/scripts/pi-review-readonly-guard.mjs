@@ -53,12 +53,19 @@ function safeSearchPath(value, workspace, root) {
     || resolved.startsWith(`${root}${path.sep}`);
 }
 
+function normalizeWorkflowLiteral(value) {
+  return value.replace(
+    /"(?:\\.|[^"\\])*"|([{,]\s*)([A-Za-z_$][\w$]*)\s*:/g,
+    (match, prefix, key) => key ? `${prefix}"${key}":` : match.replaceAll('\\`', '`').replaceAll("\\'", "'"),
+  );
+}
+
 function safeWorkflowScript(value, workspace) {
   if (typeof value !== 'string') return false;
   const match = /^\s*return\s+await\s+runs\.all\(([\s\S]+)\);\s*$/.exec(value);
   if (!match) return false;
   try {
-    const tasks = JSON.parse(match[1]);
+    const tasks = JSON.parse(normalizeWorkflowLiteral(match[1]));
     return Array.isArray(tasks)
       && tasks.length === 3
       && tasks.every((task) => task
