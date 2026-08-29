@@ -65,7 +65,15 @@ describe('mem0_memory tool', () => {
   describe('search action', () => {
     it('searches with the scoped userId and returns memories as untrusted data', async () => {
       const provider = mockProvider({
-        search: vi.fn().mockResolvedValue([{ id: 'm1', memory: 'likes cats', score: 0.9 }]),
+        search: vi.fn().mockResolvedValue([
+          {
+            id: 'm1',
+            memory: 'likes cats',
+            score: 0.9,
+            created_at: '2026-08-20T10:00:00Z',
+            updated_at: '2026-08-28T10:00:00Z',
+          },
+        ]),
       });
       const tool = createTool(provider);
 
@@ -76,7 +84,7 @@ describe('mem0_memory tool', () => {
         'pets',
         expect.objectContaining({ userId: 'user:project:abc', topK: 5 }),
       );
-      expect(result.content[0]!.text).toContain('m1');
+      expect(result.content[0]!.text).toContain('m1 (2026-08-28):');
       expect(result.content[0]!.text).toContain('[UNTRUSTED MEMORY DATA] "likes cats"');
     });
 

@@ -57,9 +57,10 @@ export class Prefetch {
 
       const lines = memories
         .filter((m) => m.memory?.trim())
-        .map(
-          (m) => `- ${formatRecalledMemory(truncateLine(m.memory.trim(), MAX_ENTRY_CHARS).text)}`,
-        );
+        .map((m) => {
+          const date = (m.updated_at ?? m.created_at)?.slice(0, 10);
+          return `- ${date ? `(${date}) ` : ''}${formatRecalledMemory(truncateLine(m.memory.trim(), MAX_ENTRY_CHARS).text)}`;
+        });
 
       if (lines.length === 0) return '';
       return truncateHead(`## Recalled Memories (Mem0)\n${lines.join('\n')}`, {

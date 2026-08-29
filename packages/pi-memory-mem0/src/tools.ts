@@ -19,6 +19,7 @@ import { truncateHead, truncateLine } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
 import { formatRecalledMemory, redactMemoryText } from './privacy.js';
 import type { Mem0Provider } from './provider.js';
+import type { MemoryItem } from './types.js';
 
 /** Tool results land in model context — keep the block small. */
 const MAX_ENTRY_CHARS = 1_000;
@@ -60,15 +61,13 @@ function errorResult(text: string): Mem0ToolResult {
   return { isError: true, content: [{ type: 'text' as const, text }], details: undefined };
 }
 
-function formatEntry(entry: { id: string; memory: string }): string {
+function formatEntry(entry: MemoryItem): string {
   const text = truncateLine(entry.memory.trim(), MAX_ENTRY_CHARS).text;
-  return `- ${entry.id}: ${formatRecalledMemory(text)}`;
+  const date = (entry.updated_at ?? entry.created_at)?.slice(0, 10);
+  return `- ${entry.id}${date ? ` (${date})` : ''}: ${formatRecalledMemory(text)}`;
 }
 
-function formatBlock(
-  title: string,
-  entries: Array<{ id: string; memory: string }>,
-): AgentToolResult<unknown> {
+function formatBlock(title: string, entries: MemoryItem[]): AgentToolResult<unknown> {
   const lines = entries.filter((e) => e.memory?.trim()).map(formatEntry);
   if (lines.length === 0) return textResult('No memories found.');
   return textResult(
