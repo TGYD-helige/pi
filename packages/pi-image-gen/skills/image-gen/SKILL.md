@@ -1,6 +1,6 @@
 ---
 name: image-gen
-description: "Generate or edit raster images with the image_generate tool: photos, illustrations, textures, sprites, product/UI mockups, concept art, or image-to-image edits. Use when the deliverable is a bitmap asset. Do NOT use for icons, logos, diagrams, or UI graphics that should be repo-native SVG/vector/CSS/canvas — edit or write those directly."
+description: "Prompting workflow for image_generate when generating or editing raster images such as photos, illustrations, textures, sprites, mockups, concept art, or image-to-image edits. Use when the deliverable is a bitmap asset; keep repo-native SVG/vector/CSS/canvas work in source form."
 ---
 
 # Image generation
@@ -21,7 +21,7 @@ This skill guides use of the `image_generate` tool from `@amaster.ai/pi-image-ge
 - A small project-local asset edit when the source already exists in an editable native format.
 - Any task where the user clearly wants deterministic code-native output, not a generated bitmap.
 
-## Two questions before every call
+## Before every call
 
 1. **Intent — generate or edit?**
    - No `image`, or `image` entries used only as style/composition/mood references → **generate**.
@@ -30,6 +30,7 @@ This skill guides use of the `image_generate` tool from `@amaster.ai/pi-image-ge
 2. **Strategy — one asset or many?**
    - `n` produces **variants of ONE prompt**, not distinct assets.
    - For several *different* assets, make **one `image_generate` call per asset**, each with its own prompt. Do not raise `n` to cover distinct subjects.
+3. **Inputs — what must the prompt preserve?** Collect exact text, constraints/avoid items, and every input image's role. Ask only when a missing detail blocks a usable result; otherwise proceed.
 
 ## Prompt structure
 
@@ -46,9 +47,12 @@ Style/medium: <photo / illustration / 3D / etc.>
 Composition/framing: <wide / close / top-down; placement; negative space if needed>
 Lighting/mood: <lighting + mood>
 Color palette: <palette notes>
+Materials/textures: <surface details>
 Text (verbatim): "<exact text>"
 Constraints: <must keep / must avoid>
 ```
+
+The labels are scaffolding, not a required form. Keep only the lines that materially improve the request.
 
 ## Specificity policy
 
@@ -73,7 +77,7 @@ Allowed augmentation: composition/framing cues, polish-level or intended-use hin
 
 ## Iterate deliberately
 
-Start from a clean base prompt, then make **one targeted change at a time** and re-check subject, style, composition, text accuracy, and invariants. Prefer a single focused follow-up over rewriting the whole prompt.
+Start from a clean base prompt, then make **one targeted change at a time**. After each output, inspect the subject, style, composition, text accuracy, and edit invariants before reporting success or iterating. Prefer a single focused follow-up over rewriting the whole prompt.
 
 ## Parameters
 

@@ -108,8 +108,10 @@ describe('piImageGenExtension', () => {
     expect(tool?.promptSnippet).toBeTruthy();
     expect(Array.isArray(tool?.promptGuidelines)).toBe(true);
     expect(tool?.promptGuidelines?.length).toBeGreaterThan(0);
-    // The guidance must steer away from icons/logos and clarify `n` semantics.
+    // The guidance should point to the skill, steer away from icons/logos, and
+    // clarify `n` semantics.
     const guidelines = (tool?.promptGuidelines ?? []).join('\n');
+    expect(guidelines).toMatch(/read the `image-gen` skill/i);
     expect(guidelines).toMatch(/icon|logo|svg/i);
     expect(guidelines).toMatch(/\bn\b/);
     // Invariant params are always present regardless of provider.
@@ -420,6 +422,11 @@ describe('image_generate execute error surfaces are sanitized', () => {
     '89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c63000100000005000115c46f250000000049454e44ae426082',
     'hex',
   ).toString('base64');
+  const pngResponse = () =>
+    new Response(JSON.stringify({ data: [{ b64_json: PNG_B64 }] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
   const tmpDirs: string[] = [];
   let realFetch: typeof fetch;
   let isolatedHome = '';
@@ -464,6 +471,17 @@ describe('image_generate execute error surfaces are sanitized', () => {
     isolatedHome = '';
     for (const dir of tmpDirs) rmSync(dir, { recursive: true, force: true });
     tmpDirs.length = 0;
+  });
+
+  it('allows image_generate when the image-gen skill was not read', async () => {
+    const cwd = makeProject({ defaultModel: 'gpt-image-2' });
+    const fetchMock = vi.fn(async () => pngResponse());
+    globalThis.fetch = fetchMock as typeof fetch;
+    const result = await runExecute(cwd);
+
+    expect(result.isError).not.toBe(true);
+    expect(result.content.map((item) => item.text).join('\n')).toMatch(/Generated 1 image/i);
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it('leaks neither the signed download URL nor a raw error to stderr or the tool result', async () => {
@@ -575,11 +593,7 @@ describe('image_generate execute error surfaces are sanitized', () => {
     writeFileSync(filePath, 'x');
     const badOutputDir = join(filePath, 'child'); // parent is a file → ENOTDIR
 
-    globalThis.fetch = (async () =>
-      new Response(JSON.stringify({ data: [{ b64_json: PNG_B64 }] }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      })) as typeof fetch;
+    globalThis.fetch = (async () => pngResponse()) as typeof fetch;
 
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
