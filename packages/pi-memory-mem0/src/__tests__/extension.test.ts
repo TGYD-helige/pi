@@ -558,7 +558,14 @@ describe('session_start — user id compatibility', () => {
 describe('passive recall', () => {
   it('returns recalled memories as a custom message, never the system prompt', async () => {
     const provider = mockActiveProvider({
-      search: vi.fn().mockResolvedValue([{ id: '1', memory: 'likes cats', score: 0.9 }]),
+      search: vi.fn().mockResolvedValue([
+        {
+          id: '1',
+          memory: 'likes cats',
+          score: 0.9,
+          created_at: '2026-08-20T10:00:00Z',
+        },
+      ]),
     });
     const { pi, handlers } = createMockPi();
     mem0Extension(pi as never);
@@ -577,6 +584,7 @@ describe('passive recall', () => {
     expect(result?.systemPrompt).toBeUndefined();
     expect(result?.message?.customType).toBe('mem0-recall');
     expect(result?.message?.content).toContain('## Recalled Memories (Mem0)');
+    expect(result?.message?.content).toContain('- (2026-08-20)');
     expect(result?.message?.content).toContain('[UNTRUSTED MEMORY DATA] "likes cats"');
   });
 
