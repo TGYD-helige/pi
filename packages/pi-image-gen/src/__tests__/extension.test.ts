@@ -422,6 +422,11 @@ describe('image_generate execute error surfaces are sanitized', () => {
     '89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c63000100000005000115c46f250000000049454e44ae426082',
     'hex',
   ).toString('base64');
+  const pngResponse = () =>
+    new Response(JSON.stringify({ data: [{ b64_json: PNG_B64 }] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
   const tmpDirs: string[] = [];
   let realFetch: typeof fetch;
   let isolatedHome = '';
@@ -470,13 +475,7 @@ describe('image_generate execute error surfaces are sanitized', () => {
 
   it('allows image_generate when the image-gen skill was not read', async () => {
     const cwd = makeProject({ defaultModel: 'gpt-image-2' });
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ data: [{ b64_json: PNG_B64 }] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        }),
-    );
+    const fetchMock = vi.fn(async () => pngResponse());
     globalThis.fetch = fetchMock as typeof fetch;
     const result = await runExecute(cwd);
 
@@ -594,11 +593,7 @@ describe('image_generate execute error surfaces are sanitized', () => {
     writeFileSync(filePath, 'x');
     const badOutputDir = join(filePath, 'child'); // parent is a file → ENOTDIR
 
-    globalThis.fetch = (async () =>
-      new Response(JSON.stringify({ data: [{ b64_json: PNG_B64 }] }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      })) as typeof fetch;
+    globalThis.fetch = (async () => pngResponse()) as typeof fetch;
 
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
