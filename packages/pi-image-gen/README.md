@@ -410,4 +410,4 @@ Use `/image-gen list` to verify your config — it will tell you when `defaultMo
 
 ## Bundled skill
 
-This package ships an `image-gen` skill (`skills/image-gen/SKILL.md`) that Pi loads on demand. It carries the prompting playbook the one-line tool guidance can't hold: when to use raster generation vs repo-native SVG/CSS, generate-vs-edit intent, `n`-is-variants-not-assets, multi-image role labeling, edit invariants, text-in-image handling, and the labeled prompt schema. The tool works without it; the skill makes the model use the tool well.
+This package ships an `image-gen` skill (`skills/image-gen/SKILL.md`) that Pi loads on demand. Agents are encouraged to read it before using `image_generate`, but the tool remains usable without it. The skill carries the prompting playbook the one-line tool guidance can't hold: when to use raster generation vs repo-native SVG/CSS, generate-vs-edit intent, `n`-is-variants-not-assets, multi-image role labeling, edit invariants, text-in-image handling, and the labeled prompt schema.

@@ -57,6 +57,29 @@
           "includes_any": ["do not use image_generate", "should not use image_generate", "not use raster", "avoid raster"]
         }
       ]
+    },
+    {
+      "id": "shape-generic-request-into-prompt",
+      "prompt": "Generate a polished landing-page hero showing a ceramic teapot. Write the exact prompt you would send to image_generate, but do not call any tools. Do not invent a brand, slogan, people, or extra props.",
+      "expected_output": "Turn the request into a concise labeled prompt covering intended use, subject, composition, lighting, materials, and explicit avoid constraints without inventing new creative requirements.",
+      "expectations": [
+        {
+          "text": "Identifies the intended asset use",
+          "includes_any": ["Asset type", "landing-page hero", "landing page hero"]
+        },
+        {
+          "text": "Adds useful visual direction",
+          "includes_any": ["Composition", "framing", "Lighting"]
+        },
+        {
+          "text": "Describes the requested material",
+          "includes_any": ["Materials", "texture", "ceramic"]
+        },
+        {
+          "text": "Carries forward the explicit avoid constraints",
+          "includes": ["brand", "slogan", "people", "props"]
+        }
+      ]
     }
   ]
 }
