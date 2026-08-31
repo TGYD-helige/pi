@@ -46,6 +46,7 @@
   "scripts": {
     "fetch-skills": "node scripts/fetch-skills.mjs",
     "prebuild": "node scripts/fetch-skills.mjs",
+    "prepack": "node scripts/fetch-skills.mjs",
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run src"

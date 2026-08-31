@@ -10,9 +10,12 @@ const BIN_PATH = join(INSTALL_DIR, 'node_modules', '.bin', 'wecom-cli');
 let installAttempted = false;
 let cliAvailable: boolean | undefined;
 
-function execAsync(command: string): Promise<{ stdout: string; stderr: string }> {
+function execAsync(
+  command: string,
+  signal?: AbortSignal,
+): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    exec(command, (error, stdout, stderr) => {
+    exec(command, { signal }, (error, stdout, stderr) => {
       if (error) reject(error);
       else resolve({ stdout, stderr });
     });
@@ -50,10 +53,10 @@ export async function ensureWeComCli(): Promise<boolean> {
   return isWeComCliInstalled();
 }
 
-export async function isWeComCliAuthenticated(): Promise<boolean> {
+export async function isWeComCliAuthenticated(signal?: AbortSignal): Promise<boolean> {
   try {
-    const { stdout } = await execAsync(`"${wecomCliBin()}" auth status`);
-    return !stdout.includes('not authenticated') && !stdout.includes('未认证');
+    const { stdout } = await execAsync(`"${wecomCliBin()}" auth show --status`, signal);
+    return stdout.trim() === 'authorized';
   } catch {
     return false;
   }

@@ -30,19 +30,26 @@ Project settings are loaded only after project trust is accepted. For environmen
 | `botId` | Yes | Bot ID from [WeCom Admin Console](https://work.weixin.qq.com/) |
 | `botSecret` | Yes | Bot Secret |
 
-> **Note:** wecom-cli requires QR code scan for initial authentication. After the extension installs the CLI, run `wecom-cli init` to complete the interactive login.
+> **Note:** wecom-cli requires QR code scan for initial authentication. After the extension installs the CLI, run `wecom-cli auth init --noninteractive` to complete login.
 
 ## Skills Provided
 
-7 skills from wecom-cli covering:
+14 skills from wecom-cli covering:
 
-- `wecomcli-msg` — Messages, conversations, media download
+- `wecomcli-shared` — Shared setup and authentication checks
+- `wecomcli-message` — Messages and conversations
 - `wecomcli-contact` — Address book, user search
 - `wecomcli-meeting` — Create, cancel, manage meetings
-- `wecomcli-schedule` — Schedule CRUD, free/busy
+- `wecomcli-calendar` — Schedule CRUD, free/busy
 - `wecomcli-todo` — Task management
-- `wecomcli-doc` — Documents and smart sheets
-- `wecomcli-smartsheet` — Table, field, record CRUD
+- `wecomcli-email` — Email search and reading
+- `wecomcli-disk` — WeDrive files and folders
+- `wecomcli-media` — Media upload and download
+- `wecomcli-doc-manage` — Document search and permissions
+- `wecomcli-doc` — Online documents
+- `wecomcli-sheet` — Online spreadsheets
+- `wecomcli-smartsheet` — Smart Sheet data and structure
+- `wecomcli-smartpage` — Smart documents
 
 ## CLI Reference
 
