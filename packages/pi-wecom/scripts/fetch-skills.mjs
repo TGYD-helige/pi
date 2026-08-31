@@ -2,7 +2,7 @@
  * Fetches the latest wecom-cli skills from GitHub and writes them to the skills/ directory.
  */
 import { execSync } from 'node:child_process';
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -13,11 +13,6 @@ const REMOTE_PATH = 'skills';
 
 async function fetchSkills() {
   console.log('[pi-wecom] Fetching skills from github.com/%s ...', REPO);
-
-  if (existsSync(SKILLS_DIR)) {
-    rmSync(SKILLS_DIR, { recursive: true, force: true });
-  }
-  mkdirSync(SKILLS_DIR, { recursive: true });
 
   const tmpDir = join(__dirname, '..', '.tmp-skills-fetch');
   if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true, force: true });
@@ -35,7 +30,8 @@ async function fetchSkills() {
       throw new Error(`Skills directory not found at ${srcSkills}`);
     }
 
-    execSync(`cp -r "${srcSkills}/"* "${SKILLS_DIR}/"`, { stdio: 'pipe' });
+    rmSync(SKILLS_DIR, { recursive: true, force: true });
+    cpSync(srcSkills, SKILLS_DIR, { recursive: true });
     console.log('[pi-wecom] Skills fetched successfully.');
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
@@ -43,6 +39,6 @@ async function fetchSkills() {
 }
 
 fetchSkills().catch((err) => {
-  console.warn('[pi-wecom] Failed to fetch skills (using existing if available):', err.message);
-  process.exit(0);
+  console.error('[pi-wecom] Failed to fetch skills:', err.message);
+  process.exitCode = 1;
 });

@@ -347,6 +347,19 @@ jobs:
       - name: Run checks
         run: pnpm run pr-check
 
+      - name: Verify pi-wecom package contents
+        run: |
+          set -euo pipefail
+          pack_dir="$RUNNER_TEMP/pi-wecom-pack"
+          mkdir -p "$pack_dir"
+          pnpm --dir packages/pi-wecom pack --pack-destination "$pack_dir" >/dev/null
+          tarball="$(find "$pack_dir" -maxdepth 1 -name '*.tgz' -print -quit)"
+          skill_count="$(tar -tzf "$tarball" | grep -Ec '^package/skills/wecomcli-[^/]+/SKILL\.md$' || true)"
+          if [ "$skill_count" -ne 14 ]; then
+            echo "Expected 14 pi-wecom skills in $tarball, found $skill_count."
+            exit 1
+          fi
+
       - name: Publish to npm
         if: steps.versioning.outputs.skip_publish != 'true'
         env:

@@ -32,9 +32,9 @@ export default function piWeComExtension(pi: ExtensionAPI): void {
       if (installed) {
         skillsDir = await resolveSkillsDir();
         ctx.ui.setStatus?.('pi-wecom', 'wecom-cli: ready');
-        if (!(await isWeComCliAuthenticated())) {
+        if (!(await isWeComCliAuthenticated(ctx.signal))) {
           ctx.ui.notify(
-            'pi-wecom: wecom-cli 未认证，请运行 wecom-cli init 完成扫码认证',
+            'pi-wecom: wecom-cli 未认证，请运行 wecom-cli auth init --noninteractive 完成扫码认证',
             'warning',
           );
         }
