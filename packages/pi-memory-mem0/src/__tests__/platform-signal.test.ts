@@ -25,12 +25,14 @@ describe('platform Mem0 provider signal propagation', () => {
     await vi.waitFor(() =>
       expect(
         fetchMock.mock.calls.some(
-          ([url, init]) => String(url).includes('/v1/ping') && init?.signal === controller.signal,
+          ([url, init]) =>
+            String(url).includes('/v3/memories/search/') && init?.signal === controller.signal,
         ),
       ).toBe(true),
     );
     const requestCall = fetchMock.mock.calls.find(
-      ([url, init]) => String(url).includes('/v1/ping') && init?.signal === controller.signal,
+      ([url, init]) =>
+        String(url).includes('/v3/memories/search/') && init?.signal === controller.signal,
     )!;
     expect(requestCall[1]?.signal).toBe(controller.signal);
     controller.abort(new Error('caller cancelled'));
