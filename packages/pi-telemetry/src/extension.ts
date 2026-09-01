@@ -8,7 +8,8 @@ import type {
 import { isProjectTrusted } from '@amaster.ai/pi-shared/settings';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { loadConfigFromFile, resolveConfig } from './config.js';
-import { NoopRuntimeEventExporter, type RuntimeEventExporter } from './index.js';
+import { NoopRuntimeEventExporter } from './exporters.js';
+import type { RuntimeEventExporter } from './index.js';
 import { createTelemetryExporter } from './otel.js';
 
 const MAX_STREAM_CAPTURE_BYTES = 1_000_000;

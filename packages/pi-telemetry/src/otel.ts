@@ -1,9 +1,6 @@
 import type { TelemetryConfig } from './config.js';
-import {
-  NoopRuntimeEventExporter,
-  type RuntimeEventExporter,
-  type TelemetryEnvironment,
-} from './index.js';
+import { NoopRuntimeEventExporter } from './exporters.js';
+import type { RuntimeEventExporter, TelemetryEnvironment } from './index.js';
 import {
   type OtelExporterConfig,
   OtelRuntimeEventExporter,

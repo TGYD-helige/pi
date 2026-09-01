@@ -36,29 +36,13 @@ export type RuntimeTelemetryOptions = {
   redactEvent?: TelemetryRedactor | undefined;
 };
 
-export class NoopRuntimeEventExporter implements RuntimeEventExporter {
-  async publish(_event: RuntimeTelemetryEvent): Promise<void> {}
-  async flush(): Promise<void> {}
-  async close(): Promise<void> {}
-}
-
-export class CompositeRuntimeEventExporter implements RuntimeEventExporter {
-  constructor(private readonly exporters: RuntimeEventExporter[]) {}
-
-  async publish(event: RuntimeTelemetryEvent): Promise<void> {
-    await Promise.allSettled(this.exporters.map((exporter) => exporter.publish(event)));
-  }
-
-  async flush(): Promise<void> {
-    await Promise.allSettled(this.exporters.map((exporter) => exporter.flush?.()));
-  }
-
-  async close(): Promise<void> {
-    // Preserve the public flush-before-close contract. Built-in close()
-    // implementations may flush again, but an already-drained queue is a no-op.
-    await this.flush();
-    await Promise.allSettled(this.exporters.map((exporter) => exporter.close?.()));
-  }
-}
+// The concrete exporters live in a leaf module so that sibling modules (extension.ts,
+// otel.ts, langfuse/config.ts) can import them as runtime values WITHOUT importing back into
+// this entry module. index.ts re-exports the extension factory (`export { default }` below),
+// so a value import from here would make index.ts a circular-import target — and a
+// static/bundling loader (Pi's extension loader, jiti) then evaluates the entry before the
+// cycle resolves and reads the re-exported default as `undefined`. Re-exporting keeps the
+// public `@amaster.ai/pi-telemetry` entry point unchanged.
+export { CompositeRuntimeEventExporter, NoopRuntimeEventExporter } from './exporters.js';
 
 export { default } from './extension.js';
