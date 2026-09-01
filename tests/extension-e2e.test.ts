@@ -96,15 +96,15 @@ function findSchemaViolations(schema: unknown, path = ''): string[] {
   return violations;
 }
 
-// Packages whose declared src/index.ts is type-export-heavy followed by `export { default } from
-// './extension.js'`. jiti 2.7's static interop trips on this combination at the moment
-// (it returns `undefined` for the re-exported default). The factory-invoke contract is
-// still covered by extension-loading.test.ts, which uses vitest's native TS loader.
-// pi-coding-agent itself runs against the built dist/index.js, so jiti behavior here is
-// a developer-time check, not a runtime gate.
+// Packages whose src/index.ts is a circular-import target: index.ts re-exports the extension
+// factory (`export { default } from './extension.js'`) while sibling modules import runtime
+// values back from index.ts. A static/bundling loader (jiti here, and Pi's own extension
+// loader) evaluates the entry before the cycle resolves, so the re-exported default comes back
+// `undefined`. The fix is to move the shared runtime values out of index.ts into a leaf module,
+// so nothing imports values back from the entry (pi-telemetry was fixed this way).
+// pi-task-scheduler still has this shape and is tracked separately.
 const JITI_FACTORY_INVOKE_SKIP = new Set([
   'pi-task-scheduler',
-  'pi-telemetry',
 ]);
 
 describe('Extension E2E loading via jiti', () => {
@@ -174,11 +174,10 @@ describe('Extension E2E loading via jiti', () => {
     expect(ext.commands.has('teamwork-status')).toBe(true);
   });
 
-  // pi-task-scheduler / pi-memory re-export their factory through
-  // `export { default } from './extension.js'`, which jiti 2.7 returns as undefined
-  // when the re-exporting module starts with type-only exports (see
-  // JITI_FACTORY_INVOKE_SKIP). Their command registrations are covered by the
-  // vitest-native-loader path in tests/extension-loading.test.ts.
+  // pi-task-scheduler is skipped above: its src/index.ts is a circular-import target
+  // (siblings import runtime values back from the entry that re-exports the factory), so a
+  // static loader returns `undefined` for the default. Its command registrations are covered by
+  // the vitest-native-loader path in tests/extension-loading.test.ts. See JITI_FACTORY_INVOKE_SKIP.
 });
 
 describe('findSchemaViolations regression', () => {
