@@ -241,6 +241,21 @@ describe('createMem0Provider additional scenarios', () => {
     expect(llm.config.model).toBe('gpt-4.1-nano');
   });
 
+  it('passes custom extraction instructions to mem0 OSS', async () => {
+    const { createMem0Provider: create } = await import('../provider.js');
+
+    await create({
+      config: {
+        mode: 'embedded',
+        oss: { customInstructions: 'Always record memories in Simplified Chinese.' },
+      },
+    });
+
+    expect(__capturedMem0Config?.customInstructions).toBe(
+      'Always record memories in Simplified Chinese.',
+    );
+  });
+
   it('defaults vectorStore to memory provider', async () => {
     const { createMem0Provider: create } = await import('../provider.js');
 

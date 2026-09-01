@@ -557,6 +557,10 @@ class OSSProvider implements Mem0Provider {
     config.embedder = { provider: embedderProvider, config: embedderCfg };
     config.llm = { provider: llmProvider, config: llmCfg };
 
+    if (this.ossConfig?.customInstructions) {
+      config.customInstructions = this.ossConfig.customInstructions;
+    }
+
     const defaultVectorConfig = {
       collectionName: 'pi_mem0',
       dbPath: join(resolveHome(), 'memories', 'mem0-vectors.db'),

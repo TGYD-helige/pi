@@ -37,6 +37,8 @@ export interface Mem0ExtensionConfig {
 
   // ── Embedded mode ───────────────────────────────────────────────────────
   oss?: {
+    /** Additional Mem0 fact-extraction instructions. */
+    customInstructions?: string;
     embedder?: { provider: string; config?: Record<string, unknown> };
     llm?: { provider: string; config?: Record<string, unknown> };
     vectorStore?: { provider: string; config?: Record<string, unknown> };

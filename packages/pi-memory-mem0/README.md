@@ -135,6 +135,21 @@ Reuses API keys and base URLs from pi's configured model providers — **no extr
 
 Defaults to OpenAI `text-embedding-3-small` (embedding) + `gpt-4.1-nano` (extraction). API keys and base URLs are automatically resolved from pi's model registry.
 
+Use `oss.customInstructions` to refine Mem0's fact extraction, for example to keep memories in a specific language:
+
+```json
+{
+  "pi-memory-mem0": {
+    "mode": "embedded",
+    "oss": {
+      "customInstructions": "Always record memories in Simplified Chinese."
+    }
+  }
+}
+```
+
+These instructions affect only Mem0's extraction model, not pi's system prompt. Recalled memories remain untrusted model input, so only configure extraction instructions from a trusted source.
+
 Existing settings with `mode: "open-source"` continue to load as `embedded`, but `open-source` is not part of the supported configuration interface. New settings should use `embedded`.
 
 ### Self-Hosted Mode
@@ -243,6 +258,7 @@ The configured vector store always owns persistence. To request an intentionally
 | `userIdScope` | `"project"` \| `"exact"` | `"project"` | Append the cwd hash or use `userId` verbatim |
 | `topK` | integer greater than `0` | `5` | Max results for automatic recall and `mem0_memory` search; use `autoRecall: false` to disable automatic recall |
 | `useRegistryKeys` | boolean | `true` | Whether OSS mode resolves keys from pi registry |
+| `oss.customInstructions` | string | — | Additional Mem0 fact-extraction instructions; does not modify pi's system prompt |
 | `oss.llm` | object | OpenAI gpt-4.1-nano | OSS extraction model |
 | `oss.embedder` | object | OpenAI text-embedding-3-small | OSS embedding model |
 | `oss.vectorStore` | object | `memory` at `<home>/memories/mem0-vectors.db` | Custom vector store config |
