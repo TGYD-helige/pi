@@ -399,7 +399,7 @@ describe('telemetryExtension', () => {
     });
   });
 
-  it('publishes a sanitized tool failure without raw result details', async () => {
+  it('publishes the original tool failure for exporter-level payload handling', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
     await fireEvent('turn_start', { type: 'turn_start', turnIndex: 0, timestamp: Date.now() });
@@ -408,7 +408,10 @@ describe('telemetryExtension', () => {
       type: 'tool_execution_end',
       toolCallId: 'call-1',
       toolName: 'read_file',
-      result: 'Authorization: Bearer super-secret-token\ninternal stack trace',
+      result: {
+        content: [{ type: 'text', text: 'ENOENT: /missing/file' }],
+        details: { exitCode: 1 },
+      },
       isError: true,
     });
 
@@ -416,10 +419,9 @@ describe('telemetryExtension', () => {
     const toolEvent = events.find((e) => 'toolCallId' in e);
     expect(toolEvent).toMatchObject({
       status: 'failed',
-      error: 'Tool execution failed',
+      error: 'ENOENT: /missing/file',
     });
     expect(toolEvent).not.toHaveProperty('details');
-    expect(JSON.stringify(toolEvent)).not.toContain('super-secret-token');
   });
 
   it('publishes LLM generation started from before_provider_request', async () => {

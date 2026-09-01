@@ -111,4 +111,4 @@ const telemetry = createTelemetryExporter(config); // one provider for both dest
 
 ## Privacy
 
-Runtime events omit user prompts, assistant responses, tool arguments, tool outputs, and model inputs/outputs by default. Set `includePayloads: true` to include them. For finer control, construct an exporter directly and pass `redactEvent`.
+Runtime events omit user prompts, assistant responses, tool arguments, tool outputs, and model inputs/outputs by default. Error messages are always exported. Set `includePayloads: true` to include payloads. For finer control, construct an exporter directly and pass `redactEvent`.

@@ -108,10 +108,7 @@ export function applyTelemetryRedaction(
   if (!redacted) {
     return undefined;
   }
-  const sanitized = redacted.error
-    ? ({ ...redacted, error: 'Telemetry operation failed' } as RuntimeTelemetryEvent)
-    : redacted;
-  return config.includePayloads === false ? stripTelemetryPayloads(sanitized) : sanitized;
+  return config.includePayloads === false ? stripTelemetryPayloads(redacted) : redacted;
 }
 
 export function stripTelemetryPayloads(event: RuntimeTelemetryEvent): RuntimeTelemetryEvent {
@@ -120,13 +117,13 @@ export function stripTelemetryPayloads(event: RuntimeTelemetryEvent): RuntimeTel
     return { ...rest, streamEvents: [] };
   }
   if (isLlmGenerationEvent(event)) {
-    const { input: _input, output: _output, error: _error, ...rest } = event;
+    const { input: _input, output: _output, ...rest } = event;
     return rest as RuntimeTelemetryEvent;
   }
   if (isToolEvent(event)) {
-    const { args: _args, details: _details, error: _error, ...rest } = event;
+    const { args: _args, details: _details, ...rest } = event;
     return rest as RuntimeTelemetryEvent;
   }
-  const { details: _details, error: _error, ...rest } = event;
+  const { details: _details, ...rest } = event;
   return rest as RuntimeTelemetryEvent;
 }
