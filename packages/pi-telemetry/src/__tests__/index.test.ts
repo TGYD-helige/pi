@@ -501,13 +501,12 @@ describe('telemetry', () => {
     expect(span.attributes['langfuse.observation.metadata.error']).toBeUndefined();
     // They remain in the plain (catch-all) attributes.
     expect(JSON.parse(String(span.attributes.details))).toEqual({ phase: 'provider' });
-    // Explicit errors are sanitized before they reach any attribute.
-    expect(span.attributes.error).toBe('Telemetry operation failed');
+    expect(span.attributes.error).toBe('request failed');
     expect(span.status.code).toBe(SpanStatusCode.ERROR);
-    expect(span.status.message).toBe('Telemetry operation failed');
+    expect(span.status.message).toBe('request failed');
   });
 
-  it('sanitizes explicit telemetry errors before export', async () => {
+  it('preserves explicit telemetry errors before export', async () => {
     const { exporter, inMemory } = makeExporter({ includePayloads: true });
     await exporter.publish({
       id: 'failed-tool',
@@ -518,16 +517,13 @@ describe('telemetry', () => {
       toolName: 'bash',
       status: 'failed',
       createdAt: '2026-05-02T00:00:01.000Z',
-      error: 'Authorization: Bearer super-secret-token\ninternal stack trace',
+      error: 'ENOENT: /missing/file',
     });
 
     const [span] = inMemory.getFinishedSpans() as [ReadableSpan];
-    const serialized = JSON.stringify(span.attributes);
-    expect(serialized).toContain('Telemetry operation failed');
-    expect(serialized).not.toContain('super-secret-token');
-    expect(serialized).not.toContain('internal stack trace');
+    expect(span.attributes.error).toBe('ENOENT: /missing/file');
     expect(span.status.code).toBe(SpanStatusCode.ERROR);
-    expect(span.status.message).toBe('Telemetry operation failed');
+    expect(span.status.message).toBe('ENOENT: /missing/file');
   });
 
   it('strips payloads when includePayloads is false', async () => {
@@ -544,16 +540,20 @@ describe('telemetry', () => {
     await exporter.publish({
       id: 'turn-1-end',
       traceId,
-      type: 'chat_turn_completed',
+      type: 'chat_turn_failed',
       sessionId: 'session-1',
       conversationId: 'conversation-1',
       createdAt: '2026-05-02T00:00:01.000Z',
       details: { output: 'world' },
+      error: 'request failed',
     });
 
     const [span] = inMemory.getFinishedSpans() as [ReadableSpan];
     expect(span.attributes['langfuse.observation.input']).toBeUndefined();
-    expect(span.attributes['langfuse.observation.output']).toBeUndefined();
+    expect(JSON.parse(String(span.attributes['langfuse.observation.output']))).toEqual({
+      error: 'request failed',
+    });
+    expect(span.status.message).toBe('request failed');
     const serialized = JSON.stringify(span.attributes);
     expect(serialized).not.toContain('hello');
     expect(serialized).not.toContain('world');

@@ -68,7 +68,10 @@ function simplifyContent(content: unknown): JsonValue | undefined {
   return content as JsonValue;
 }
 
-function toolEventDetails(result: unknown): JsonObject | undefined {
+function toolEventDetails(
+  result: unknown,
+  isError: boolean,
+): { details?: JsonObject; error?: string } {
   const rawDetails =
     result && typeof result === 'object' && !Array.isArray(result)
       ? (result as Record<string, unknown>).details
@@ -78,7 +81,11 @@ function toolEventDetails(result: unknown): JsonObject | undefined {
   if (output !== undefined && details.output === undefined) {
     details.output = output;
   }
-  return Object.keys(details).length > 0 ? details : undefined;
+  if (isError) {
+    // Tool owners sanitize errors at source; telemetry preserves that text for diagnostics.
+    return { error: typeof details.output === 'string' ? details.output : 'Tool execution failed' };
+  }
+  return Object.keys(details).length > 0 ? { details } : {};
 }
 
 function sanitizeToolDetails(value: unknown): JsonObject {
@@ -353,9 +360,6 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
 
   pi.on('tool_execution_end', async (event) => {
     if (!currentTraceId) return;
-    // Failed tool results can contain credentials, internal paths, or stacks.
-    // Keep the failure signal but never forward the raw result as telemetry.
-    const details = event.isError ? undefined : toolEventDetails(event.result);
 
     await exporter.publish({
       id: randomUUID(),
@@ -370,8 +374,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
       toolName: event.toolName,
       status: event.isError ? 'failed' : 'completed',
       createdAt: new Date().toISOString(),
-      ...(details ? { details } : {}),
-      ...(event.isError ? { error: 'Tool execution failed' } : {}),
+      ...toolEventDetails(event.result, event.isError),
     });
   });
 
