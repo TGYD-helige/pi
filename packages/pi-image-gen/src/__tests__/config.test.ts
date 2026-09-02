@@ -212,6 +212,23 @@ describe('resolveModel — capability attachment', () => {
     expect(result.capabilities?.maxReferenceImages).toBe(3);
   });
 
+  it('a catch-all custom provider inherits the registry contract for a built-in model', () => {
+    delete process.env.ARK_API_KEY;
+    const result = resolveModel('doubao-seedream-5-0-lite-260128', {
+      customProviders: {
+        amaster: {
+          api: 'openai',
+          baseUrl: 'https://credits.amaster.ai/',
+          apiKey: 'sk-test',
+        },
+      },
+    });
+    if ('error' in result) throw new Error(result.error);
+    expect(result.provider.id).toBe('amaster');
+    expect(result.capabilities?.sizeRange?.tiers).toEqual(['2K', '3K', '4K']);
+    expect(result.capabilities?.sizeRange?.minArea).toBe(3_686_400);
+  });
+
   it('explicit per-field declarations win over the inherited contract', () => {
     const settings: ImageGenSettings = {
       customProviders: {
