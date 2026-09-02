@@ -124,7 +124,7 @@ describe('generateImage', () => {
     expect(readFileSync(result.images[0]!.path)).toEqual(PNG_BYTES);
   });
 
-  it('passes the provider host as trustedHosts when downloading url-style results', async () => {
+  it('trusts the provider and returned media hosts when downloading url-style results', async () => {
     const cwd = makeTmpDir();
     const settings: ImageGenSettings = {
       defaultModel: 'x-img',
@@ -141,7 +141,7 @@ describe('generateImage', () => {
       const url = typeof input === 'string' ? input : (input as URL).toString();
       if (url.endsWith('/images/generations')) {
         return fakeJsonResponse({
-          data: [{ url: 'https://gateway.internal.example/img.png' }],
+          data: [{ url: 'https://cdn.example/img.png' }],
         });
       }
       return new Response(PNG_BYTES, {
@@ -153,11 +153,36 @@ describe('generateImage', () => {
 
     await generateImage({ prompt: 'house' }, { cwd, settings, fetchImpl });
 
-    expect(safeFetchMock).toHaveBeenCalledWith(
-      'https://gateway.internal.example/img.png',
-      expect.anything(),
-      { trustedHosts: ['gateway.internal.example'] },
+    expect(safeFetchMock).toHaveBeenCalledWith('https://cdn.example/img.png', expect.anything(), {
+      trustedHosts: ['gateway.internal.example', 'cdn.example'],
+    });
+  });
+
+  it('does not trust provider-returned IP literal media hosts', async () => {
+    const cwd = makeTmpDir();
+    const settings: ImageGenSettings = {
+      defaultModel: 'x-img',
+      customProviders: {
+        myprov: {
+          api: 'openai',
+          apiKey: 'k',
+          baseUrl: 'https://gateway.internal.example/v1',
+          models: ['x-img'],
+        },
+      },
+    };
+    const fetchImpl: typeof fetch = (async () =>
+      fakeJsonResponse({ data: [{ url: 'http://127.0.0.1/private.png' }] })) as typeof fetch;
+    safeFetchMock.mockRejectedValue(
+      new Error('Outbound URL must use a public HTTP(S) destination.'),
     );
+
+    await expect(generateImage({ prompt: 'house' }, { cwd, settings, fetchImpl })).rejects.toThrow(
+      /public HTTP/i,
+    );
+    expect(safeFetchMock).toHaveBeenCalledWith('http://127.0.0.1/private.png', expect.anything(), {
+      trustedHosts: ['gateway.internal.example'],
+    });
   });
 
   it('cancels an unread generated-image HTTP error body', async () => {

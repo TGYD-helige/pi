@@ -1,6 +1,8 @@
 import { mkdir, open, unlink } from 'node:fs/promises';
+import { isIP } from 'node:net';
 import { isAbsolute, resolve } from 'node:path';
 import {
+  hostFromUrl,
   readResponseBytes,
   safeFetch,
   type TrustedHosts,
@@ -108,9 +110,6 @@ export async function generateImage(
 
   const stamp = formatStamp(now());
   const baseFilename = sanitizeFilename(params.filename ?? `${resolved.requestedId}-${stamp}`);
-  // The image URL comes from the configured provider — trust its host (and
-  // subdomains) so provider-side caches on private/fake-ip networks still work.
-  const trustedHosts = trustedHostsFromUrls(resolved.provider.baseUrl);
   const images: GeneratedImage[] = [];
   try {
     for (let i = 0; i < raws.length; i++) {
@@ -119,6 +118,13 @@ export async function generateImage(
       // multi-image materialize/write would keep writing files and return success.
       if (options.signal?.aborted) throw cancelledError('image generation');
       const raw = raws[i]!;
+      // Trust provider-returned DNS media hosts for fake-ip proxies; IP literals keep SSRF checks.
+      const mediaUrl = raw.data.kind === 'url' ? raw.data.url : undefined;
+      const mediaHost = hostFromUrl(mediaUrl);
+      const trustedHosts = trustedHostsFromUrls(
+        resolved.provider.baseUrl,
+        mediaHost && !isIP(mediaHost.replace(/^\[|\]$/g, '')) ? mediaUrl : undefined,
+      );
       const fetched = await materialize(raw, options.signal, trustedHosts);
       if (options.signal?.aborted) throw cancelledError('image generation');
       const ext = MIME_TO_EXT[fetched.mimeType] ?? 'png';

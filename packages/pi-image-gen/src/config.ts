@@ -192,7 +192,11 @@ export function resolveModel(
   for (const [name, raw] of Object.entries(settings.customProviders ?? {})) {
     if (raw.models && raw.models.length > 0) continue;
     const provider = buildCustomProvider(name, raw);
-    if (provider) return { provider, remoteId: requested, requestedId: requested };
+    if (provider) {
+      const resolved: ResolvedModel = { provider, remoteId: requested, requestedId: requested };
+      if (builtIn?.capabilities) resolved.capabilities = builtIn.capabilities;
+      return resolved;
+    }
   }
 
   return { error: unknownModelError(requested, settings) };
