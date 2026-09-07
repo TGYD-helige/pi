@@ -100,7 +100,7 @@ jobs:
                   reasoning: true,
                   input: ['text'],
                   contextWindow: 1000000,
-                  maxTokens: 384000,
+                  maxTokens: 131072,
                   thinkingLevelMap: { minimal: null, low: null, medium: null, high: 'high', xhigh: 'max', max: 'max' },
                   compat: {
                     thinkingFormat: 'deepseek',

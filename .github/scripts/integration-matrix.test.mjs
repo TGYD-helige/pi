@@ -107,12 +107,13 @@ test('threads the integration model through generated configs and skill evaluati
   assert.doesNotMatch(workflow, /--model deepseek-v4-flash|"model": "deepseek-v4-flash"/);
   const documents = [...workflow.matchAll(/cat > "\$PI_CODING_AGENT_DIR\/(models|settings)\.json" <<EOF\n([\s\S]*?)\n          EOF/g)];
   assert.equal(documents.length, 4);
-  for (const model of ['deepseek-v4-flash', 'custom-model']) {
+  for (const model of ['deepseek-v4-flash', 'glm-5.3-flash', 'custom-model']) {
     const configs = documents.map(([, kind, body]) => [kind, JSON.parse(execFileSync('bash', ['-c', `cat <<EOF\n${body}\nEOF`], {
       encoding: 'utf8', env: { PATH: process.env.PATH, PI_INTEGRATION_MODEL: model, WEB_ACCESS_SETTINGS: '{}', IMAGE_GEN_MODEL: 'image-model', RUNNER_TEMP: '/tmp/pi-integration-config-test' },
     }))]);
     for (const [, config] of configs.filter(([kind]) => kind === 'models')) {
       assert.equal(config.providers['deepseek-integration'].models[0].id, model);
+      assert.equal(config.providers['deepseek-integration'].models[0].maxTokens, 131072);
     }
     const settings = configs.filter(([kind]) => kind === 'settings')[1][1];
     assert.equal(settings['pi-goal'].model.model, model);
