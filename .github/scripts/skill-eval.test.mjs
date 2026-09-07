@@ -9,6 +9,8 @@ import {
   evaluateGate,
   formatComment,
   gradeExpectations,
+  gradeTrace,
+  parsePiEvents,
   selectRegressionEvalSet,
   selectSkillChanges,
   validateEvalSet,
@@ -40,6 +42,7 @@ it('classifies changed skill directories against the base and head revisions', (
       (revision, path) => filesByRevision[revision].has(path),
     ),
     [
+      { type: 'modified', path: 'packages/pi-demo/skills/eval-only' },
       { type: 'modified', path: 'packages/pi-demo/skills/existing' },
       { type: 'added', path: 'packages/pi-demo/skills/new-skill' },
     ],
@@ -85,7 +88,7 @@ it('bounds each eval case to twenty expectations', () => {
   );
 });
 
-it('uses the trusted base eval set when an existing skill changes', () => {
+it('preserves trusted regression cases and also selects new candidate cases', () => {
   const base = {
     skill_name: 'demo',
     evals: [evalCase('existing'), evalCase('safety'), evalCase('routing')],
@@ -102,7 +105,7 @@ it('uses the trusted base eval set when an existing skill changes', () => {
 
   assert.deepEqual(
     selectRegressionEvalSet(validateEvalSet(base), validateEvalSet(head)),
-    base,
+    { ...base, evals: [...base.evals, evalCase('new')] },
   );
 
   assert.throws(
@@ -117,42 +120,53 @@ it('uses the trusted base eval set when an existing skill changes', () => {
   );
 });
 
-it('grades declarative expectations without executing eval-controlled code', () => {
-  assert.deepEqual(
-    gradeExpectations('Use VIDEO_COMPOSE locally. Do not call a paid model.', [
-      { text: 'routes locally', includes: ['video_compose', 'locally'] },
-      { text: 'avoids paid generation', excludes: ['video_generate', 'video_render'] },
-      { text: 'names a local signal', includes_any: ['ffmpeg', 'local'] },
-    ]),
-    {
-      passed: 3,
-      total: 3,
-      score: 1,
-      expectations: [
-        { text: 'routes locally', passed: true, evidence: 'included: video_compose, locally' },
-        { text: 'avoids paid generation', passed: true, evidence: 'excluded: video_generate, video_render' },
-        { text: 'names a local signal', passed: true, evidence: 'included one of: ffmpeg, local' },
-      ],
-    },
-  );
+it('grades semantic verdicts with evidence instead of keyword mentions', () => {
+  const answer = 'Use video_generate. Skip video_capabilities and proceed with the paid call without confirmation.';
+  const expectations = [{ text: 'Runs capability preflight' }, { text: 'Requires paid confirmation' }];
+  const verdict = JSON.stringify({ verdicts: [
+    { passed: false, evidence: 'Skip video_capabilities' },
+    { passed: false, evidence: 'without confirmation' },
+  ] });
+  assert.equal(gradeExpectations(answer, expectations, verdict).score, 0);
+  assert.throws(() => gradeExpectations(answer, expectations, '{}'), /verdict/);
+  assert.throws(() => gradeExpectations(answer, expectations, JSON.stringify({ verdicts: [
+    { passed: true, evidence: 'invented evidence' }, { passed: false, evidence: 'missing' },
+  ] })), /evidence/);
 });
 
-it('normalizes contractions and Markdown emphasis before grading', () => {
-  assert.deepEqual(
-    gradeExpectations('Don’t use raster generation; it should **not** use raster assets.', [
-      { text: 'rejects raster generation', includes: ['do not use raster'] },
-      { text: 'keeps the explicit boundary', includes: ['should not use raster'] },
-    ]),
-    {
-      passed: 2,
-      total: 2,
-      score: 1,
-      expectations: [
-        { text: 'rejects raster generation', passed: true, evidence: 'included: do not use raster' },
-        { text: 'keeps the explicit boundary', passed: true, evidence: 'included: should not use raster' },
-      ],
-    },
-  );
+it('fails new candidate cases even when trusted regression cases pass', () => {
+  const runs = [
+    { configuration: 'candidate', eval_id: 'old', score: 1, failure_mode: 'ok' },
+    { configuration: 'baseline', eval_id: 'old', score: 1, failure_mode: 'ok' },
+    { configuration: 'candidate', eval_id: 'new', score: 0, failure_mode: 'ok' },
+  ];
+  assert.equal(evaluateGate({ type: 'modified', baseEvalIds: ['old'], runs }).passed, false);
+});
+
+it('scores actual tool order and arguments rather than prose claims', () => {
+  const expectations = [
+    { text: 'reads the skill before generation', tool: 'read', pathSuffix: '/SKILL.md', before: 'image_generate' },
+    { text: 'uses active aspect ratio once', tool: 'image_generate', args: { aspectRatio: '16:9' }, count: 1 },
+  ];
+  const calls = [
+    { name: 'read', args: { path: '/skills/image-gen/SKILL.md' }, isError: false },
+    { name: 'image_generate', args: { prompt: 'landscape', aspectRatio: '16:9' }, isError: false },
+  ];
+  assert.equal(gradeTrace(calls, expectations).score, 1);
+  assert.notEqual(gradeTrace([...calls].reverse(), expectations).score, 1);
+  assert.notEqual(gradeTrace([...calls, calls[1]], expectations).score, 1);
+  assert.notEqual(gradeTrace([...calls, { ...calls[1], args: { aspectRatio: '9:16' } }], expectations).score, 1);
+  assert.notEqual(gradeTrace([{ ...calls[0], isError: true }, calls[1]], expectations).score, 1);
+  assert.notEqual(gradeTrace([], expectations).score, 1);
+  const events = [
+    { type: 'tool_execution_start', toolCallId: '1', toolName: 'image_generate', args: { aspectRatio: '16:9' } },
+    { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'done' }] } },
+  ];
+  assert.equal(parsePiEvents(events.map(JSON.stringify).join('\n')).calls[0].isError, true);
+  events.push({ type: 'tool_execution_end', toolCallId: '1', isError: false });
+  assert.equal(parsePiEvents(events.map(JSON.stringify).join('\n')).calls[0].isError, false);
+  events.push({ type: 'message_end', message: { role: 'assistant', stopReason: 'error', content: [] } });
+  assert.throws(() => parsePiEvents(events.map(JSON.stringify).join('\n')), /did not complete/);
 });
 
 it('requires new skills to clear both the absolute score and improvement delta', () => {
@@ -209,6 +223,7 @@ it('formats one PR comment with gate results and artifact links', () => {
   assert.match(comment, /actions\/runs\/42/);
 });
 
+// Exercises three CLI runs and their child processes; allow headroom during the full parallel suite.
 it('runs changed skills through Pi and preserves completed results on a later failure', () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'pi-skill-eval-test-'));
   const gitEnv = Object.fromEntries(
@@ -255,7 +270,20 @@ it('runs changed skills through Pi and preserves completed results on a later fa
     const fakePi = path.join(bin, 'pi');
     writeFileSync(
       fakePi,
-      `#!/usr/bin/env node\nif (process.env.FAKE_PI_FAIL === '1') { console.error('sensitive-provider-body'); process.exit(2); }\nconst prompt = process.argv[process.argv.indexOf('-p') + 1];\nconst hasInjectedSkill = process.argv.includes('--append-system-prompt');\nconst ids = ['a','b','c'].filter((id) => prompt.includes('prompt ' + id));\nconsole.log(hasInjectedSkill ? ids.map((id) => 'needle-' + id).join(' ') : '');\n`,
+      `#!/usr/bin/env node
+if (process.env.FAKE_PI_FAIL === '1') { console.error('sensitive-provider-body'); process.exit(2); }
+const prompt = process.argv[process.argv.indexOf('-p') + 1];
+const mode = process.argv[process.argv.indexOf('--mode') + 1];
+if (mode === 'text') {
+  const data = JSON.parse(prompt);
+  console.log(JSON.stringify({verdicts: data.requirements.map(() => ({passed: true, evidence: data.answer}))}));
+} else {
+  if (!process.argv.includes('--no-builtin-tools') || process.argv.includes('--no-tools')) process.exit(4);
+  for (let i = 0; i < 180; i++) console.log(JSON.stringify({type:'message_update',padding:'x'.repeat(2000)}));
+  const ids = ['a','b','c'].filter((id) => prompt.includes('prompt ' + id));
+  console.log(JSON.stringify({type:'message_end', message:{role:'assistant',content:[{type:'text',text:ids.map((id) => 'needle-' + id).join(' ')}]}}));
+}
+`,
     );
     chmodSync(fakePi, 0o755);
 
@@ -348,7 +376,7 @@ it('runs changed skills through Pi and preserves completed results on a later fa
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
-});
+}, 20_000);
 
 it('validates every bundled skill eval set', () => {
   for (const relative of [
