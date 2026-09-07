@@ -11,7 +11,7 @@ fi
 
 exec pi \
   --provider deepseek-integration \
-  --model deepseek-v4-flash \
+  --model "${PI_INTEGRATION_MODEL:-deepseek-v4-flash}" \
   --thinking minimal \
   --no-session \
   --no-context-files \

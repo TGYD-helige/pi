@@ -16,7 +16,7 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
   PI_OFFLINE: '1'
-  SKILL_EVAL_MODEL: deepseek-v4-flash
+  SKILL_EVAL_MODEL: ${{ vars.PI_INTEGRATION_MODEL || 'deepseek-v4-flash' }}
   SKILL_EVAL_RUNS: '3'
   SKILL_EVAL_TIMEOUT_MS: '120000'
 
@@ -96,7 +96,7 @@ jobs:
                 authHeader: true,
                 models: [{
                   id: process.env.SKILL_EVAL_MODEL,
-                  name: 'DS V4 Flash',
+                  name: process.env.SKILL_EVAL_MODEL,
                   reasoning: true,
                   input: ['text'],
                   contextWindow: 1000000,
