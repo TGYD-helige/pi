@@ -329,3 +329,20 @@ it('envOr treats empty and blank values as unset', () => {
 it('derives the Langfuse trace id used by the exporter', () => {
   assert.equal(traceIdForCodeword(CODEWORD), '9236fa9c83f70d08ef21168da1a4b3ef');
 });
+
+
+it('verifies the configured integration model instead of a fixed DeepSeek name', () => {
+  const previous = process.env.PI_INTEGRATION_MODEL;
+  try {
+    process.env.PI_INTEGRATION_MODEL = 'custom-model';
+    assert.ok(evaluateTrace(fullTrace(), CODEWORD).some((error) => error.includes('wrong model')));
+    const observations = fullTrace();
+    for (const item of observations) {
+      if (item.providedModelName) item.providedModelName = 'custom-model';
+    }
+    assert.deepEqual(evaluateTrace(observations, CODEWORD), []);
+  } finally {
+    if (previous === undefined) delete process.env.PI_INTEGRATION_MODEL;
+    else process.env.PI_INTEGRATION_MODEL = previous;
+  }
+});

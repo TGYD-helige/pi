@@ -50,6 +50,8 @@ describe('buildActivationMessage', () => {
     const msg = buildActivationMessage('all tests pass');
     expect(msg).toContain('all tests pass');
     expect(msg).toMatch(/auto-clears/i);
+    expect(msg).toContain('existing authorization');
+    expect(msg).toContain('missing permission or user decision');
     expect(msg).toMatch(/do not tell the user to run `\/goal clear`/i);
   });
 });
@@ -59,6 +61,7 @@ describe('buildContinueMessage', () => {
     const msg = buildContinueMessage('build succeeds', '2 tests failing');
     expect(msg).toContain('build succeeds');
     expect(msg).toContain('2 tests failing');
-    expect(msg).toMatch(/do not stop until it holds/i);
+    expect(msg).toMatch(/existing authorization/i);
+    expect(msg).toMatch(/missing permission or user decision/i);
   });
 });

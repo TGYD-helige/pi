@@ -5,6 +5,7 @@ import type {
   ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
+import { MEMORY_GUIDANCE } from './guidance.js';
 import type { MemoryResult, MemoryStore, MemoryTarget } from './store.js';
 
 const targetSchema = Type.Union([Type.Literal('memory'), Type.Literal('user')], {
@@ -25,25 +26,19 @@ function asTarget(raw: unknown): MemoryTarget {
   return raw === 'user' ? 'user' : 'memory';
 }
 
-const memoryToolDescription =
-  'Save durable information to persistent memory that survives across sessions. ' +
-  'Memory is injected into the system prompt at session start, so keep entries compact ' +
-  'and focused on facts that will still matter later.\n\n' +
-  'WHEN TO SAVE proactively:\n' +
-  "- User corrects you or says 'remember this' / 'don't do that again'.\n" +
-  '- User shares a preference, habit, or personal detail (name, role, timezone, coding style).\n' +
-  '- You discover something stable about the environment (OS, installed tools, project structure).\n' +
-  "- You learn a convention, API quirk, or workflow specific to this user's setup.\n\n" +
-  'PRIORITY: User preferences and corrections > environment facts > procedural knowledge.\n\n' +
-  'Do NOT save task progress, session outcomes, or temporary TODO state.\n\n' +
-  "TARGETS: 'user' for who the user is; 'memory' for your own notes.";
-
 export function createMemoryTools(store: MemoryStore): ToolDefinition[] {
   const addTool: ToolDefinition = {
     name: 'memory_add',
     label: 'Memory',
-    description: `Append a new entry to memory. ${memoryToolDescription}`,
+    description:
+      'Append a new durable fact that will help future sessions: a lasting user preference, supported correction, or stable project/environment fact. ' +
+      'Read the target first. If the fact is already represented, leave it unchanged; use memory_replace for a correction or extension. ' +
+      'Write a declarative fact with necessary scope, not an instruction, task log or reusable procedure. ' +
+      'An exact duplicate is a successful no-op. If capacity is exceeded, inspect currentEntries and usage, then shorten or consolidate without losing supported facts. ' +
+      'Keep valid entries and report a blocker if they still cannot fit; never retry the same failing add unchanged. ' +
+      'After a successful write, call memory_read for this target to verify the saved state before reporting completion.',
     promptSnippet: 'Append durable facts to MEMORY.md or USER.md.',
+    promptGuidelines: [MEMORY_GUIDANCE],
     parameters: Type.Object({
       target: targetSchema,
       content: Type.String({ description: 'The entry content to append.' }),
@@ -67,7 +62,11 @@ export function createMemoryTools(store: MemoryStore): ToolDefinition[] {
     label: 'Memory',
     description:
       'Replace an existing memory entry. Find the entry by short unique substring (oldText), ' +
-      'replace it with newContent. Use this to update an outdated entry instead of removing + adding.',
+      'replace the entire entry with newContent. Read the target first and preserve any still-valid qualifiers in that entry. ' +
+      'Use this for corrections or lossless consolidation instead of removing + adding. ' +
+      'If oldText matches zero or multiple entries, read current entries and choose a unique substring; do not guess. ' +
+      'Replacement also obeys the reported capacity. On failure, keep the original and inspect the error before a corrected retry. ' +
+      'After a successful replacement, call memory_read for this target to verify the new entry and preserved facts before reporting completion or removing entries it subsumes.',
     promptSnippet: 'Update an existing MEMORY.md or USER.md entry.',
     parameters: Type.Object({
       target: targetSchema,
@@ -94,7 +93,11 @@ export function createMemoryTools(store: MemoryStore): ToolDefinition[] {
     label: 'Memory',
     description:
       'Remove a memory entry. Find the entry by short unique substring (oldText). ' +
-      'Use this when an entry is no longer relevant or was wrong.',
+      'Read the target first and remove only facts established to be wrong, redundant or superseded. ' +
+      'A fact being unrelated to the current task is not evidence that it is obsolete. ' +
+      'For duplicates created by consolidation, verify the surviving entry preserves their facts before removing them. ' +
+      'If the substring matches zero or multiple entries, read current entries and choose a unique match; preserve valid entries when capacity alone is the problem. ' +
+      'After a successful removal, call memory_read for this target to verify the remaining entries before reporting completion.',
     promptSnippet: 'Delete an entry from MEMORY.md or USER.md.',
     parameters: Type.Object({
       target: targetSchema,
@@ -119,7 +122,9 @@ export function createMemoryTools(store: MemoryStore): ToolDefinition[] {
     label: 'Memory',
     description:
       'Return live entries and usage for a memory store. Use this to inspect what is currently saved ' +
-      'before deciding to add, replace, or remove.',
+      'before deciding to add, replace, or remove, after a failed write, or to verify the final state. ' +
+      'Its entries and usage describe the live target, including writes made since the prompt snapshot. ' +
+      'Read both targets when reviewing or consolidating memory; use the reported capacity rather than assuming a fixed limit.',
     promptSnippet: 'Read the current contents of MEMORY.md or USER.md.',
     parameters: Type.Object({
       target: targetSchema,

@@ -16,6 +16,7 @@ permissions:
   contents: read
 
 env:
+  PI_INTEGRATION_MODEL: ${{ vars.PI_INTEGRATION_MODEL || secrets.PI_INTEGRATION_MODEL || 'deepseek-v4-flash' }}
   INTEGRATION_CHECKOUT_REPOSITORY: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name || github.repository }}
   INTEGRATION_CHECKOUT_REF: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
 
@@ -153,8 +154,8 @@ jobs:
                 "authHeader": true,
                 "models": [
                   {
-                    "id": "deepseek-v4-flash",
-                    "name": "DeepSeek V4 Flash",
+                    "id": "${PI_INTEGRATION_MODEL}",
+                    "name": "${PI_INTEGRATION_MODEL}",
                     "reasoning": true,
                     "input": ["text"],
                     "contextWindow": 1000000,
@@ -199,7 +200,7 @@ jobs:
           set -euo pipefail
           pi --list-models deepseek-integration | tee /tmp/pi-models.txt
           grep -F 'deepseek-integration' /tmp/pi-models.txt
-          grep -F 'deepseek-v4-flash' /tmp/pi-models.txt
+          grep -F -- "$PI_INTEGRATION_MODEL" /tmp/pi-models.txt
 
       - name: Run single-prompt smoke test (Stage B)
         if: env.PI_INTEGRATION_BASE_URL != '' && env.PI_INTEGRATION_API_KEY != ''
@@ -212,7 +213,7 @@ jobs:
           set +e
           output="$(pi \
             --provider deepseek-integration \
-            --model deepseek-v4-flash \
+            --model "$PI_INTEGRATION_MODEL" \
             --thinking xhigh \
             --no-session \
             --no-context-files \
@@ -319,7 +320,7 @@ jobs:
               "fetch": {
                 "summary": {
                   "provider": "deepseek-integration",
-                  "model": "deepseek-v4-flash"
+                  "model": "${PI_INTEGRATION_MODEL}"
                 }
               },
               "providers": {
@@ -354,7 +355,7 @@ jobs:
                 "provider": "firecrawl",
                 "summary": {
                   "provider": "deepseek-integration",
-                  "model": "deepseek-v4-flash"
+                  "model": "${PI_INTEGRATION_MODEL}"
                 }
               },
               "providers": {
@@ -366,7 +367,7 @@ jobs:
               "fetch": {
                 "summary": {
                   "provider": "deepseek-integration",
-                  "model": "deepseek-v4-flash"
+                  "model": "${PI_INTEGRATION_MODEL}"
                 }
               }
             }'
@@ -394,7 +395,7 @@ jobs:
           # tools to a name that no longer exists — pi hangs in that state.
 
           # 1. models.json — the integration gateway custom provider used by
-          #    every matrix entry. DeepSeek remains the main model; the browser
+          #    every matrix entry. PI_INTEGRATION_MODEL selects the main model; the browser
           #    vision tool uses Kimi K2.6 because DeepSeek cannot accept images.
           cat > "$PI_CODING_AGENT_DIR/models.json" <<EOF
           {
@@ -406,8 +407,8 @@ jobs:
                 "authHeader": true,
                 "models": [
                   {
-                    "id": "deepseek-v4-flash",
-                    "name": "DeepSeek V4 Flash",
+                    "id": "${PI_INTEGRATION_MODEL}",
+                    "name": "${PI_INTEGRATION_MODEL}",
                     "reasoning": true,
                     "input": ["text"],
                     "contextWindow": 1000000,
@@ -472,7 +473,7 @@ jobs:
             "pi-goal": {
               "model": {
                 "provider": "deepseek-integration",
-                "model": "deepseek-v4-flash"
+                "model": "${PI_INTEGRATION_MODEL}"
               },
               "maxIterations": 1,
               "requireConfirmForDerived": false
@@ -495,7 +496,7 @@ jobs:
                 },
                 "llm": {
                   "provider": "deepseek-integration",
-                  "config": { "model": "deepseek-v4-flash" }
+                  "config": { "model": "${PI_INTEGRATION_MODEL}" }
                 }
               }
             },
@@ -834,7 +835,7 @@ jobs:
             # to the write tool for predictability.
             output="$(pi \
               --provider deepseek-integration \
-              --model deepseek-v4-flash \
+              --model "$PI_INTEGRATION_MODEL" \
               --thinking high \
               --no-session \
               --no-context-files \
@@ -846,7 +847,7 @@ jobs:
           else
             output="$(pi \
               --provider deepseek-integration \
-              --model deepseek-v4-flash \
+              --model "$PI_INTEGRATION_MODEL" \
               --thinking high \
               --no-session \
               --no-context-files \
@@ -1177,7 +1178,7 @@ jobs:
               llm: {
                 provider: 'openai',
                 config: {
-                  model: 'deepseek-v4-flash',
+                  model: process.env.PI_INTEGRATION_MODEL,
                   baseURL: process.env.PI_INTEGRATION_BASE_URL,
                   apiKey: process.env.PI_INTEGRATION_API_KEY
                 }

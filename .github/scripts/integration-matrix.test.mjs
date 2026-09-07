@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { test } from 'vitest';
 import { fullMatrix, selectIntegrationMatrix } from './integration-matrix.mjs';
@@ -94,4 +95,29 @@ test('skips Stage C when no tested extension changed', () => {
     selectIntegrationMatrix(['.github/scripts/telemetry-langfuse-verify.mjs']).map(({ extension }) => extension),
     ['pi-telemetry', 'pi-telemetry'],
   );
+});
+
+
+test('threads the integration model through generated configs and skill evaluation', async () => {
+  const workflow = await readFile(new URL('../workflows/integration.yml', import.meta.url), 'utf8');
+  const skillEval = await readFile(new URL('../workflows/skill-eval.yml', import.meta.url), 'utf8');
+  for (const source of [workflow, skillEval]) {
+    assert.ok(source.includes("vars.PI_INTEGRATION_MODEL || secrets.PI_INTEGRATION_MODEL || 'deepseek-v4-flash'"));
+  }
+  assert.doesNotMatch(workflow, /--model deepseek-v4-flash|"model": "deepseek-v4-flash"/);
+  const documents = [...workflow.matchAll(/cat > "\$PI_CODING_AGENT_DIR\/(models|settings)\.json" <<EOF\n([\s\S]*?)\n          EOF/g)];
+  assert.equal(documents.length, 4);
+  for (const model of ['deepseek-v4-flash', 'custom-model']) {
+    const configs = documents.map(([, kind, body]) => [kind, JSON.parse(execFileSync('bash', ['-c', `cat <<EOF\n${body}\nEOF`], {
+      encoding: 'utf8', env: { PATH: process.env.PATH, PI_INTEGRATION_MODEL: model, WEB_ACCESS_SETTINGS: '{}', IMAGE_GEN_MODEL: 'image-model', RUNNER_TEMP: '/tmp/pi-integration-config-test' },
+    }))]);
+    for (const [, config] of configs.filter(([kind]) => kind === 'models')) {
+      assert.equal(config.providers['deepseek-integration'].models[0].id, model);
+    }
+    const settings = configs.filter(([kind]) => kind === 'settings')[1][1];
+    assert.equal(settings['pi-goal'].model.model, model);
+    assert.equal(settings['pi-memory-mem0'].oss.llm.config.model, model);
+    assert.equal(settings['pi-memory-mem0'].oss.embedder.config.model, 'text-embedding-v4');
+    assert.equal(settings['pi-browser-use'].visionModel.model, 'kimi-k2.6');
+  }
 });

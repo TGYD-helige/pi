@@ -924,9 +924,9 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
       promptSnippet:
         'Generate one short video clip (paid, minutes) from a structured prompt via the active video model',
       promptGuidelines: [
-        "Before composing prompts for a video task, call video_capabilities to learn the active model's duration range, aspect ratios, audio support, and first/last-frame support — do not assume.",
+        "Before composing prompts for video_generate or video_render, read the video-gen skill, then call video_capabilities to learn the active model's duration range, aspect ratios, audio support, and first/last-frame support — do not assume.",
         'Fill the structured prompt fields; never a pre-joined string. visuals + action are always required; style + scene are required when no firstFrame anchors the clip; use effects for transformations or lighting shifts a static frame cannot carry.',
-        'Video generation is paid and slow. State the expected clip count and duration to the user and get explicit confirmation before the first call.',
+        'Video generation is paid and slow. State the expected clip count and duration to the user and use existing explicit approval for this unchanged request or get confirmation before the first paid call.',
         'Only pass lastFrame when the user needs first+last-frame interpolation and the active model supports it.',
         'For Seedance references containing recognizable real people, use a preset-avatar or authorized-person Asset ID from the current account/project. Pass it through referenceAssets and refer to it in the prompt as Image 1, Video 1, or Audio 1 — never as the Asset ID.',
         'Treat user approval as scoped to the exact asset list, provider/account context, model, clip count, and duration; ask again when any of those change.',
@@ -957,7 +957,8 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
       promptSnippet:
         'Assemble video locally — lossless clip concat (C0) or a mixed image/video promo timeline with TTS and soft/burned subtitles, no paid models',
       promptGuidelines: [
-        'Two modes: <jobDir>/compose-input.json (C0: concat 2+ compatible mp4 clips) or <jobDir>/timeline-input.json (promo: mixed images/video + overlays + TTS + xfade + soft/burned subtitles, all local).',
+        'Read the video-gen skill and follow its concat or timeline workflow before writing the spec. Local composition skips video_capabilities and paid-model gates.',
+        'Two modes: <jobDir>/compose-input.json (C0: concat 2+ compatible mp4 clips) or <jobDir>/timeline-input.json (promo: mixed images/video + overlays + TTS + xfade + soft/burned subtitles). Rendering is local; optional narration sends text to Microsoft Edge TTS.',
         'For C0: every ordered stream across all clips must match (codec/resolution/fps/timebase/pix_fmt/sample-rate/audio layout) — mismatches are reported via ffprobe, never silently transcoded. Do NOT use for AI video generation (use video_generate/video_render).',
         'For timeline: each segment contains exactly one image or video. Video uses numeric durationSec with optional trimStartSec, fit, and sourceAudio; image may use auto duration and motion.',
         'Reuse existing images/screenshots/clips first and generate only missing visuals with image_generate. Put Chinese titles in overlay and use subtitles.mode "burn" when narration subtitles must appear directly in the frames.',
@@ -990,7 +991,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
       promptSnippet:
         'Render a prepared multi-shot video spec (paid, long-running) into a final mp4',
       promptGuidelines: [
-        'Call ONLY after the user explicitly confirmed rendering: exact local frames/trusted assets ready, shot count, durations, provider/account context, and cost magnitude stated.',
+        'Read the video-gen skill and follow its multi-shot workflow. Call ONLY after the user explicitly confirmed rendering: exact local frames/trusted assets ready, shot count, durations, provider/account context, and cost magnitude stated.',
         'For each shot, either generate required local frames via image_generate and record their returned paths, or pass current-account provider assets in referenceAssets. Recognizable real-person references sent to Seedance must use preset-avatar or authorized-person assets.',
         'render-input.json carries structured prompts: film-level style/characters/consistency/negative, per-shot prompt.{scene,visuals,action,effects,audio,visibleCharacters} — the plugin assembles the labeled prompt text; never pre-join a prompt string.',
         'The spec is immutable per job directory: rerunning the same path resumes identical input; revisions go in a NEW job directory.',
@@ -1010,7 +1011,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
       name: 'video_capabilities',
       label: 'Video Model Capabilities',
       description:
-        "Read-only: list the active video model's capabilities (duration range, resolutions, aspect ratios, native audio, first/last-frame support, trusted asset modalities) and the registered models. Call before composing video prompts or shot books.",
+        "Read-only: list the active video model's capabilities (duration range, resolutions, aspect ratios, native audio, first/last-frame support, trusted asset modalities) and the registered models. Call before composing AI video prompts or shot books; local video_compose does not need it.",
       parameters: Type.Object({}),
       promptSnippet: 'Show active video model capabilities and registered models',
       async execute() {
