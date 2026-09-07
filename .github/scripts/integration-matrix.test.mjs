@@ -102,7 +102,7 @@ test('threads the integration model through generated configs and skill evaluati
   const workflow = await readFile(new URL('../workflows/integration.yml', import.meta.url), 'utf8');
   const skillEval = await readFile(new URL('../workflows/skill-eval.yml', import.meta.url), 'utf8');
   for (const source of [workflow, skillEval]) {
-    assert.ok(source.includes("vars.PI_INTEGRATION_MODEL || 'deepseek-v4-flash'"));
+    assert.ok(source.includes("vars.PI_INTEGRATION_MODEL || secrets.PI_INTEGRATION_MODEL || 'deepseek-v4-flash'"));
   }
   assert.doesNotMatch(workflow, /--model deepseek-v4-flash|"model": "deepseek-v4-flash"/);
   const documents = [...workflow.matchAll(/cat > "\$PI_CODING_AGENT_DIR\/(models|settings)\.json" <<EOF\n([\s\S]*?)\n          EOF/g)];

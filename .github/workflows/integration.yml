@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 env:
-  PI_INTEGRATION_MODEL: ${{ vars.PI_INTEGRATION_MODEL || 'deepseek-v4-flash' }}
+  PI_INTEGRATION_MODEL: ${{ vars.PI_INTEGRATION_MODEL || secrets.PI_INTEGRATION_MODEL || 'deepseek-v4-flash' }}
   INTEGRATION_CHECKOUT_REPOSITORY: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name || github.repository }}
   INTEGRATION_CHECKOUT_REF: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
 
