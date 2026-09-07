@@ -27,14 +27,14 @@ The AI video model is fixed by `pi-video-gen.defaultModel`; generated images use
 
 1. **Local flows stop here.** For C0 follow §A0; for Timeline follow §A1. Do not run the AI preflight, shot-book steps, or paid confirmation gates below. Timeline only needs `image_generate` when its source images do not already exist.
 2. **AI preflight only.** For `video_generate` or `video_render`, call `video_capabilities` and respect the active model's duration range and audio support, frame support, and trusted asset modalities. Confirm `image_generate` is available only when source frames need to be generated (`/video-gen doctor` checks; config health is `/image-gen list`).
-3. **Pick the AI flow.** A vague idea or a script that needs multiple shots → shot-book flow. One moving shot → `video_generate`. A still → pi-image-gen.
-4. **Write the shot book in conversation** (schema in §B). If the user only has a vague idea, first be the screenwriter: three-act structure, filmable actions ("show, don't tell"), concrete visual detail. Iterate with the user in chat.
+3. **Pick the AI flow.** A vague idea or a script that needs multiple shots → shot-book flow below. One moving shot → follow §A4 and skip the shot-book stages. A still → image-gen.
+4. **Write the shot book in conversation (shot-book only)** (schema in §B). If the user only has a vague idea, first be the screenwriter: three-act structure, filmable actions ("show, don't tell"), concrete visual detail. Iterate with the user in chat.
 5. **Confirmation gate 1 (shot-book only).** Show the shot-book summary — shot count, character list, estimated image calls (~2N+3C) and video calls (N) — and get an explicit go-ahead. **Default small: 1 scene, 3–5 shots** unless the user asks for more.
 6. **Source stage (shot-book only).** Use trusted portrait assets per §A2 when Seedance will receive a recognizable real person. Otherwise generate the required character portraits and per-shot frames via `image_generate` per §C. Show each generated batch to the user.
-7. **Paid confirmation.** Before `video_generate`, confirm its one paid call. For a shot book, once frames are ready, state "about to make N paid video calls" and get an explicit render order. Then assemble the render spec and call `video_render` ONCE.
+7. **Paid confirmation.** Before `video_generate`, confirm its one paid call. Existing explicit approval covers the unchanged request; reuse it instead of asking again. For a shot book, once frames are ready, state "about to make N paid video calls" and get an explicit render order. Then assemble the render spec and call `video_render` ONCE.
 8. **Cost honesty.** AI video calls are paid and take minutes each. Never state amounts (prices change); state call counts and durations.
 9. **Revisions.** The render spec is immutable per job directory. Text-stage revisions happen in chat (regenerate frames as needed); a revised film goes in a NEW job directory. NEVER suggest "delete shots/<id>/ and rerender" — that breaks downstream dependencies. Rerunning the SAME spec path resumes an interrupted job (finished shots don't re-bill).
-10. **Degradation negotiation.** If `video_render` preflight fails (e.g. last frame unsupported), present the options (switch model / edit spec / `allowDegradations`) and let the user choose. Never degrade silently. When the model's `nativeAudio` is false, don't write audio cues into video prompts unless the user accepted silence.
+10. **Degradation negotiation.** If `video_render` preflight fails (e.g. last frame unsupported), present the options (switch model / edit spec / `allowDegradations`) and let the user choose. Never degrade silently. When the model's `nativeAudio` is false, omit audio cues and obtain acceptance of silence if audio was requested.
 11. **Cancellation honesty.** Interrupting stops local polling only — remote tasks may keep running and billable (Ark cancellation is unverified). Say so.
 
 ## A0. C0 — composing existing clips (`video_compose`)
@@ -94,7 +94,7 @@ Before any paid Seedance call that may contain a recognizable human face:
 2. **Search preset personas when needed.** If the user has not already chosen an identity, run this skill's `scripts/search-seedance-personas.mjs` with `--query "<space-separated traits>" --framing half|full --limit 5`. Use `half` for close/medium portrait shots and `full` when the whole body or body movement must be visible. Present the bounded matches with label, short bio, framing, and Asset ID; let the user choose before a paid call. The script is the access path; do not load the entire 3.6 MB JSON catalog into context.
 3. **Use the exact trusted asset.** For a catalog choice, copy the returned `selectedAssetId`. Otherwise ask the user for a preset-avatar or Active authorized-person `asset-...` ID from the current Ark account/project. Catalog IDs were observed on 2026-08-24 and are not documented as permanent or cross-account. If the active account rejects one, ask the user to copy the current ID from that account's virtual-avatar library.
 4. **Preserve modality order.** Put provider assets in `referenceAssets` as `{ "modality": "image|video|audio", "assetId": "asset-..." }`. Order is significant within each modality. In the prompt say `Image 1`, `Video 1`, or `Audio 1`; never expose or cite the Asset ID in prompt prose. For the built-in Seedance 2.0 models, keep each request within 9 image references total (local frames plus image assets), 3 video assets, and 3 audio assets.
-5. **Reconfirm the paid context.** Approval is scoped to the exact asset list, provider/account context, model, clip count, and duration. A changed asset, account/project, provider, model, or job requires a new confirmation.
+5. **Reconfirm the paid context.** Approval is scoped to the exact asset list, provider/account context, model, clip count, and duration. An unchanged resumed job retains its existing approval. A changed asset, account/project, provider, model, or job requires a new confirmation.
 6. **Keep onboarding out of scope.** This package submits already-created assets. It does not perform identity verification, authorization H5 flows, asset activation, upload, or asset-library management.
 
 Official references: [preset avatars](https://docs.volcengine.com/docs/82379/2608626?lang=zh#preset-avatar), [authorized-person assets](https://docs.volcengine.com/docs/82379/2223965?lang=zh), and [Seedance asset request format](https://console.volcengine.com/ark/region:cn-beijing/docs/82379/2333589?projectName=default&lang=zh#d9a7d853).
@@ -102,6 +102,14 @@ Official references: [preset avatars](https://docs.volcengine.com/docs/82379/260
 ## A3. Seedance public image/video/audio materials
 
 When the user asks for built-in Seedance materials, action references, camera references, visual styles, environments, characters, or sample voices, read [`references/seedance-public-material-library.md`](references/seedance-public-material-library.md) completely before proposing choices. Use the exact Chinese display labels from that catalog, copy its exact Asset IDs into `referenceAssets`, and keep the selected media in modality order. These IDs were read from the public material cards, not from the separate virtual-avatar library. If the active account rejects a listed ID, re-open the experience center and copy the current card ID instead of guessing or substituting a media URL.
+
+## A4. Single AI clip (`video_generate`)
+
+1. Complete the AI preflight in §A and resolve any Seedance asset requirements in §A2–A3. Use the active tool schema for parameters.
+2. Fill structured prompt fields: `visuals` is camera/framing, `action` is in-frame movement, `scene` is setting, `effects` is time-varying appearance, and `audio` is sound/dialogue. `visuals` and `action` are required; without `firstFrame`, `style` and `scene` are also required. The tool assembles the prompt.
+3. If source frames must be generated, read the image-gen skill first, generate them and record the returned paths. Show the prepared clip, duration, exact assets and provider/account/model context. Obtain explicit approval for this paid request unless already authorized unchanged.
+4. Call `video_generate` once. If interrupted, resume with the returned `jobId`; `prompt` is not needed on resume. For an ambiguous submission, check the provider console and use `/video-gen recover <jobId>` before any retry: `reset` only a confirmed-absent task or `adopt` its existing task ID.
+5. Finish after the saved video is returned and reviewed. Report its path and any accepted degradation; if visual verification is unavailable, state that limitation.
 
 ## B. Shot book (VideoProject) — authoring reference
 
@@ -167,9 +175,9 @@ If side/back fails after one retry, reuse front. Characters with `visible: false
 **Frame prompt assembly**: prefix each reference image with its role, then the frame description mapping elements to images:
 
 ```
-Image 0: A front view portrait of Alice.
-Image 1: [alley] Wide shot of the rainy alley from shot s1.
-Create an image based on the following description: <firstFrame text>. The alley background should reference Image 1; Alice's appearance should reference Image 0.
+Image 1: A front view portrait of Alice.
+Image 2: [alley] Wide shot of the rainy alley from shot s1.
+Create an image based on the following description: <firstFrame text>. The alley background should reference Image 2; Alice's appearance should reference Image 1.
 ```
 
 ## D. Assemble the render spec and render
@@ -211,3 +219,7 @@ The plugin assembles each shot's labeled prompt (`[Style]` / `[Character]` / `[S
 Every reference-frame path that is present must resolve to a regular png/jpg/webp file inside the session cwd. Absolute paths are accepted only when they remain inside that approved project directory; symlinks and outside paths are rejected. `referenceAssets` are provider-managed and are not local files. Keep their order stable: changing an asset, modality, or order changes the request and requires a new job directory and paid confirmation.
 
 Then call `video_render` with that path. Interrupted? Call it again with the same path — it resumes. If an ambiguous submit is reported, do not delete a shot or call render again blindly: run `/video-gen recover <jobId>`, check the provider console, then explicitly `reset` a confirmed-absent task or `adopt` its task id. Revisions? New job directory.
+
+## E. Completion
+
+Before reporting success, verify the requested clip/segment count and order, inspect the final video or available QC evidence, and report the returned absolute path and any accepted degradation. For Timeline, perform the QC-frame and subtitle checks in §A1. A successful tool call alone does not establish visual acceptance; state any verification limitation.

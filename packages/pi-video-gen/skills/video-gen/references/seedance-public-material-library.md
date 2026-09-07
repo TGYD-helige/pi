@@ -6,7 +6,7 @@ Observed on 2026-08-24. The Asset IDs below were copied directly from each
 material card's **ID** button; they were not inferred from labels or media URLs.
 The catalog may change independently of the API. It currently contains 71
 images, 36 videos, and 80 audio samples. The separate **虚拟人像库** is not
-duplicated here; search it through the persona workflow in `SKILL.md` §A2.
+duplicated here; search it through the persona workflow in [trusted portraits](../SKILL.md#a2-seedance-trusted-portraits-and-provider-managed-assets).
 
 ## Selection contract
 
@@ -24,7 +24,7 @@ duplicated here; search it through the persona workflow in `SKILL.md` §A2.
 5. Preserve modality order. In prompt prose refer to attachments as `Image 1`,
    `Video 1`, or `Audio 1`, never by Asset ID.
 6. Do not reuse these public-material IDs as preset-avatar IDs. For a
-   recognizable real person, follow §A2 and obtain a current-account trusted
+   recognizable real person, follow [trusted portraits](../SKILL.md#a2-seedance-trusted-portraits-and-provider-managed-assets) and obtain a current-account trusted
    portrait or preset-avatar Asset ID from the user.
 
 Example:

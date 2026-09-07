@@ -103,6 +103,16 @@ describe('pi-video-gen extension', () => {
     expect(handlers.has('session_start')).toBe(true);
   });
 
+  it('routes local composition separately from AI preflight and discloses network narration', () => {
+    const compose = tools.get('video_compose')!.promptGuidelines!.join('\n');
+    expect(compose).toContain('Local composition skips video_capabilities');
+    expect(compose).toContain('optional narration sends text to Microsoft Edge TTS');
+    expect(compose).not.toContain('all local');
+    expect(tools.get('video_generate')!.promptGuidelines!.join('\n')).toContain(
+      'read the video-gen skill',
+    );
+  });
+
   it('exposes lastFrame in the schema for Seedance 2.0 (supportsFirstLastFrame)', () => {
     const params = tools.get('video_generate')!.parameters;
     const props = params.properties ?? {};

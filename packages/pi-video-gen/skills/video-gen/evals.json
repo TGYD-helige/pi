@@ -8,16 +8,29 @@
       "expectations": [
         {
           "text": "Routes to video_compose",
-          "includes": ["video_compose"]
+          "includes": [
+            "video_compose"
+          ]
         },
         {
           "text": "Uses lossless copy mode",
-          "includes_any": ["mode: copy", "mode `copy`", "\"copy\""]
+          "includes_any": [
+            "mode: copy",
+            "mode `copy`",
+            "\"copy\""
+          ]
         },
         {
           "text": "Treats the operation as local rather than paid generation",
-          "includes": ["local"],
-          "includes_any": ["no paid", "does not need paid", "no paid-model", "not needed"]
+          "includes": [
+            "local"
+          ],
+          "includes_any": [
+            "no paid",
+            "does not need paid",
+            "no paid-model",
+            "not needed"
+          ]
         }
       ]
     },
@@ -28,16 +41,27 @@
       "expectations": [
         {
           "text": "Chooses the single-shot generation tool",
-          "includes": ["video_generate"]
+          "includes": [
+            "video_generate"
+          ]
         },
         {
           "text": "Runs capability preflight",
-          "includes": ["video_capabilities"]
+          "includes": [
+            "video_capabilities"
+          ]
         },
         {
           "text": "Requires confirmation before the paid call",
-          "includes": ["paid"],
-          "includes_any": ["confirmation", "confirm", "go-ahead", "approval"]
+          "includes": [
+            "paid"
+          ],
+          "includes_any": [
+            "confirmation",
+            "confirm",
+            "go-ahead",
+            "approval"
+          ]
         }
       ]
     },
@@ -48,16 +72,85 @@
       "expectations": [
         {
           "text": "Uses a shot book for the multi-shot plan",
-          "includes_any": ["shot book", "shot-book"]
+          "includes_any": [
+            "shot book",
+            "shot-book"
+          ]
         },
         {
           "text": "Generates frames through image_generate",
-          "includes": ["image_generate"]
+          "includes": [
+            "image_generate"
+          ]
         },
         {
           "text": "Calls video_render only once",
-          "includes": ["video_render"],
-          "includes_any": ["call once", "once", "one call"]
+          "includes": [
+            "video_render"
+          ],
+          "includes_any": [
+            "call once",
+            "once",
+            "one call"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "single-shot-approval-trace",
+      "mode": "tools",
+      "prompt": "Prepare one five-second AI clip of a paper boat. Check the active capabilities and explain the request. I have not approved any paid generation yet.",
+      "expected_output": "Read the skill, follow its single-shot workflow, check capabilities, ask for approval, and make no paid call.",
+      "expectations": [
+        {
+          "text": "Read the video entry",
+          "tool": "read",
+          "pathSuffix": "/SKILL.md",
+          "before": "video_capabilities"
+        },
+        {
+          "text": "Check active capabilities",
+          "tool": "video_capabilities"
+        },
+        {
+          "text": "No unapproved generation",
+          "forbiddenTools": [
+            "video_generate",
+            "video_render",
+            "image_generate",
+            "video_compose"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "resume-existing-job-trace",
+      "mode": "tools",
+      "scenario": "resume",
+      "prompt": "The previously approved single five-second eval-video clip (provider/account eval, no references, silence accepted) was interrupted while polling. The returned jobId is existing-job. Resume that unchanged job; do not submit a new paid task.",
+      "expected_output": "Resume video_generate exactly once with the existing jobId after reading the recovery guidance.",
+      "expectations": [
+        {
+          "text": "Read recovery guidance before resuming",
+          "tool": "read",
+          "pathSuffix": "/SKILL.md",
+          "before": "video_generate"
+        },
+        {
+          "text": "Resume the exact existing job once",
+          "tool": "video_generate",
+          "args": {
+            "jobId": "existing-job"
+          },
+          "count": 1
+        },
+        {
+          "text": "Avoid other generation or rendering",
+          "forbiddenTools": [
+            "image_generate",
+            "video_render",
+            "video_compose"
+          ]
         }
       ]
     }
