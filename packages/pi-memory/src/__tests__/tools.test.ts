@@ -30,6 +30,10 @@ async function runTool(
 describe('createMemoryTools', () => {
   it('exposes 4 tools with the expected names', () => {
     const tools = createMemoryTools(freshStore());
+    const guidance = tools.flatMap((tool) => tool.promptGuidelines ?? []).join('\n');
+    expect(guidance).toContain('declarative facts');
+    expect(guidance).toContain('reported capacity');
+    expect(guidance).toContain('keep existing valid facts');
     expect(tools.map((t) => t.name)).toEqual([
       'memory_add',
       'memory_replace',
@@ -146,5 +150,63 @@ describe('createMemoryTools', () => {
     const userRead = (await runTool(read!, { target: 'user' })) as { entries: string[] };
     expect(memRead.entries).toEqual(['memo only']);
     expect(userRead.entries).toEqual(['profile only']);
+  });
+
+  it('leaves an existing fact unchanged when the same fact is saved again', async () => {
+    const store = freshStore();
+    await store.loadFromDisk();
+    const [add, , , read] = createMemoryTools(store);
+    const fact = { target: 'user', content: 'User prefers detailed explanations.' };
+    await runTool(add!, fact);
+    expect(await runTool(add!, fact)).toMatchObject({ success: true, entryCount: 1 });
+    expect(await runTool(read!, { target: 'user' })).toMatchObject({ entries: [fact.content] });
+  });
+
+  it('preserves existing facts when an add or replacement exceeds capacity', async () => {
+    const store = new MemoryStore({ dir: path.join(TEST_ROOT, 'capacity'), userCharLimit: 50 });
+    await store.loadFromDisk();
+    const [add, replace, , read] = createMemoryTools(store);
+    const original = 'User prefers detailed explanations.';
+    await runTool(add!, { target: 'user', content: original });
+    expect(
+      await runTool(add!, { target: 'user', content: 'User lives in Shanghai.' }),
+    ).toMatchObject({ success: false });
+    expect(
+      await runTool(replace!, {
+        target: 'user',
+        oldText: 'detailed',
+        newContent: `${original} User lives in Shanghai.`,
+      }),
+    ).toMatchObject({ success: false });
+    expect(await runTool(read!, { target: 'user' })).toMatchObject({ entries: [original] });
+  });
+
+  it('recovers an ambiguous replacement by reading and selecting a unique match', async () => {
+    const store = freshStore();
+    await store.loadFromDisk();
+    const [add, replace, , read] = createMemoryTools(store);
+    await runTool(add!, { target: 'user', content: 'User prefers dark mode in the editor.' });
+    await runTool(add!, { target: 'user', content: 'User prefers dark mode in the terminal.' });
+    expect(
+      await runTool(replace!, {
+        target: 'user',
+        oldText: 'dark mode',
+        newContent: 'User prefers light mode in the editor.',
+      }),
+    ).toMatchObject({ success: false });
+    expect(await runTool(read!, { target: 'user' })).toMatchObject({ entryCount: 2 });
+    expect(
+      await runTool(replace!, {
+        target: 'user',
+        oldText: 'in the editor',
+        newContent: 'User prefers light mode in the editor.',
+      }),
+    ).toMatchObject({ success: true });
+    expect(await runTool(read!, { target: 'user' })).toMatchObject({
+      entries: [
+        'User prefers light mode in the editor.',
+        'User prefers dark mode in the terminal.',
+      ],
+    });
   });
 });

@@ -20,13 +20,13 @@ const TEAMWORK_TOOL_NAMES = new Set<string>(TEAMWORK_TOOL_ORDER);
 
 const TEAMWORK_GUIDANCE = [
   '<teamwork-guidance>',
-  'You are working in a shared project tracker (teamwork) where humans and other agents collaborate. Use the issue_* and project_* tools to keep that shared space in sync.',
+  'Use the shared project tracker when the user requests tracker work or has authorized coordination for the current task. Tool availability alone does not authorize comments, issue creation, or status changes. A read-only review stays read-only.',
   '',
-  'Before starting non-trivial work, check whether a relevant issue already exists (issue_list / issue_get) — to avoid duplicating work another collaborator has picked up.',
+  'For authorized tracker work, before starting non-trivial work, check whether a relevant issue already exists (issue_list / issue_get) — to avoid duplicating work another collaborator has picked up.',
   '',
-  'When you reach meaningful progress, hit a blocker, or need input from a collaborator, leave a comment on the relevant issue (issue_comment). Comments are how humans and other agents observe what you are doing.',
+  'Within the authorized coordination scope, when you reach meaningful progress, hit a blocker, or need input from a collaborator, leave a comment on the relevant issue (issue_comment). Comments are how humans and other agents observe what you are doing.',
   '',
-  'When you finish work that an issue describes, update its status (issue_update). An issue left in an outdated state misleads other collaborators.',
+  'When completion is verified and issue updates are authorized, update its status (issue_update). An issue left in an outdated state misleads other collaborators.',
   '',
   'The tracker is for cross-collaborator coordination, not for tracking your own session-local TODOs. Do not file an issue just to remind yourself of something within the current conversation.',
   '</teamwork-guidance>',

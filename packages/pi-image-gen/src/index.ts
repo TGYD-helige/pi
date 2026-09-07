@@ -368,7 +368,7 @@ export function buildImageToolParameters(caps: ImageToolCapabilities) {
 export function buildImageGuidelines(caps: ImageToolCapabilities): string[] {
   const showN = !caps.model || caps.model.nMax > 1;
   const guidelines = [
-    'For best results, read the `image-gen` skill bundled with this package before using image_generate; it contains the prompt-shaping workflow.',
+    'Read the `image-gen` skill bundled with this package before using image_generate; it contains the prompt-shaping workflow.',
     'Use image_generate for bitmap assets: photos, illustrations, textures, sprites, product/UI mockups, concept art. Do NOT use it for icons, logos, or diagrams that should match existing repo-native SVG/vector/CSS/canvas assets — edit or write those directly instead.',
     'Generate vs edit: with no `image`, or when `image` entries are only style/composition/mood references, this is a fresh generation. To modify an existing image while preserving most of it, pass that image and describe the change as an edit.',
     ...(showN
@@ -390,7 +390,7 @@ export function buildImageGuidelines(caps: ImageToolCapabilities): string[] {
     );
   }
   guidelines.push(
-    'The active model is fixed in settings — there is no `model` parameter. If generation fails on model/size, run /image-gen list and tell the user which knob (defaultModel or size) to adjust.',
+    'The active model is fixed in settings — there is no `model` parameter. If generation fails on model/size, run /image-gen list and tell the user which supported setting or parameter to adjust.',
   );
   return guidelines;
 }

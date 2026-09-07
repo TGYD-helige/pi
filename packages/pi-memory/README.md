@@ -29,7 +29,7 @@ Four LLM-callable tools (separate, not action-multiplexed):
 
 | Tool             | Purpose                                                                  |
 |------------------|--------------------------------------------------------------------------|
-| `memory_add`     | Append a new entry. Rejects empty / duplicate / over-limit / threat content. |
+| `memory_add`     | Append a new entry. Exact duplicates are successful no-ops; empty, over-limit, and threat content is rejected. |
 | `memory_replace` | Update an existing entry by short unique substring (`oldText`).          |
 | `memory_remove`  | Delete an entry by short unique substring (`oldText`).                   |
 | `memory_read`    | Return live entries, count, and `<percent>% — <chars>/<limit>` usage string. |
@@ -142,7 +142,7 @@ On session start, pi-memory checks whether enough Pi session history has accumul
 
 2. **Gate and lock** — Each run checks whether enough time and turns have elapsed, then takes a cross-process lock so multiple Pi hosts cannot dream concurrently.
 
-3. **Consolidation** — An agentic loop (using pi-agent-core) reviews recent Pi sessions and updates `MEMORY.md`/`USER.md` via the memory tools. Follows a 4-phase prompt: Orient → Gather → Consolidate → Prune.
+3. **Consolidation** — An agentic loop (using pi-agent-core) reviews recent Pi sessions and updates `MEMORY.md`/`USER.md` via the memory tools. Follows a 4-phase prompt: Orient → Gather recent signal → Consolidate → Verify and report.
 
 ### Configuration
 

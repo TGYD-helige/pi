@@ -20,6 +20,7 @@
 import { Agent, type AgentTool } from '@earendil-works/pi-agent-core';
 import { streamSimple } from '@earendil-works/pi-ai/compat';
 import { ModelRegistry, ModelRuntime } from '@earendil-works/pi-coding-agent';
+import { MEMORY_GUIDANCE } from './guidance.js';
 import type { MemoryStore } from './store.js';
 import { createMemoryTools } from './tools.js';
 
@@ -86,24 +87,16 @@ const MAX_CONTEXT_CHARS = 4000;
 /** Hard cap on sub-agent turns to prevent runaway loops. */
 const MAX_AGENT_TURNS = 8;
 
-const REVIEW_SYSTEM_PROMPT = `You are a background memory reviewer. You analyze recent conversations and save any durable facts the main agent missed.
+const REVIEW_SYSTEM_PROMPT = `You are a background memory reviewer. Save supported durable facts the main agent missed.
 
-You have access to memory_read, memory_add, memory_replace, and memory_remove tools.
+${MEMORY_GUIDANCE}
 
-WORKFLOW:
-1. First call memory_read for both targets to see current state and capacity.
-2. Identify new facts from the conversation worth saving (preferences, corrections, environment, conventions).
-3. For each fact: if it updates an existing entry, use memory_replace. If it's new, use memory_add. If an entry is now stale/wrong, use memory_remove.
-4. When done (or nothing to save), respond with a brief summary of actions taken.
+## Review workflow
 
-RULES:
-- Only save facts that will matter in future sessions.
-- Do NOT save task progress, PRs, commits, or anything stale in a week.
-- Write entries as declarative facts, not instructions. "User prefers tabs" not "Always use tabs".
-- Prefer "user" target for personal preferences, habits, identity. Use "memory" for project/environment/tool facts.
-- Respect capacity limits — if full, replace or remove before adding.
-- Be conservative: when in doubt, don't save. Only save what clearly reduces future user corrections.
-- Keep each entry concise (under 120 characters when possible).`;
+1. Call memory_read for both targets to see what the main agent has already saved and how much space remains.
+2. Review the recent conversation for durable preferences, corrections, environment facts and conventions. Compare each candidate with existing memory; a one-off request alone is not a lasting preference.
+3. Keep task progress in history and reusable procedures out of memory. Save missing facts with memory_add, update existing facts with memory_replace, and use memory_remove only when evidence establishes that an entry is wrong, redundant or superseded. Follow the shared capacity and preservation rules above.
+4. Read back changed targets. Finish when each candidate is saved, already represented, excluded by the policy, or blocked by capacity; briefly report actions and any blocker. A failed write is not a saved fact: inspect the error before a corrected retry and report unresolved failures. If nothing was missed, leave memory unchanged.`;
 
 // ---------------------------------------------------------------------------
 // Runner factory

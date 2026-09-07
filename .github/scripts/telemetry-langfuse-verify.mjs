@@ -48,7 +48,6 @@ const POLL_INTERVAL_MS = 5_000;
 const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_PAGES = 20;
 const SERVICE_NAME = 'pi-telemetry-ci';
-const MODEL_NAME = 'deepseek-v4-flash';
 const MODEL_PROVIDER = 'deepseek-integration';
 
 // Non-empty trimmed value or fallback — `''` is falsy, so `||` suffices.
@@ -112,7 +111,7 @@ export function evaluateTrace(observations, codeword, scenario = 'basic') {
     const modelParameters = generation.modelParameters ?? {};
     const usageDetails = generation.usageDetails ?? {};
     const costDetails = generation.costDetails ?? {};
-    need(generation.providedModelName === MODEL_NAME, `${label} has the wrong model`);
+    need(generation.providedModelName === envOr(process.env.PI_INTEGRATION_MODEL, 'deepseek-v4-flash'), `${label} has the wrong model`);
     need(modelParameters.provider === MODEL_PROVIDER, `${label} has the wrong model provider`);
     need(
       isCount(usageDetails.input) && isCount(usageDetails.output) && isCount(usageDetails.total),

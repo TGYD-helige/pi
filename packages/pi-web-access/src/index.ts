@@ -180,23 +180,18 @@ export default function piWebToolExtension(pi: ExtensionAPI): void {
         name: 'web_fetch',
         label: 'WebFetch',
         description: [
-          '- Fetches content from a specified URL and processes it using a prompt',
-          '- Takes a URL and a prompt as input',
-          '- Fetches the URL content, converts HTML to markdown',
-          '- Processes the content with the prompt using a small, fast model',
-          "- Returns the model's response about the content",
-          '- Use this tool when you need to retrieve and analyze web content',
-          '',
-          'Usage notes:',
-          '  - The URL must be a public HTTP(S) URL; loopback, private, link-local, metadata, credentialed, and unsafe redirect destinations are rejected',
-          '  - The prompt should describe what information you want to extract from the page',
-          '  - Results may be summarized if the content is very large',
+          'Retrieve content from a public HTTP(S) URL.',
+          settings.fetch?.summary
+            ? 'The configured summary model extracts or summarizes the fetched content according to prompt; returns its response.'
+            : 'Returns fetched content directly; prompt is not applied because no summary model is configured. Analyze the returned content yourself.',
+          'Loopback, private, link-local, metadata, credentialed, and unsafe redirect destinations are rejected.',
+          'Large results may be truncated; use the source URL when more context is needed.',
         ].join('\n'),
         parameters: Type.Object({
           url: Type.String({ description: 'The public HTTP(S) URL to fetch content from.' }),
           prompt: Type.String({
             description:
-              'The prompt describing what information to extract or summarize from the page.',
+              'Extraction instructions for the configured summary model. Required for compatibility; ignored when summary is disabled.',
           }),
         }),
         async execute(

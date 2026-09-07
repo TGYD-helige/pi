@@ -8,15 +8,24 @@
       "expectations": [
         {
           "text": "Uses the image generation tool",
-          "includes": ["image_generate"]
+          "includes": [
+            "image_generate"
+          ]
         },
         {
           "text": "Makes separate calls for distinct assets",
-          "includes_any": ["three separate", "3 separate", "one call per asset", "separate call for each"]
+          "includes_any": [
+            "three separate",
+            "3 separate",
+            "one call per asset",
+            "separate call for each"
+          ]
         },
         {
           "text": "Explains that n represents variants",
-          "includes": ["variants"]
+          "includes": [
+            "variants"
+          ]
         }
       ]
     },
@@ -27,15 +36,25 @@
       "expectations": [
         {
           "text": "Labels the portrait as the edit target",
-          "includes": ["portrait.png", "edit target"]
+          "includes": [
+            "portrait.png",
+            "edit target"
+          ]
         },
         {
           "text": "Labels the lighting image as a style reference",
-          "includes": ["lighting.jpg", "style reference"]
+          "includes": [
+            "lighting.jpg",
+            "style reference"
+          ]
         },
         {
           "text": "Preserves the requested invariants",
-          "includes": ["face", "pose", "clothing"]
+          "includes": [
+            "face",
+            "pose",
+            "clothing"
+          ]
         }
       ]
     },
@@ -46,15 +65,90 @@
       "expectations": [
         {
           "text": "Keeps the icon as SVG or vector source",
-          "includes_any": ["existing SVG", "SVG icon", "vector"]
+          "includes_any": [
+            "existing SVG",
+            "SVG icon",
+            "vector"
+          ]
         },
         {
           "text": "Preserves currentColor behavior",
-          "includes": ["currentColor"]
+          "includes": [
+            "currentColor"
+          ]
         },
         {
           "text": "Rejects raster generation for this task",
-          "includes_any": ["do not use image_generate", "should not use image_generate", "not use raster", "avoid raster"]
+          "includes_any": [
+            "do not use image_generate",
+            "should not use image_generate",
+            "not use raster",
+            "avoid raster"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "bitmap-tool-trace",
+      "mode": "tools",
+      "prompt": "Generate one wide 16:9 bitmap of a paper boat for a website hero. Use the active model and save the result.",
+      "expected_output": "Read image-gen before one image_generate call using aspectRatio, not size or n.",
+      "expectations": [
+        {
+          "text": "Read the image skill before generating",
+          "tool": "read",
+          "pathSuffix": "/SKILL.md",
+          "before": "image_generate",
+          "includes": [
+            "read"
+          ]
+        },
+        {
+          "text": "Generate exactly one wide bitmap with the current schema",
+          "tool": "image_generate",
+          "args": {
+            "aspectRatio": "16:9"
+          },
+          "count": 1,
+          "includes": [
+            "image_generate"
+          ]
+        },
+        {
+          "text": "Use no video tools",
+          "forbiddenTools": [
+            "video_generate",
+            "video_render",
+            "video_compose"
+          ],
+          "excludes": [
+            "video_generate",
+            "video_render",
+            "video_compose"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "svg-no-generation-trace",
+      "mode": "tools",
+      "prompt": "An existing monochrome SVG icon set needs a 16px settings icon using currentColor. Explain how to extend its source. Do not edit files.",
+      "expected_output": "Keep vector source and call no generation tools.",
+      "expectations": [
+        {
+          "text": "Keep the source-native boundary",
+          "forbiddenTools": [
+            "image_generate",
+            "video_generate",
+            "video_render",
+            "video_compose"
+          ],
+          "excludes": [
+            "image_generate",
+            "video_generate",
+            "video_render",
+            "video_compose"
+          ]
         }
       ]
     }

@@ -61,7 +61,9 @@ describe('piTeamworkExtension Multica provider', () => {
         },
       },
     );
-    await beforeAgentStartHandler({ systemPrompt: '' });
+    const guidance = await beforeAgentStartHandler({ systemPrompt: '' });
+    expect(guidance.systemPrompt).toContain('A read-only review stays read-only');
+    expect(guidance.systemPrompt).toContain('Tool availability alone does not authorize');
 
     expect(toolNames).toEqual([
       'workspace_list',

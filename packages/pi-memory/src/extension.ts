@@ -7,25 +7,12 @@ import {
   type ExtractionRunner,
 } from './background-extraction.js';
 import { type DreamingConfig, runDream } from './dream.js';
+import { MEMORY_GUIDANCE } from './guidance.js';
 import { MemoryStore } from './store.js';
 import { createMemoryTools } from './tools.js';
 
 const SETTINGS_KEY = 'pi-memory';
 const STATUS_KEY = 'pi-memory';
-
-const MEMORY_GUIDANCE = [
-  '# Memory Guidance',
-  '',
-  'You have persistent memory across sessions via the memory_add / memory_replace / memory_remove / memory_read tools.',
-  'Save durable facts: user preferences, environment details, tool quirks, and stable conventions.',
-  'Memory is injected into every turn, so keep it compact and focused on facts that will still matter later.',
-  '',
-  'Prioritize what reduces future user steering — the most valuable memory is one that prevents the user from having to correct or remind you again. User preferences and recurring corrections matter more than procedural task details.',
-  '',
-  "Do NOT save task progress, session outcomes, completed-work logs, or temporary TODO state. Specifically: do not record PR numbers, issue numbers, commit SHAs, 'fixed bug X', 'submitted PR Y', 'Phase N done', file counts, or any artifact that will be stale in 7 days. If a fact will be stale in a week, it does not belong in memory.",
-  '',
-  "Write memories as declarative facts, not instructions to yourself. 'User prefers concise responses' ✓ — 'Always respond concisely' ✗. 'Project uses pytest with xdist' ✓ — 'Run tests with pytest -n 4' ✗. Imperative phrasing gets re-read as a directive in later sessions and can cause repeated work or override the user's current request.",
-].join('\n');
 
 export type PiMemoryExtensionConfig = {
   /** Directory containing MEMORY.md / USER.md. Default: `<agentDir>/memories`. */
@@ -150,7 +137,10 @@ export default function memoryExtension(
       await store.loadFromDisk();
     }
     const snapshot = store?.formatAllForSystemPrompt() ?? '';
-    const block = snapshot ? `${MEMORY_GUIDANCE}\n\n${snapshot}` : MEMORY_GUIDANCE;
+    const block = [event.systemPrompt?.includes(MEMORY_GUIDANCE) ? '' : MEMORY_GUIDANCE, snapshot]
+      .filter(Boolean)
+      .join('\n\n');
+    if (!block) return;
     return {
       systemPrompt: event.systemPrompt ? `${event.systemPrompt}\n\n${block}` : block,
     };

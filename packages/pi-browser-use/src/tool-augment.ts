@@ -3,7 +3,7 @@
 const DESCRIPTION_HINTS: Record<string, string> = {
   fill_form:
     ' Fills multiple standard HTML form fields at once. Same limitations as fill — does not work on canvas/custom widgets.',
-  fill: ' Fills standard HTML form fields (<input>, <textarea>, <select>) by uid. Does NOT work on custom/canvas-based widgets (e.g., Google Sheets cells, Notion blocks). If fill times out or fails, click the element first then use press_key with individual characters instead.',
+  fill: ' Fills standard HTML form fields (<input>, <textarea>, <select>) by uid. Does NOT work on custom/canvas-based widgets (e.g., Google Sheets cells, Notion blocks). If fill times out or fails, click the element first then use type_text to enter the text.',
   click_at:
     ' Clicks at exact pixel coordinates (x, y). Use when you have specific coordinates for visual elements.',
   click:

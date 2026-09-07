@@ -21,9 +21,11 @@ describe('consolidation', () => {
       expect(CONSOLIDATION_SYSTEM_PROMPT).toContain('memory_remove');
     });
 
-    it('mentions character limits', () => {
-      expect(CONSOLIDATION_SYSTEM_PROMPT).toContain('2200');
-      expect(CONSOLIDATION_SYSTEM_PROMPT).toContain('1375');
+    it('uses live capacity and preserves factual memory boundaries', () => {
+      expect(CONSOLIDATION_SYSTEM_PROMPT).toContain('memory_read');
+      expect(CONSOLIDATION_SYSTEM_PROMPT).toContain('declarative facts');
+      expect(CONSOLIDATION_SYSTEM_PROMPT).toContain('capacity');
+      expect(CONSOLIDATION_SYSTEM_PROMPT).not.toMatch(/2200|1375|ZERO information loss/);
     });
   });
 

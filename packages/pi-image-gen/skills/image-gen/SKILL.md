@@ -81,13 +81,14 @@ Start from a clean base prompt, then make **one targeted change at a time**. Aft
 
 ## Parameters
 
-- `prompt` (required) — what to draw or how to edit.
-- `image` — array of reference/target image paths or URLs.
-- `n` — 1–8 variants of the one prompt (default 1).
-- `size` — e.g. `"1024x1024"`. Provider-specific; some models require a minimum (Seedream ≥ 4.5 needs 2K+, so `1024x1024` fails there).
-- `quality` — one of `"low"` / `"medium"` / `"high"` / `"auto"` (`"low"` for fast drafts/thumbnails, `"high"` for final assets or dense text). This parameter is **provider-conditional**: it only exists in the tool schema for a built-in gpt-image route — the built-in OpenAI provider on a `gpt-image-*` model, or an OpenRouter route whose model id is gpt-image (e.g. `openrouter/openai/gpt-image-2`). It is absent for Gemini, DashScope/Qwen, Ark/Seedream (Seedream varies quality by `size` resolution tier instead), for non-gpt-image routes like `openai/dall-e-3` or an OpenRouter route to a non-OpenAI model, and for any custom provider — even OpenAI-compatible ones, since their quality vocabulary may differ (e.g. DALL·E 3 uses `standard`/`hd`). If you don't see a `quality` parameter, the active provider has no such knob; do not try to force it.
-- `filename` — output filename prefix (no extension). Reusing a name does not overwrite an earlier file — a sibling `-v2` is written instead.
-- `outputDir` — override the configured output dir for this call.
+Use only parameters exposed by the current image_generate schema; its descriptions are the authority for the active model's values, reference limits and count limits.
+
+- `prompt` describes the image or edit; `image` supplies labeled targets/references.
+- When `n` is offered, it requests variants of one prompt within the current model's documented limit. Distinct assets still require separate calls.
+- Set `size` only when offered. Models with `aspectRatio` and optional `imageSize` use those instead; copy supported values from the schema.
+- Use `quality` only when offered: lower for drafts, higher for final assets or dense text. Resolution tiers and quality are different controls.
+- `filename` is a prefix without an extension; collisions produce a sibling such as `-v2`. Use the returned paths.
+- `outputDir` overrides the configured directory for this call.
 
 ## Reporting results
 

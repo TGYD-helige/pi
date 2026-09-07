@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import memoryExtension from '../extension.js';
+import { MEMORY_GUIDANCE } from '../guidance.js';
 import { MemoryStore } from '../store.js';
 
 const TEST_ROOT = path.join(tmpdir(), 'pi-memory-command-test');
@@ -88,6 +89,15 @@ describe('prompt snapshot', () => {
     expect(result).toEqual({
       systemPrompt: expect.stringContaining('late memory fact'),
     });
+    expect(result).toEqual({ systemPrompt: expect.stringContaining(MEMORY_GUIDANCE) });
+    const withToolGuidance = await eventHandlers.before_agent_start?.[0]?.(
+      { systemPrompt: MEMORY_GUIDANCE },
+      ctx,
+    );
+    expect(withToolGuidance).toEqual({ systemPrompt: expect.stringContaining('late memory fact') });
+    expect(
+      (withToolGuidance as { systemPrompt: string }).systemPrompt.split(MEMORY_GUIDANCE),
+    ).toHaveLength(2);
   });
 });
 

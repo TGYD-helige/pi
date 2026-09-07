@@ -21,12 +21,12 @@ Search the web for information. Registered when a keyed search provider is avail
 
 ### `web_fetch`
 
-Fetch a URL and process its content with a prompt. Only registered when `fetch.provider` or `fetch.summary` is configured.
+Fetch a URL and return its content. When `fetch.summary` is configured, the summary model processes the content using `prompt`; otherwise the fetched content is returned directly and `prompt` is retained for compatibility but ignored. Only registered when `fetch.provider` or `fetch.summary` is configured.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `url` | string | yes | Public HTTP(S) URL; private, loopback, link-local, metadata, credentialed, and unsafe redirect destinations are rejected |
-| `prompt` | string | yes | What information to extract or summarize |
+| `prompt` | string | yes | Instructions for the configured summary model; retained for compatibility but ignored when `fetch.summary` is not configured |
 
 ### `x_search`
 

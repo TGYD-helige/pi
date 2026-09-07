@@ -65,10 +65,10 @@ export function buildEvaluateUserPrompt(
  * Adapted from CC's `system-reminder-session-stop-hook-active`.
  */
 export function buildActivationMessage(condition: string): string {
-  return `A goal is now active with condition: "${condition}". Briefly acknowledge the goal, then immediately start (or continue) working toward it — treat the condition itself as your directive and do not pause to ask the user what to do. Work will be blocked from stopping until the condition holds. It auto-clears once the condition is met — do not tell the user to run \`/goal clear\` after success; that's only for clearing a goal early.`;
+  return `A goal is now active with condition: "${condition}". Briefly acknowledge the goal, then immediately start (or continue) working toward it — pursue the condition within the existing authorization. A goal does not grant new permissions. If blocked by missing permission or user decision, report the blocker and continue only independent authorized work. Work will be blocked from stopping until the condition holds. It auto-clears once the condition is met — do not tell the user to run \`/goal clear\` after success; that's only for clearing a goal early.`;
 }
 
 /** Injected after a not-yet-met evaluation to drive the next round of work. */
 export function buildContinueMessage(condition: string, reason: string): string {
-  return `The goal condition is not yet met: "${condition}". ${reason} Continue working toward the condition now — do not stop until it holds.`;
+  return `The goal condition is not yet met: "${condition}". ${reason} Continue working toward the condition within the existing authorization. If blocked by missing permission or user decision, report the blocker and continue only independent authorized work; the goal does not grant new permissions.`;
 }
