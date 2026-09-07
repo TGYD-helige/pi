@@ -98,7 +98,10 @@
           "text": "Read the image skill before generating",
           "tool": "read",
           "pathSuffix": "/SKILL.md",
-          "before": "image_generate"
+          "before": "image_generate",
+          "includes": [
+            "read"
+          ]
         },
         {
           "text": "Generate exactly one wide bitmap with the current schema",
@@ -106,11 +109,19 @@
           "args": {
             "aspectRatio": "16:9"
           },
-          "count": 1
+          "count": 1,
+          "includes": [
+            "image_generate"
+          ]
         },
         {
           "text": "Use no video tools",
           "forbiddenTools": [
+            "video_generate",
+            "video_render",
+            "video_compose"
+          ],
+          "excludes": [
             "video_generate",
             "video_render",
             "video_compose"
@@ -127,6 +138,12 @@
         {
           "text": "Keep the source-native boundary",
           "forbiddenTools": [
+            "image_generate",
+            "video_generate",
+            "video_render",
+            "video_compose"
+          ],
+          "excludes": [
             "image_generate",
             "video_generate",
             "video_render",

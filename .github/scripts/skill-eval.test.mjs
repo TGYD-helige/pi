@@ -388,6 +388,18 @@ it('validates every bundled skill eval set', () => {
   }
 });
 
+it('keeps tool cases readable by the legacy base validator without weakening trace grading', () => {
+  for (const name of ['image', 'video']) {
+    const data = JSON.parse(readFileSync(new URL(`../../packages/pi-${name}-gen/skills/${name}-gen/evals.json`, import.meta.url), 'utf8'));
+    for (const item of data.evals.filter((item) => item.mode === 'tools')) {
+      for (const expected of item.expectations) {
+        assert.ok(expected.includes?.length || expected.includes_any?.length || expected.excludes?.length);
+        if (expected.tool) assert.equal(gradeTrace([], [expected]).score, 0);
+      }
+    }
+  }
+});
+
 it('uses trusted base code, comments before enforcing, and never executes PR code', () => {
   const workflow = readFileSync(
     fileURLToPath(new URL('../workflows/skill-eval.yml', import.meta.url)),
