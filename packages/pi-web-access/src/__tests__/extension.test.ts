@@ -24,7 +24,7 @@ const mockLoadSettings = vi.mocked(loadWebToolSettings);
 const mockSearch = vi.mocked(search);
 
 function createMockPi() {
-  const tools: Array<{ name: string }> = [];
+  const tools: Array<{ name: string; description: string }> = [];
   const commands: Map<string, unknown> = new Map();
   // biome-ignore lint/complexity/noBannedTypes: mock helper
   const listeners: Record<string, Function> = {};
@@ -32,7 +32,7 @@ function createMockPi() {
     tools,
     commands,
     listeners,
-    registerTool(tool: { name: string }) {
+    registerTool(tool: { name: string; description: string }) {
       tools.push(tool);
     },
     registerCommand(name: string, opts: unknown) {
@@ -101,6 +101,9 @@ describe('piWebToolExtension - tool registration', () => {
     await pi.triggerSessionStart();
 
     expect(pi.tools.map((t) => t.name)).toContain('web_fetch');
+    expect(pi.tools.find((t) => t.name === 'web_fetch')!.description).toContain(
+      'prompt is not applied',
+    );
   });
 
   it('registers web_fetch when fetch.summary is configured (no fetch.provider)', async () => {
@@ -113,6 +116,9 @@ describe('piWebToolExtension - tool registration', () => {
     await pi.triggerSessionStart();
 
     expect(pi.tools.map((t) => t.name)).toContain('web_fetch');
+    expect(pi.tools.find((t) => t.name === 'web_fetch')!.description).toContain(
+      'configured summary model',
+    );
   });
 
   it('does not register web_fetch when fetch is empty', async () => {
