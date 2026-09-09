@@ -39,8 +39,26 @@ const QWEN3_SIZE_RANGE: NonNullable<ImageModelCapabilities['sizeRange']> = {
 
 const MB = 1024 * 1024;
 
+// Shared by gpt-image-2 and both GPT Image 2.5 tiers (same parameter surface).
+const GPT_IMAGE_CAPABILITIES: ImageModelCapabilities = {
+  sizeRange: {
+    separator: 'x',
+    allowAuto: true,
+    minArea: 655_360,
+    maxArea: 8_294_400,
+    minRatio: 1 / 3,
+    maxRatio: 3,
+    divisibleBy: 16,
+    maxEdge: 3840,
+  },
+  nMax: 10,
+  maxReferenceImages: 16,
+  inputFormats: ['PNG', 'WEBP', 'JPEG'],
+  inputMaxBytes: 50 * MB,
+};
+
 // Gemini aspect-ratio vocabularies per https://ai.google.dev/gemini-api/docs/image-generation
-// (2026-08): the classic 10, and the 3.1 set adding extreme ratios.
+// (2026-09): the classic 10, and the 3.1 set adding extreme ratios.
 const GEMINI_ASPECTS_10 = ['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9'];
 const GEMINI_ASPECTS_14 = [
   '1:1',
@@ -60,38 +78,36 @@ const GEMINI_ASPECTS_14 = [
 ];
 
 /**
- * Capability values reflect the official provider docs as of 2026-08 and are
- * PENDING live verification where noted:
- * - gpt-image-2: https://developers.openai.com/api/docs/guides/image-generation
+ * Capability values reflect the official provider docs as of 2026-09:
+ * - GPT Image 2.5 / 2: https://developers.openai.com/api/docs/guides/image-generation
  * - Gemini: https://ai.google.dev/gemini-api/docs/image-generation
  * - Qwen 3.0: https://help.aliyun.com/zh/model-studio/qwen-image-generation-and-editing-api-reference
  * - Qwen 2.0: https://help.aliyun.com/zh/model-studio/qwen-image-api (+ qwen-image-edit-api)
  * - Seedream: https://www.volcengine.com/docs/82379/1824121 (+ /1666946)
  */
 export const BUILT_IN_MODELS: BuiltInModelEntry[] = [
-  // OpenAI image generation. gpt-image-2 accepts arbitrary WxH beyond the
+  // OpenAI image generation. GPT Image 2.5 (2026-09-08) is the current line —
+  // flare is the default tier, sunburst the precision tier; both share
+  // gpt-image-2's parameter surface. All accept arbitrary WxH beyond the
   // standard sizes: both edges divisible by 16, ratio ≤ 3:1, total pixels
   // 655,360–8,294,400, longest edge ≤ 3840; "auto" lets the model pick.
-  // Reference images: png/webp/jpg, ≤ 50MB each, up to 16.
+  // Reference images: png/webp/jpg, ≤ 50MB each, up to 16. gpt-image-2 itself
+  // is still fully supported with no announced shutdown.
+  {
+    id: 'gpt-image-2.5-flare',
+    aliases: ['gpt-image-2.5'], // the generic 2.5 id points at the default tier
+    provider: 'openai',
+    capabilities: GPT_IMAGE_CAPABILITIES,
+  },
+  {
+    id: 'gpt-image-2.5-sunburst',
+    provider: 'openai',
+    capabilities: GPT_IMAGE_CAPABILITIES,
+  },
   {
     id: 'gpt-image-2',
     provider: 'openai',
-    capabilities: {
-      sizeRange: {
-        separator: 'x',
-        allowAuto: true,
-        minArea: 655_360,
-        maxArea: 8_294_400,
-        minRatio: 1 / 3,
-        maxRatio: 3,
-        divisibleBy: 16,
-        maxEdge: 3840,
-      },
-      nMax: 10,
-      maxReferenceImages: 16,
-      inputFormats: ['PNG', 'WEBP', 'JPEG'],
-      inputMaxBytes: 50 * MB,
-    },
+    capabilities: GPT_IMAGE_CAPABILITIES,
   },
 
   // Google Gemini "Nano Banana" image generation. Gemini has no pixel-size
@@ -100,8 +116,10 @@ export const BUILT_IN_MODELS: BuiltInModelEntry[] = [
   //   Nano Banana Pro      → gemini-3-pro-image
   //   Nano Banana 2        → gemini-3.1-flash-image
   //   Nano Banana 2 Lite   → gemini-3.1-flash-lite-image
-  //   Nano Banana          → gemini-2.5-flash-image
-  // Input formats PNG/JPEG/WEBP/HEIC/HEIF; inline requests cap at 20MB total.
+  //   Nano Banana          → gemini-2.5-flash-image (deprecated — shuts down
+  //     2026-10-02; Google recommends migrating to gemini-3.1-flash-lite-image)
+  // Input formats PNG/JPEG/WEBP/HEIC/HEIF; inline requests cap at 100MB total
+  // (raised from 20MB in 2026-01).
   {
     id: 'gemini-3-pro-image',
     aliases: ['nano-banana-pro'],
@@ -112,7 +130,7 @@ export const BUILT_IN_MODELS: BuiltInModelEntry[] = [
       nMax: 8,
       maxReferenceImages: 14,
       inputFormats: GEMINI_INPUT_FORMATS,
-      inputMaxBytes: 20 * MB,
+      inputMaxBytes: 100 * MB,
     },
   },
   {
@@ -121,13 +139,12 @@ export const BUILT_IN_MODELS: BuiltInModelEntry[] = [
     provider: 'gemini',
     capabilities: {
       aspectRatios: GEMINI_ASPECTS_14,
-      // The 512px tier is documented for 3.1 Flash — PENDING live verification
-      // of the exact literal ("512px" vs "0.5K").
+      // The only Nano Banana model with a sub-1K tier: "512px" (aka 0.5K).
       imageSizes: ['512px', '1K', '2K', '4K'],
       nMax: 8,
       maxReferenceImages: 14,
       inputFormats: GEMINI_INPUT_FORMATS,
-      inputMaxBytes: 20 * MB,
+      inputMaxBytes: 100 * MB,
     },
   },
   {
@@ -135,12 +152,13 @@ export const BUILT_IN_MODELS: BuiltInModelEntry[] = [
     aliases: ['nano-banana-2-lite'],
     provider: 'gemini',
     capabilities: {
-      aspectRatios: GEMINI_ASPECTS_14,
+      // Lite does not support the extreme 1:4/4:1/1:8/8:1 ratios.
+      aspectRatios: GEMINI_ASPECTS_10,
       imageSizes: ['1K'], // fixed at 1K — the schema hides imageSize entirely
       nMax: 8,
       maxReferenceImages: 14,
       inputFormats: GEMINI_INPUT_FORMATS,
-      inputMaxBytes: 20 * MB,
+      inputMaxBytes: 100 * MB,
     },
   },
   {
@@ -148,12 +166,12 @@ export const BUILT_IN_MODELS: BuiltInModelEntry[] = [
     aliases: ['nano-banana'],
     provider: 'gemini',
     capabilities: {
-      aspectRatios: GEMINI_ASPECTS_10,
       // No imageSize knob — fixed 1024px output. Works best with ≤ 3 inputs.
+      aspectRatios: GEMINI_ASPECTS_10,
       nMax: 8,
       maxReferenceImages: 3,
       inputFormats: GEMINI_INPUT_FORMATS,
-      inputMaxBytes: 20 * MB,
+      inputMaxBytes: 100 * MB,
     },
   },
 
