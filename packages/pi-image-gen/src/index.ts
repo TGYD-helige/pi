@@ -286,7 +286,8 @@ export function buildImageToolParameters(caps: ImageToolCapabilities) {
     : null;
   return Type.Object({
     prompt: Type.String({
-      description: 'Text prompt describing what to generate or how to edit.',
+      description:
+        'Describe the subject, intended use, composition, and constraints. For edits, specify what changes and what must stay unchanged.',
     }),
     image: Type.Optional(
       Type.Array(Type.String(), {
@@ -344,7 +345,7 @@ export function buildImageToolParameters(caps: ImageToolCapabilities) {
           quality: Type.Optional(
             StringEnum(caps.quality, {
               description:
-                'Quality level honored by the active provider (OpenAI gpt-image / OpenRouter): "low" for fast drafts/thumbnails, "medium", "high" for final assets or dense text, or "auto".',
+                'Quality level honored by the active provider (OpenAI gpt-image / OpenRouter): "low", "medium", "high", or "auto". Start with the default or requested setting; adjust for observed detail or legibility problems.',
             }),
           ),
         }
@@ -377,11 +378,12 @@ export function buildImageGuidelines(caps: ImageToolCapabilities): string[] {
         ]
       : []),
     'For edits and multi-image conditioning, label each reference by role (e.g. "Image 1: edit target; Image 2: style reference") and restate invariants every iteration ("change only X; keep Y unchanged") to reduce drift.',
-    'For text inside an image, quote the exact string verbatim and specify placement; spell uncommon words letter-by-letter when accuracy matters.',
+    'Inspect generated images with an available image-viewing tool before claiming requirements passed; report what remains unverified if inspection is unavailable.',
+    'For text inside an image, quote the exact string verbatim, preserving capitalization and punctuation; specify placement, repetition count, and whether extra text is allowed. Spell uncommon words letter-by-letter when accuracy matters.',
   ];
   guidelines.push(
     caps.quality
-      ? 'Prefer one targeted change per iteration over rewriting the whole prompt. Use `quality: "low"` for fast drafts and a higher `quality` for final assets or dense text.'
+      ? 'Prefer one targeted change per iteration over rewriting the whole prompt. Start with the default or requested `quality`; adjust it for observed detail or legibility problems.'
       : 'Prefer one targeted change per iteration over rewriting the whole prompt.',
   );
   if (caps.model && hasAspectRatioKnob(caps.model)) {

@@ -23,6 +23,8 @@ This skill guides use of the `image_generate` tool from `@amaster.ai/pi-image-ge
 
 ## Before every call
 
+Use only parameters and values exposed by the current `image_generate` schema.
+
 1. **Intent — generate or edit?**
    - No `image`, or `image` entries used only as style/composition/mood references → **generate**.
    - Modify an existing image while preserving most of it → **edit** (pass that image).
@@ -31,6 +33,8 @@ This skill guides use of the `image_generate` tool from `@amaster.ai/pi-image-ge
    - `n` produces **variants of ONE prompt**, not distinct assets.
    - For several *different* assets, make **one `image_generate` call per asset**, each with its own prompt. Do not raise `n` to cover distinct subjects.
 3. **Inputs — what must the prompt preserve?** Collect exact text, constraints/avoid items, and every input image's role. Ask only when a missing detail blocks a usable result; otherwise proceed.
+
+Inspect input images with an available image-viewing tool before describing their details or deciding what to preserve. If viewing is unavailable, rely on the user's description and disclose that limitation.
 
 ## Prompt structure
 
@@ -54,6 +58,8 @@ Constraints: <must keep / must avoid>
 
 The labels are scaffolding, not a required form. Keep only the lines that materially improve the request.
 
+Describe visible choices rather than relying on mood words alone: framing, scale, materials, and light direction. For people, clarify gaze, pose, and interaction with objects when relevant. For website assets, derive crop and text-safe space from the actual layout; for photorealism, request a photograph and relevant real-world texture explicitly.
+
 ## Specificity policy
 
 - If the user's prompt is already **specific and detailed**, normalize it into a clean spec — do not add creative requirements it didn't ask for.
@@ -63,33 +69,31 @@ Allowed augmentation: composition/framing cues, polish-level or intended-use hin
 
 ## Text inside images
 
-- Put literal text in quotes or ALL CAPS; specify typography (style, size, color, placement).
+- Put literal text in quotes, preserving its language, capitalization, and punctuation; specify typography (style, size, color, placement).
+- State how many times each string should appear and whether extra text is allowed; for exact-copy tasks, use only the supplied wording.
 - Spell uncommon words letter-by-letter when accuracy matters; require verbatim rendering.
-- Where the model exposes a quality knob, use a higher `quality` for small text, dense infographics, legends, axes, and multi-font layouts.
+- Where the model exposes a quality knob, test a higher supported `quality` when small text, dense infographics, legends, axes, or multi-font layouts have observed legibility problems.
 
 ## Editing and multi-image conditioning
 
 - Label every input image by index and role: `Image 1: edit target`, `Image 2: style reference`. Do not assume every provided image is an edit target.
 - For edits, state invariants explicitly — `change only X; keep Y unchanged` — and **repeat them on every iteration** to reduce drift.
+- For pixel-identical preservation, use deterministic editing or composite the accepted edit into the original while preserving untouched pixels; prompting alone cannot guarantee this.
+- For a series, reuse an accepted character or product reference and state the features shared across assets.
 - For compositing, describe how images interact: `place the subject from Image 2 into Image 1; match lighting, perspective, and scale`.
-- To iterate on a previous result, pass its saved file path back as `image`.
-- Reference images must be a **file path** (absolute or relative to cwd) or an **http(s) URL**. Base64 and `data:` URIs are rejected — write bytes to a file first.
+- To iterate on a previous result, pass its saved file path back as `image` when it is inside cwd.
+- Reference images must be a **regular image file inside cwd** (absolute or relative path) or a **public http(s) URL**. Symlinks, Base64, and `data:` URIs are rejected — write bytes to a file under cwd first.
 
 ## Iterate deliberately
 
 Start from a clean base prompt, then make **one targeted change at a time**. After each output, inspect the subject, style, composition, text accuracy, and edit invariants before reporting success or iterating. Prefer a single focused follow-up over rewriting the whole prompt.
 
-## Parameters
+Open each output with an available image-viewing tool before judging it; a saved path alone does not establish inspection. Report unmet or unverified requirements when inspection or correction is unavailable. For information graphics, check factual relationships as well as labels; for transparent assets, inspect the actual alpha channel and edges rather than assuming a checkerboard means transparency. Base each correction on an observed defect, preserve satisfied details, and stop when the requested criteria pass.
 
-Use only parameters exposed by the current image_generate schema; its descriptions are the authority for the active model's values, reference limits and count limits.
-
-- `prompt` describes the image or edit; `image` supplies labeled targets/references.
-- When `n` is offered, it requests variants of one prompt within the current model's documented limit. Distinct assets still require separate calls.
-- Set `size` only when offered. Models with `aspectRatio` and optional `imageSize` use those instead; copy supported values from the schema.
-- Use `quality` only when offered: lower for drafts, higher for final assets or dense text. Resolution tiers and quality are different controls.
-- `filename` is a prefix without an extension; collisions produce a sibling such as `-v2`. Use the returned paths.
-- `outputDir` overrides the configured directory for this call.
+When a quality control is available, start with the default or requested setting. Adjust it for observed problems while keeping the prompt and other settings fixed for comparison; final delivery alone does not require a higher setting.
 
 ## Reporting results
 
-The tool result already contains a copy-pasteable markdown line per image (`![alt](/abs/path.png)`). Render each generated image inline in your reply so the UI can display it — do not paste the bare path. Always report the final saved path(s).
+The tool result already contains a copy-pasteable markdown line per image (`![alt](/abs/path.png)`). Render each generated image inline in your reply so the UI can display it — do not paste the bare path. Always report the returned saved path(s); filename collisions may change the actual filename.
+
+Use the user's destination when provided. For project-bound assets, save or copy every selected final into the project and update consuming references when integration is requested; preview-only outputs may remain at the tool's output location. Preserve existing assets with sibling filenames unless replacement was requested, and preserve alpha when converting transparent images. If an output is relocated, use its verified final path in the image link.
