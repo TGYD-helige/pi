@@ -71,4 +71,23 @@ describe('BUILT_IN_MODELS registry', () => {
     expect(findBuiltInModel('seedream')?.id).toBe(plain?.id);
     expect(findBuiltInModel('seedream-5-lite')?.id).toBe(plain?.id);
   });
+
+  it('registers gpt-image-2.5 flare/sunburst on openai with the gpt-image-2 contract', () => {
+    for (const id of ['gpt-image-2.5-flare', 'gpt-image-2.5-sunburst']) {
+      const entry = findBuiltInModel(id);
+      expect(entry, id).toBeDefined();
+      expect(entry?.provider).toBe('openai');
+      expect(entry?.capabilities?.sizeRange?.allowAuto).toBe(true);
+      expect(entry?.capabilities?.nMax).toBe(10);
+      expect(entry?.capabilities?.maxReferenceImages).toBe(16);
+    }
+    // The generic 2.5 id points at the default tier.
+    expect(findBuiltInModel('gpt-image-2.5')?.id).toBe('gpt-image-2.5-flare');
+  });
+
+  it('limits nano-banana-2-lite to the standard 10 aspect ratios', () => {
+    const lite = findBuiltInModel('gemini-3.1-flash-lite-image');
+    expect(lite?.capabilities?.aspectRatios).toHaveLength(10);
+    expect(findBuiltInModel('gemini-3.1-flash-image')?.capabilities?.aspectRatios).toHaveLength(14);
+  });
 });
