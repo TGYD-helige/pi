@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -105,7 +105,7 @@ it('preserves trusted regression cases and also selects new candidate cases', ()
 
   assert.deepEqual(
     selectRegressionEvalSet(validateEvalSet(base), validateEvalSet(head)),
-    { ...base, evals: [...base.evals, evalCase('new')] },
+    { ...base, evals: [...base.evals, { ...head.evals[0], id: 'candidate-existing' }, evalCase('new')] },
   );
 
   assert.throws(
@@ -118,6 +118,14 @@ it('preserves trusted regression cases and also selects new candidate cases', ()
     ),
     /skill_name must match/,
   );
+});
+
+it('keeps updated-case IDs distinct from supplied candidate IDs', () => {
+  const base = { skill_name: 'demo', evals: [evalCase('a'), evalCase('b'), evalCase('c')] };
+  const changed = { ...evalCase('a'), expectations: [{ text: 'new requirement', includes: ['new'] }] };
+  const head = { skill_name: 'demo', evals: [changed, evalCase('candidate-a'), evalCase('candidate-a-2')] };
+  const selected = selectRegressionEvalSet(validateEvalSet(base), validateEvalSet(head));
+  assert.deepEqual(selected.evals, [...base.evals, { ...changed, id: 'candidate-a-3' }, ...head.evals.slice(1)]);
 });
 
 it('grades semantic verdicts with evidence instead of keyword mentions', () => {
@@ -261,6 +269,9 @@ it('runs changed skills through Pi and preserves completed results on a later fa
     git(['commit', '-qm', 'base']);
     const base = git(['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
     writeFileSync(path.join(skillDir, 'SKILL.md'), '---\nname: demo\ndescription: demo\n---\nhead\n');
+    writeFileSync(path.join(skillDir, 'evals.json'), JSON.stringify({
+      skill_name: 'demo', evals: [evalCase('a', 'prompt a updated'), evalCase('b'), evalCase('c')],
+    }));
     git(['add', '.']);
     git(['commit', '-qm', 'head']);
     const head = git(['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
@@ -275,7 +286,10 @@ if (process.env.FAKE_PI_FAIL === '1') { console.error('sensitive-provider-body')
 const prompt = process.argv[process.argv.indexOf('-p') + 1];
 const mode = process.argv[process.argv.indexOf('--mode') + 1];
 if (mode === 'text') {
+  if (process.env.FAKE_JUDGE_FAIL === 'exit') { console.error('sensitive-provider-body'); process.exit(7); }
+  if (process.env.FAKE_JUDGE_FAIL === 'json') { console.log('sensitive-provider-body'); process.exit(0); }
   const data = JSON.parse(prompt);
+  if (process.env.FAKE_JUDGE_FAIL === 'evidence') { console.log(JSON.stringify({verdicts:data.requirements.map(() => ({passed:true,evidence:'sensitive-provider-body'}))})); process.exit(0); }
   console.log(JSON.stringify({verdicts: data.requirements.map(() => ({passed: true, evidence: data.answer}))}));
 } else {
   if (!process.argv.includes('--no-builtin-tools') || process.argv.includes('--no-tools')) process.exit(4);
@@ -311,6 +325,10 @@ if (mode === 'text') {
     );
     assert.equal(metadata.eval_id, 'a');
     assert.equal(metadata.expected_output, 'expected a');
+    const updatedPath = path.join(outputDir, 'demo/eval-candidate-a');
+    const updated = JSON.parse(readFileSync(path.join(updatedPath, 'new_skill/run-1/eval_metadata.json'), 'utf8'));
+    assert.equal(updated.prompt, 'prompt a updated');
+    assert.equal(existsSync(path.join(updatedPath, 'old_skill')), false);
     assert.equal(
       JSON.parse(
         readFileSync(path.join(outputDir, 'demo/eval-a/new_skill/run-1/grading.json'), 'utf8'),
@@ -339,6 +357,25 @@ if (mode === 'text') {
       'demo/benchmark.json',
     ].map((relative) => readFileSync(path.join(sanitizedOutputDir, relative), 'utf8')).join('\n');
     assert.doesNotMatch(failureArtifacts, /sensitive-provider-body/);
+
+    for (const [failure, expected] of [
+      ['exit', 'Semantic judge: Pi exited with code 7'],
+      ['json', 'judge returned invalid JSON'],
+      ['evidence', 'judge verdict requires grounded evidence'],
+    ]) {
+      const diagnosticsDir = path.join(root, `judge-${failure}`);
+      const result = spawnSync(process.execPath, [script], {
+        cwd: root, encoding: 'utf8',
+        env: { ...gitEnv, PATH: `${bin}:${gitEnv.PATH}`, FAKE_JUDGE_FAIL: failure,
+          SKILL_EVAL_BASE_SHA: base, SKILL_EVAL_HEAD_SHA: head,
+          SKILL_EVAL_OUTPUT_DIR: diagnosticsDir, SKILL_EVAL_RUNS: '1' },
+      });
+      assert.equal(result.status, 1);
+      const artifacts = ['demo/benchmark.json', 'demo/eval-a/new_skill/run-1/grading.json']
+        .map((file) => readFileSync(path.join(diagnosticsDir, file), 'utf8')).join('\n');
+      assert.ok(artifacts.includes(expected), artifacts);
+      assert.doesNotMatch(artifacts, /sensitive-provider-body/);
+    }
 
     writeFileSync(
       path.join(incompleteSkillDir, 'SKILL.md'),
