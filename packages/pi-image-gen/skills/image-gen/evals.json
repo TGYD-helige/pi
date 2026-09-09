@@ -3,8 +3,8 @@
   "evals": [
     {
       "id": "distinct-assets-vs-variants",
-      "prompt": "I need three different deliverables: a rainforest website hero, a white-background product shot, and a profile avatar. I was thinking of making one image request with n=3. Explain the exact tool-call strategy you would use, but do not call any tools.",
-      "expected_output": "Use one image_generate call per distinct asset and explain that n creates variants of one prompt.",
+      "prompt": "I need three different deliverables: a rainforest website hero, a white-background product shot, and a profile avatar. I was thinking of making one image request with n=3. Explain the exact tool-call strategy you would use, but do not call any tools. The hero must show the exact tagline Go small. Think BIG! once, with no other text. Include that wording in its proposed prompt.",
+      "expected_output": "Use one image_generate call per distinct asset and explain that n creates variants of one prompt. Preserve the mixed-case tagline exactly, specifying one occurrence and no extra text.",
       "expectations": [
         {
           "text": "Uses the image generation tool",
@@ -26,13 +26,38 @@
           "includes": [
             "variants"
           ]
+        },
+        {
+          "text": "Preserves exact mixed-case copy",
+          "includes": [
+            "Go small. Think BIG!"
+          ]
+        },
+        {
+          "text": "Controls text repetition",
+          "includes_any": [
+            "exactly once",
+            "only once",
+            "one occurrence"
+          ]
+        },
+        {
+          "text": "Excludes extra copy",
+          "includes_any": [
+            "no extra text",
+            "no other text",
+            "no additional text",
+            "only text",
+            "only the supplied",
+            "only the provided"
+          ]
         }
       ]
     },
     {
       "id": "edit-target-and-style-reference",
-      "prompt": "I have two files: portrait.png is the photo I want edited, and lighting.jpg is only a lighting/style reference. Replace the portrait background with a rainy night street while keeping the person's face, pose, and clothing unchanged. Describe the image inputs and prompt you would send, but do not call any tools.",
-      "expected_output": "Label portrait.png as the edit target and lighting.jpg as a style reference, with explicit preservation constraints.",
+      "prompt": "I have two files: portrait.png is the photo I want edited, and lighting.jpg is only a lighting/style reference. Replace the portrait background with a rainy night street while keeping the person's face, pose, and clothing unchanged. Describe the image inputs and prompt you would send, but do not call any tools. The person must remain pixel-identical. If a saved result cannot be opened or inspected in this environment, explain the editing approach and what remains unverified.",
+      "expected_output": "Label portrait.png as the edit target and lighting.jpg as a style reference, with explicit preservation constraints. Use deterministic editing or compositing for pixel-identical preservation; report unverified requirements when inspection is unavailable.",
       "expectations": [
         {
           "text": "Labels the portrait as the edit target",
@@ -54,6 +79,23 @@
             "face",
             "pose",
             "clothing"
+          ]
+        },
+        {
+          "text": "Uses a method that preserves untouched pixels",
+          "includes_any": [
+            "deterministic",
+            "composit",
+            "pixel-level"
+          ]
+        },
+        {
+          "text": "Reports the inspection limitation",
+          "includes_any": [
+            "unverified",
+            "not verified",
+            "cannot verify",
+            "cannot confirm"
           ]
         }
       ]
