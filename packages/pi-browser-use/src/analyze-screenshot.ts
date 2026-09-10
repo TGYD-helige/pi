@@ -10,8 +10,6 @@
  */
 
 import type { TextContent as AiTextContent } from '@earendil-works/pi-ai';
-import { complete } from '@earendil-works/pi-ai/compat';
-import { ModelRegistry, ModelRuntime } from '@earendil-works/pi-coding-agent';
 import type { VisionModelConfig } from './config.js';
 import type { DevToolsClient } from './index.js';
 
@@ -49,8 +47,10 @@ export type VisionCaller = (
 
 /** Create a VisionCaller that resolves credentials from Pi's model registry. Used in CLI standalone mode. */
 export function createFetchVisionCaller(visionConfig: VisionModelConfig): VisionCaller {
-  const registryPromise = ModelRuntime.create().then(
-    (modelRuntime) => new ModelRegistry(modelRuntime),
+  // Imported lazily: pi-ai and pi-coding-agent are heavy and only needed on an actual vision call.
+  const registryPromise = import('@earendil-works/pi-coding-agent').then(
+    ({ ModelRegistry, ModelRuntime }) =>
+      ModelRuntime.create().then((modelRuntime) => new ModelRegistry(modelRuntime)),
   );
 
   return async (
@@ -59,7 +59,10 @@ export function createFetchVisionCaller(visionConfig: VisionModelConfig): Vision
     mimeType: string,
     signal?: AbortSignal,
   ): Promise<string> => {
-    const registry = await registryPromise;
+    const [registry, { complete }] = await Promise.all([
+      registryPromise,
+      import('@earendil-works/pi-ai/compat'),
+    ]);
     const model = registry.find(visionConfig.provider, visionConfig.model);
     if (!model) {
       throw new Error(

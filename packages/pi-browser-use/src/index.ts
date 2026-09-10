@@ -6,10 +6,8 @@ import {
   type PiSettingsOptions,
 } from '@amaster.ai/pi-shared/settings';
 import type { TextContent as AiTextContent } from '@earendil-works/pi-ai';
-import { complete } from '@earendil-works/pi-ai/compat';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { Type } from 'typebox';
 import {
@@ -59,18 +57,17 @@ const MCP_STDERR_LIMIT = 4_096;
 const MCP_SYSTEM_ERROR_CODE_PATTERN =
   /^(?:EACCES|EADDRINUSE|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENOENT|ENOTEMPTY|ENOTFOUND|EPERM|ETIMEDOUT)$/;
 const require = createRequire(import.meta.url);
-const chromeDevToolsMcpPackagePath = require.resolve('chrome-devtools-mcp/package.json');
-const chromeDevToolsMcpPackage = require(chromeDevToolsMcpPackagePath) as {
-  bin?: Record<string, string>;
-};
-const chromeDevToolsMcpBin = chromeDevToolsMcpPackage.bin?.['chrome-devtools-mcp'];
-if (!chromeDevToolsMcpBin) {
-  throw new Error('chrome-devtools-mcp package does not declare its chrome-devtools-mcp binary');
+
+// Resolved lazily at connect time so extension load does no filesystem work.
+function resolveChromeDevToolsMcpEntrypoint(): string {
+  const packagePath = require.resolve('chrome-devtools-mcp/package.json');
+  const pkg = require(packagePath) as { bin?: Record<string, string> };
+  const bin = pkg.bin?.['chrome-devtools-mcp'];
+  if (!bin) {
+    throw new Error('chrome-devtools-mcp package does not declare its chrome-devtools-mcp binary');
+  }
+  return join(dirname(packagePath), bin);
 }
-const CHROME_DEVTOOLS_MCP_ENTRYPOINT = join(
-  dirname(chromeDevToolsMcpPackagePath),
-  chromeDevToolsMcpBin,
-);
 
 function requestOptions(timeout: number, signal?: AbortSignal) {
   return signal ? { signal, timeout } : { timeout };
@@ -160,31 +157,39 @@ export class DevToolsClient {
     const args = configToArgs(this.config);
     const generation = ++this.generation;
 
-    const transport = new StdioClientTransport({
-      command: process.env.PI_BROWSER_USE_NODE?.trim() || process.execPath,
-      args: [CHROME_DEVTOOLS_MCP_ENTRYPOINT, ...args],
-      stderr: 'pipe',
-    });
+    let client: Client | null = null;
     let stderr = '';
     let transportErrorCode: string | undefined;
-    transport.stderr?.on('data', (chunk) => {
-      stderr = `${stderr}${String(chunk)}`.slice(-MCP_STDERR_LIMIT);
-    });
-
-    const client = new Client({ name: 'pi-browser-use', version: '0.1.0' }, { capabilities: {} });
-    this.client = client;
-
-    transport.onerror = (error: Error) => {
-      if (generation !== this.generation) return;
-      transportErrorCode = safeMcpSystemErrorCode((error as Error & { code?: unknown }).code);
-      console.error(
-        `[pi-browser-use] chrome-devtools-mcp transport error (${transportErrorCode ?? error.name})`,
-      );
-      void this.disconnectUnhealthyClient(generation);
-    };
-    transport.onclose = () => this.markDisconnected(generation);
 
     try {
+      // Imported lazily: the MCP SDK is heavy and only needed once a session actually connects.
+      const [{ Client }, { StdioClientTransport }] = await Promise.all([
+        import('@modelcontextprotocol/sdk/client/index.js'),
+        import('@modelcontextprotocol/sdk/client/stdio.js'),
+      ]);
+
+      const transport = new StdioClientTransport({
+        command: process.env.PI_BROWSER_USE_NODE?.trim() || process.execPath,
+        args: [resolveChromeDevToolsMcpEntrypoint(), ...args],
+        stderr: 'pipe',
+      });
+      transport.stderr?.on('data', (chunk) => {
+        stderr = `${stderr}${String(chunk)}`.slice(-MCP_STDERR_LIMIT);
+      });
+
+      client = new Client({ name: 'pi-browser-use', version: '0.1.0' }, { capabilities: {} });
+      this.client = client;
+
+      transport.onerror = (error: Error) => {
+        if (generation !== this.generation) return;
+        transportErrorCode = safeMcpSystemErrorCode((error as Error & { code?: unknown }).code);
+        console.error(
+          `[pi-browser-use] chrome-devtools-mcp transport error (${transportErrorCode ?? error.name})`,
+        );
+        void this.disconnectUnhealthyClient(generation);
+      };
+      transport.onclose = () => this.markDisconnected(generation);
+
       await client.connect(transport, requestOptions(MCP_TIMEOUT_MS, signal));
       if (generation !== this.generation) return;
       this.state = 'ready';
@@ -197,7 +202,7 @@ export class DevToolsClient {
         this.state = 'failed';
       }
       try {
-        await client.close();
+        await client?.close();
       } catch {
         // The failed transport may already be closed.
       }
@@ -459,6 +464,8 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
       mimeType: string,
       signal?: AbortSignal,
     ): Promise<string> => {
+      // Imported lazily: pi-ai is heavy and only needed when a vision call actually runs.
+      const { complete } = await import('@earendil-works/pi-ai/compat');
       const model = ctx.modelRegistry.find(visionConfig.provider, visionConfig.model);
       if (!model) {
         throw new Error(
