@@ -19,6 +19,10 @@
 // The hierarchy scenario adds a second nested pi and verifies:
 // chat-turn → subagent [ci-hierarchy] → subagent [ci-probe] → child work.
 //
+// The redacted scenario runs with includePayloads: false and verifies the
+// privacy contract (issue #197): the trace is still complete, but no
+// observation may carry the prompt, tool args/output, or model I/O.
+//
 // Reads via the Observations API v2 (the v1 reads are deprecated on Cloud).
 // Self-hosted v3 gates v2 behind LANGFUSE_ENABLE_EVENTS_TABLE_V2_APIS
 // (default off), so a 404 on v2 falls back to the v1 observations endpoint for
@@ -36,7 +40,7 @@
 // Optional env: LANGFUSE_BASE_URL (default https://cloud.langfuse.com),
 //               TELEMETRY_TRACE_FROM (ISO lower bound; default: 1h ago),
 //               TELEMETRY_CODEWORD (default ci-langfuse-probe),
-//               TELEMETRY_SCENARIO (basic or hierarchy; default basic).
+//               TELEMETRY_SCENARIO (basic, hierarchy, or redacted; default basic).
 
 import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -136,10 +140,12 @@ export function evaluateTrace(observations, codeword, scenario = 'basic') {
   need(root.endTime != null, 'root "chat-turn" span has no endTime');
   // JSON.stringify like discovery does — a structured input would otherwise
   // stringify to '[object Object]' and spuriously fail the whole poll.
-  need(
-    JSON.stringify(root.input ?? '').includes(codeword),
-    'root span input is missing the codeword',
-  );
+  if (scenario !== 'redacted') {
+    need(
+      JSON.stringify(root.input ?? '').includes(codeword),
+      'root span input is missing the codeword',
+    );
+  }
 
   const validateChildren = (checks) => {
     for (const { label, matches, parent, exact } of checks) {
@@ -159,6 +165,45 @@ export function evaluateTrace(observations, codeword, scenario = 'basic') {
       }
     }
   };
+
+  if (scenario === 'redacted') {
+    // includePayloads: false (issue #197): the trace must still be complete,
+    // but no observation may carry payload content. Span names lose their
+    // payload brackets when args/input are stripped ("bash [echo …]" →
+    // "bash"), so the codeword appearing in any name or input/output is a
+    // leak — regardless of which attribute key carried it.
+    need(
+      root.input == null && root.output == null,
+      'root "chat-turn" span carries input/output despite includePayloads: false',
+    );
+    need(
+      !spans.some((o) => o.name === 'chat-input'),
+      'a "chat-input" span was exported despite includePayloads: false',
+    );
+    for (const observation of observations) {
+      const label = `${observation.type} "${observation.name ?? observation.id}"`;
+      need(
+        !(observation.name ?? '').includes(codeword),
+        `${label} leaks the codeword into the observation name`,
+      );
+      const io = `${JSON.stringify(observation.input ?? '')}\n${JSON.stringify(observation.output ?? '')}`;
+      need(!io.includes(codeword), `${label} leaks the codeword into input/output`);
+    }
+    validateChildren([
+      {
+        label: 'span "bash"',
+        matches: spans.filter((o) => o.name === 'bash'),
+        parent: root,
+        exact: true,
+      },
+      {
+        label: 'generation "llm-generation [main]"',
+        matches: generations.filter((o) => o.name?.startsWith('llm-generation [main]')),
+        parent: root,
+      },
+    ]);
+    return problems;
+  }
 
   if (scenario === 'hierarchy') {
     const outerMatches = spans.filter((o) => o.name === 'subagent [ci-hierarchy]');
