@@ -433,8 +433,18 @@ describe('telemetry', () => {
     });
 
     const spans = inMemory.getFinishedSpans();
-    // End order: generation, tool, root.
-    const [generation, tool, root] = spans as [ReadableSpan, ReadableSpan, ReadableSpan];
+    // End order: chat-input (instant), generation, tool, root.
+    const [chatInput, generation, tool, root] = spans as [
+      ReadableSpan,
+      ReadableSpan,
+      ReadableSpan,
+      ReadableSpan,
+    ];
+    expect(chatInput.name).toBe('chat-input');
+    expect(chatInput.parentSpanContext?.spanId).toBe(root.spanContext().spanId);
+    expect(hrTimeToMs(chatInput.startTime)).toBe(hrTimeToMs(chatInput.endTime));
+    expect(chatInput.attributes['langfuse.trace.input']).toBe('hello');
+    expect(chatInput.attributes['langfuse.observation.input']).toBe(JSON.stringify('hello'));
     expect(root.name).toBe('chat-turn');
     expect(tool.name).toBe('bash [echo hi]');
     expect(generation.name).toBe('llm-generation [main] [hello]');
@@ -473,6 +483,61 @@ describe('telemetry', () => {
       JSON.stringify({ command: 'echo hi' }),
     );
     expect(tool.attributes['langfuse.observation.output']).toBe(JSON.stringify({ output: 'hi' }));
+  });
+
+  it('publishes the turn input on an instant span before the root ends', async () => {
+    const { exporter, inMemory } = makeExporter();
+
+    await exporter.publish({
+      id: 'turn-1-start',
+      traceId,
+      type: 'chat_turn_started',
+      sessionId: 'session-1',
+      createdAt: '2026-05-02T00:00:00.000Z',
+      details: { input: 'hello' },
+    });
+
+    // The query lands on the instant span right away — it survives even if
+    // the root span's terminal event never comes (interrupt, process kill).
+    const spans = inMemory.getFinishedSpans();
+    expect(spans.map((span) => span.name)).toEqual(['chat-input']);
+    const [chatInput] = spans as [ReadableSpan];
+    expect(chatInput.attributes['langfuse.trace.input']).toBe('hello');
+    expect(chatInput.attributes['langfuse.observation.input']).toBe(JSON.stringify('hello'));
+    expect(hrTimeToMs(chatInput.startTime)).toBe(hrTimeToMs(chatInput.endTime));
+  });
+
+  it('ends open spans with a warning marker on close', async () => {
+    const { exporter, inMemory } = makeExporter();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // InMemorySpanExporter.shutdown() clears its buffer on close, so record
+    // every export call instead of reading finished spans after the fact.
+    const exported: ReadableSpan[] = [];
+    const originalExport = inMemory.export.bind(inMemory);
+    vi.spyOn(inMemory, 'export').mockImplementation((spans, callback) => {
+      exported.push(...spans);
+      return originalExport(spans, callback);
+    });
+
+    await exporter.publish({
+      id: 'turn-1-start',
+      traceId,
+      type: 'chat_turn_started',
+      sessionId: 'session-1',
+      createdAt: '2026-05-02T00:00:00.000Z',
+      details: { input: 'hello' },
+    });
+    expect(exported.some((span) => span.name === 'chat-turn')).toBe(false);
+
+    // Shutdown ends the orphaned root instead of dropping it silently.
+    await exporter.close();
+    const root = exported.find((span) => span.name === 'chat-turn') as ReadableSpan;
+    expect(root.attributes['langfuse.observation.input']).toBe(JSON.stringify('hello'));
+    expect(root.attributes['langfuse.observation.level']).toBe('WARNING');
+    expect(root.attributes['langfuse.observation.metadata.terminatedBy']).toBe('session_shutdown');
+    expect(
+      errorSpy.mock.calls.filter((args) => String(args[0]).includes('open span(s)')),
+    ).toHaveLength(1);
   });
 
   it('keeps SDK metadata fields filterable on the OTEL path', async () => {
@@ -548,7 +613,11 @@ describe('telemetry', () => {
       error: 'request failed',
     });
 
-    const [span] = inMemory.getFinishedSpans() as [ReadableSpan];
+    const spans = inMemory.getFinishedSpans();
+    // Redaction strips details before publish, so no instant chat-input span
+    // carrying the query may leak either.
+    expect(spans.map((span) => span.name)).toEqual(['chat-turn']);
+    const [span] = spans as [ReadableSpan];
     expect(span.attributes['langfuse.observation.input']).toBeUndefined();
     expect(JSON.parse(String(span.attributes['langfuse.observation.output']))).toEqual({
       error: 'request failed',

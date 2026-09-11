@@ -31,7 +31,7 @@ The extension hooks into the following Pi lifecycle events:
 | `message_end` | Complete an LLM generation span with output and usage |
 | `model_select` | Record model switch events |
 | `session_compact` | Record context compaction events |
-| `session_shutdown` | Flush and shutdown exporters |
+| `session_shutdown` | End any spans still open (marked `terminatedBy: session_shutdown`), then flush and shutdown exporters |
 
 ### Trace lifecycle
 
