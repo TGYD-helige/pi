@@ -365,6 +365,39 @@ describe('telemetry', () => {
     await exporter.close?.();
   });
 
+  it('passes includePayloads through the combined factory, defaulting to stripped', async () => {
+    // Regression: a truthy-only spread used to drop `false` here, so the
+    // exporter saw undefined and applyTelemetryRedaction never stripped.
+    const configOf = (exporter: ReturnType<typeof createTelemetryExporter>) =>
+      (exporter as unknown as { config: OtelExporterConfig }).config.includePayloads;
+    const stripped = createTelemetryExporter({
+      includePayloads: false,
+      otel: { enabled: true, endpoint: 'https://otel.example.com' },
+    });
+    const defaulted = createTelemetryExporter({
+      otel: { enabled: true, endpoint: 'https://otel.example.com' },
+    });
+    const langfusePrimary = createTelemetryExporter({
+      includePayloads: false,
+      langfuse: { enabled: true, publicKey: 'public', secretKey: 'secret' },
+    });
+    const included = createTelemetryExporter({
+      includePayloads: true,
+      otel: { enabled: true, endpoint: 'https://otel.example.com' },
+    });
+
+    expect(configOf(stripped)).toBe(false);
+    expect(configOf(defaulted)).toBe(false);
+    expect(configOf(langfusePrimary)).toBe(false);
+    expect(configOf(included)).toBe(true);
+    await Promise.all([
+      stripped.close?.(),
+      defaulted.close?.(),
+      langfusePrimary.close?.(),
+      included.close?.(),
+    ]);
+  });
+
   it('exports a chat turn as linked spans', async () => {
     const { exporter, inMemory } = makeExporter({ serviceName: 'pi-test' });
 

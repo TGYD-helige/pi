@@ -109,7 +109,7 @@ test('threads the integration model through generated configs and skill evaluati
   assert.equal(documents.length, 4);
   for (const model of ['deepseek-v4-flash', 'glm-5.3-flash', 'custom-model']) {
     const configs = documents.map(([, kind, body]) => [kind, JSON.parse(execFileSync('bash', ['-c', `cat <<EOF\n${body}\nEOF`], {
-      encoding: 'utf8', env: { PATH: process.env.PATH, PI_INTEGRATION_MODEL: model, WEB_ACCESS_SETTINGS: '{}', IMAGE_GEN_MODEL: 'image-model', RUNNER_TEMP: '/tmp/pi-integration-config-test' },
+      encoding: 'utf8', env: { PATH: process.env.PATH, PI_INTEGRATION_MODEL: model, WEB_ACCESS_SETTINGS: '{}', IMAGE_GEN_MODEL: 'image-model', INCLUDE_PAYLOADS_JSON: 'true', RUNNER_TEMP: '/tmp/pi-integration-config-test' },
     }))]);
     for (const [, config] of configs.filter(([kind]) => kind === 'models')) {
       assert.equal(config.providers['deepseek-integration'].models[0].id, model);
@@ -120,5 +120,8 @@ test('threads the integration model through generated configs and skill evaluati
     assert.equal(settings['pi-memory-mem0'].oss.llm.config.model, model);
     assert.equal(settings['pi-memory-mem0'].oss.embedder.config.model, 'text-embedding-v4');
     assert.equal(settings['pi-browser-use'].visionModel.model, 'kimi-k2.6');
+    // The workflow heredoc renders includePayloads from INCLUDE_PAYLOADS_JSON
+    // (true for every leg; the redacted scenario flips it to false).
+    assert.equal(settings['pi-telemetry'].includePayloads, true);
   }
 });
