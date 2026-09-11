@@ -157,6 +157,20 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
   }
 
   async close(): Promise<void> {
+    // Spans still open at shutdown (session exit mid-turn) never end on their
+    // own and would never export — end them so their start attributes
+    // (the root input included) survive.
+    for (const span of this.openSpans.values()) {
+      span.otelSpan.setAttributes({
+        'langfuse.observation.level': 'WARNING',
+        'langfuse.observation.metadata.terminatedBy': 'session_shutdown',
+      });
+      span.end();
+    }
+    if (this.openSpans.size > 0) {
+      console.error(`[pi-telemetry] ended ${this.openSpans.size} open span(s) at session shutdown`);
+    }
+    this.openSpans.clear();
     await waitForExport(
       this.provider.shutdown().catch((error: unknown) => {
         console.error(
@@ -184,6 +198,27 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
         this.trackOpenSpan(chatSpanKey(event), span);
         // A nested pi process parents its subagent span to this root.
         process.env[TRACEPARENT_ENV] = traceparent(span);
+        // The root span exports only when the turn ends; an instant child
+        // span carries the input up front so the query reaches Langfuse even
+        // if the root span is lost to an interrupt or a process kill.
+        const input = event.details?.input;
+        if (input !== undefined) {
+          const inputSpan = this.startSpan(
+            'chat-input',
+            event,
+            createdAtMs,
+            this.enrichSpanAttributes(
+              {
+                ...lifecycleMetadata(event),
+                'langfuse.trace.input': input,
+                ...langfuseObservationAttributes({ input, level: 'DEFAULT' }),
+              },
+              event,
+            ),
+            parentContextOf(span),
+          );
+          inputSpan.end(createdAtMs);
+        }
         return;
       }
       case 'chat_turn_completed':
