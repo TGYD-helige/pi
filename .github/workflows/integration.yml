@@ -456,6 +456,13 @@ jobs:
           #    location like ~/.pi/agent/memories/.
           # ${LANGFUSE_*} stays literal for pi's settings resolver. Every
           # model-backed matrix leg installs pi-telemetry below.
+          # The pi-telemetry "redacted" scenario exercises the
+          # includePayloads: false privacy path (issue #197); every other leg
+          # keeps payloads on so trace-shape assertions can match on content.
+          INCLUDE_PAYLOADS_JSON=true
+          if [ "${{ matrix.extension }}" = "pi-telemetry" ] && [ "${{ matrix.scenario }}" = "redacted" ]; then
+            INCLUDE_PAYLOADS_JSON=false
+          fi
           cat > "$PI_CODING_AGENT_DIR/settings.json" <<EOF
           {
             "pi-teamwork": {
@@ -538,7 +545,7 @@ jobs:
             },
             "pi-telemetry": {
               "serviceName": "pi-telemetry-ci",
-              "includePayloads": true,
+              "includePayloads": ${INCLUDE_PAYLOADS_JSON},
               "langfuse": {
                 "enabled": true,
                 "publicKey": "\${LANGFUSE_PUBLIC_KEY}",

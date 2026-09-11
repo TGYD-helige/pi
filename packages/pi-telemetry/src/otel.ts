@@ -43,7 +43,9 @@ export function createTelemetryExporter(telemetryConfig: TelemetryConfig): Runti
     flushIntervalMs: otel.flushIntervalMs,
     ...(primary.serviceName !== undefined ? { serviceName: primary.serviceName } : {}),
     ...(primary.serviceVersion !== undefined ? { serviceVersion: primary.serviceVersion } : {}),
-    ...(primary.includePayloads ? { includePayloads: true } : {}),
+    // Both resolvers default this to false; a truthy spread here would drop the
+    // false and applyTelemetryRedaction's strict === false check would never strip.
+    includePayloads: primary.includePayloads === true,
   });
 }
 
