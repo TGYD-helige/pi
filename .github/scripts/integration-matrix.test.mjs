@@ -58,6 +58,7 @@ test('selects a separate Langfuse hierarchy scenario', () => {
     [
       ['pi-telemetry', undefined],
       ['pi-telemetry', 'hierarchy'],
+      ['pi-telemetry', 'redacted'],
     ],
   );
 });
@@ -89,11 +90,11 @@ test('skips Stage C when no tested extension changed', () => {
   assert.deepEqual(selectIntegrationMatrix(['README.md']), []);
   assert.deepEqual(
     selectIntegrationMatrix(['packages/pi-telemetry/src/extension.ts']).map(({ extension }) => extension),
-    ['pi-telemetry', 'pi-telemetry'],
+    ['pi-telemetry', 'pi-telemetry', 'pi-telemetry'],
   );
   assert.deepEqual(
     selectIntegrationMatrix(['.github/scripts/telemetry-langfuse-verify.mjs']).map(({ extension }) => extension),
-    ['pi-telemetry', 'pi-telemetry'],
+    ['pi-telemetry', 'pi-telemetry', 'pi-telemetry'],
   );
 });
 
@@ -120,8 +121,8 @@ test('threads the integration model through generated configs and skill evaluati
     assert.equal(settings['pi-memory-mem0'].oss.llm.config.model, model);
     assert.equal(settings['pi-memory-mem0'].oss.embedder.config.model, 'text-embedding-v4');
     assert.equal(settings['pi-browser-use'].visionModel.model, 'kimi-k2.6');
-    // The workflow heredoc renders includePayloads from INCLUDE_PAYLOADS_JSON
-    // (true for every leg; the redacted scenario flips it to false).
+    // Non-redacted legs keep payloads on; the redacted scenario flips this to
+    // false in the workflow before the heredoc runs.
     assert.equal(settings['pi-telemetry'].includePayloads, true);
   }
 });

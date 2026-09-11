@@ -41,6 +41,18 @@ function hierarchyTrace() {
   ]);
 }
 
+// Redacted scenario (includePayloads: false): same pipeline, but payloads are
+// stripped before export — no root input, no chat-input span, tool spans lose
+// their [args] bracket, generations carry model/usage/cost metadata only.
+function redactedTrace() {
+  return withSemantics([
+    { id: 'root', traceId: 't3', type: 'SPAN', name: 'chat-turn', parentObservationId: null, startTime: 'a', endTime: 'b' },
+    { id: 'b1', traceId: 't3', type: 'SPAN', name: 'bash', parentObservationId: 'root', startTime: 'a', endTime: 'b' },
+    { id: 'g1', traceId: 't3', type: 'GENERATION', name: 'llm-generation [main] [request]', parentObservationId: 'root', startTime: 'a', endTime: 'b' },
+    { id: 's1', traceId: 't3', type: 'SPAN', name: 'llm-stream', parentObservationId: 'g1', startTime: 'a', endTime: 'b' },
+  ]);
+}
+
 function withSemantics(observations) {
   return observations.map((observation) => ({
     ...observation,
@@ -111,6 +123,18 @@ it('runVerification selects the hierarchy contract', async () => {
     ...baseArgs,
     scenario: 'hierarchy',
     traceId: 't2',
+    deadlineMs: 1,
+    fetchImpl,
+  });
+  assert.equal(result.ok, true);
+});
+
+it('runVerification selects the redacted contract', async () => {
+  const fetchImpl = fakeFetch(() => ({ data: redactedTrace(), meta: {} }));
+  const result = await runVerification({
+    ...baseArgs,
+    scenario: 'redacted',
+    traceId: 't3',
     deadlineMs: 1,
     fetchImpl,
   });
@@ -215,6 +239,56 @@ it('evaluateTrace validates the nested subagent hierarchy scenario', () => {
   );
   const problems = evaluateTrace(broken, CODEWORD, 'hierarchy');
   assert.ok(problems.some((problem) => problem.includes('subagent [ci-probe]') && problem.includes('expected outer')));
+});
+
+it('evaluateTrace validates the redacted scenario', () => {
+  assert.deepEqual(evaluateTrace(redactedTrace(), CODEWORD, 'redacted'), []);
+});
+
+// The redacted scenario is the regression gate for issue #197: with
+// includePayloads: false, nothing containing the prompt may be uploaded —
+// regardless of which attribute key carries it.
+it('evaluateTrace rejects payload leaks in the redacted scenario', () => {
+  // The pre-fix bug shape: a generation carries the prompt.
+  const leakingGeneration = redactedTrace().map((observation) =>
+    observation.id === 'g1'
+      ? { ...observation, input: [{ role: 'user', content: `echo ${CODEWORD} redacted` }] }
+      : observation,
+  );
+  assert.ok(
+    evaluateTrace(leakingGeneration, CODEWORD, 'redacted').some((problem) =>
+      problem.includes('leaks the codeword'),
+    ),
+  );
+
+  // Root input present (the chat-turn payload) must fail twice: the root
+  // input/output check and the codeword scan.
+  const leakingRoot = redactedTrace().map((observation) =>
+    observation.id === 'root' ? { ...observation, input: `echo ${CODEWORD} redacted` } : observation,
+  );
+  const rootProblems = evaluateTrace(leakingRoot, CODEWORD, 'redacted');
+  assert.ok(rootProblems.some((problem) => problem.includes('root "chat-turn"')));
+  assert.ok(rootProblems.some((problem) => problem.includes('leaks the codeword')));
+
+  // The chat-input span exists only to carry the prompt up front.
+  const chatInput = withSemantics([
+    { id: 'ci', traceId: 't3', type: 'SPAN', name: 'chat-input', parentObservationId: 'root', startTime: 'a', endTime: 'b' },
+  ]);
+  assert.ok(
+    evaluateTrace([...redactedTrace(), ...chatInput], CODEWORD, 'redacted').some((problem) =>
+      problem.includes('chat-input'),
+    ),
+  );
+
+  // A tool span name built from unstripped args carries the codeword.
+  const leakingName = redactedTrace().map((observation) =>
+    observation.id === 'b1' ? { ...observation, name: `bash [echo ${CODEWORD} redacted]` } : observation,
+  );
+  assert.ok(
+    evaluateTrace(leakingName, CODEWORD, 'redacted').some((problem) =>
+      problem.includes('observation name'),
+    ),
+  );
 });
 
 it('evaluateTrace validates EVERY matching generation, not just the first', () => {

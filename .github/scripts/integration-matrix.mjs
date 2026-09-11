@@ -137,6 +137,18 @@ export const fullMatrix = [
     assert_pattern: 'TELEMETRY-HIERARCHY-DONE',
   },
   {
+    extension: 'pi-telemetry',
+    scenario: 'redacted',
+    tools: 'bash',
+    // Runs with includePayloads: false (the settings write in integration.yml
+    // flips it for this scenario). The Langfuse verify step asserts the
+    // privacy contract from issue #197: the trace is complete, but no
+    // observation carries the prompt, tool args/output, or model I/O — nothing
+    // containing the codeword may leave the process.
+    prompt: 'Step 1 — use the bash tool exactly once to run: echo ci-langfuse-probe redacted. Then reply with the single word TELEMETRY-REDACTED-DONE.',
+    assert_pattern: 'TELEMETRY-REDACTED-DONE',
+  },
+  {
     extension: 'pi-browser-use',
     tools: 'browser_list_pages,browser_navigate_page,browser_take_snapshot',
     prompt: 'Use browser_list_pages first to get the current pageId. Pass that pageId to browser_navigate_page to go to https://example.com, then pass it to browser_take_snapshot and tell me the page title.',
