@@ -30,6 +30,7 @@
 
 import { isProjectTrusted, loadPiSettings } from '@amaster.ai/pi-shared/settings';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { automaticMemoryUserId } from './automatic-scope.js';
 import { dedupProviderMemories } from './dedup.js';
 import { Prefetch } from './prefetch.js';
 import { formatRecalledMemory, redactMemoryText, scopeMemoryUserId } from './privacy.js';
@@ -70,6 +71,9 @@ export default function mem0Extension(pi: ExtensionAPI): void {
   let provider: Mem0Provider | undefined;
   let prefetch: Prefetch | undefined;
   let userId = '';
+  let automaticUserId: string | null = null;
+  let taskAutomaticMemory = false;
+  let currentRecall: string | null = null;
   let agentId: string | undefined;
   let activeMode = '';
   let activeMemoryMode = '';
@@ -95,6 +99,9 @@ export default function mem0Extension(pi: ExtensionAPI): void {
     activeRecallFrequency = 'user-input';
     recallQueuedThisSession = false;
     lastUserText = '';
+    currentRecall = null;
+    automaticUserId = null;
+    taskAutomaticMemory = Boolean(process.env.MIRRORX_AUTOMATIC_MEMORY_SCOPE);
     pi.setActiveTools(pi.getActiveTools().filter((name) => name !== MEMORY_TOOL_NAME));
     const config = loadConfig(ctx.cwd, isProjectTrusted(ctx));
     try {
@@ -151,25 +158,29 @@ export default function mem0Extension(pi: ExtensionAPI): void {
       if (epoch !== sessionEpoch) return;
       provider = newProvider;
       userId = scopeMemoryUserId(resolvedUserId, ctx.cwd, config.userIdScope);
+      automaticUserId = automaticMemoryUserId(taskAutomaticMemory ? resolvedUserId : userId);
       agentId = resolvedAgentId;
       activeMode = mode;
       activeMemoryMode = memoryMode;
-      activeAutoCapture = config.autoCapture ?? memoryMode !== 'active';
-      const autoRecall = config.autoRecall ?? memoryMode !== 'active';
+      activeAutoCapture =
+        automaticUserId !== null && (config.autoCapture ?? memoryMode !== 'active');
+      const autoRecall = automaticUserId !== null && (config.autoRecall ?? memoryMode !== 'active');
       activeToolEnabled = config.toolEnabled ?? memoryMode !== 'passive';
       activeRecallFrequency = recallFrequency;
       const sessionId = ctx.sessionManager.getSessionId();
-      recallQueuedThisSession = ctx.sessionManager
-        .getEntries()
-        .some(
-          (entry) =>
-            entry.type === 'custom' &&
-            entry.customType === SESSION_RECALL_ENTRY &&
-            entry.data === sessionId,
-        );
+      recallQueuedThisSession =
+        !taskAutomaticMemory &&
+        ctx.sessionManager
+          .getEntries()
+          .some(
+            (entry) =>
+              entry.type === 'custom' &&
+              entry.customType === SESSION_RECALL_ENTRY &&
+              entry.data === sessionId,
+          );
       if (autoRecall) {
-        prefetch = new Prefetch(provider, userId, {
-          ...(agentId ? { agentId } : {}),
+        prefetch = new Prefetch(provider, automaticUserId!, {
+          ...(!taskAutomaticMemory && agentId ? { agentId } : {}),
           topK,
         });
       }
@@ -218,6 +229,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
       return;
     }
 
+    currentRecall = null;
     prefetch.queue(redactMemoryText(text));
 
     if (activeRecallFrequency === 'session') {
@@ -236,8 +248,10 @@ export default function mem0Extension(pi: ExtensionAPI): void {
     const userText = lastUserText;
     lastUserText = '';
     const activeProvider = provider;
-    const activeUserId = userId;
-    const activeAgentId = agentId;
+    const activeUserId = automaticUserId!;
+    // Platform search ORs user and agent filters; never let the shared agent
+    // expand an automatic task namespace back to Company history.
+    const activeAgentId = taskAutomaticMemory ? undefined : agentId;
     pendingWrite = pendingWrite
       .catch(() => {})
       .then(async () => {
@@ -270,6 +284,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
 
     const recalled = await prefetch.consume();
     if (!recalled) return;
+    currentRecall = recalled;
 
     return {
       message: {
@@ -277,6 +292,30 @@ export default function mem0Extension(pi: ExtensionAPI): void {
         content: recalled,
         display: true,
       },
+    };
+  });
+
+  pi.on('context', async (event) => {
+    if (!taskAutomaticMemory) return;
+    // Native session history is immutable audit evidence. Only its model view
+    // drops old recall blocks; authoritative task prompts and tool results stay.
+    let latest = -1;
+    if (currentRecall) {
+      for (let i = 0; i < event.messages.length; i++) {
+        const message = event.messages[i];
+        if (
+          message?.role === 'custom' &&
+          message.customType === 'mem0-recall' &&
+          message.content === currentRecall
+        )
+          latest = i;
+      }
+    }
+    return {
+      messages: event.messages.filter(
+        (message, index) =>
+          message.role !== 'custom' || message.customType !== 'mem0-recall' || index === latest,
+      ),
     };
   });
 

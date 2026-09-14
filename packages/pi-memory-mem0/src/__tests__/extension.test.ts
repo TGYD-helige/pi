@@ -1088,3 +1088,108 @@ describe('/mem0 command — recalled memory boundary', () => {
     expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining('BLOCKED'), 'info');
   });
 });
+
+describe('governed automatic task memory', () => {
+  it('none disables passive provider operations and removes restored recalls', async () => {
+    vi.stubEnv('MIRRORX_AUTOMATIC_MEMORY_SCOPE', 'none');
+    const provider = mockActiveProvider();
+    const { pi, handlers } = createMockPi();
+    mem0Extension(pi as never);
+    const ctx = createMockCtx();
+    await handlers.session_start![0]!({}, ctx);
+    await handlers.input![0]!({ text: 'current task' }, ctx);
+    await handlers.before_agent_start![0]!({}, ctx);
+    await handlers.turn_end![0]!({ message: { role: 'assistant', content: 'result' } }, ctx);
+    const toolResult = { role: 'toolResult', content: 'evidence' };
+    const old = { role: 'custom', customType: 'mem0-recall', content: 'old memory' };
+    expect(await handlers.context![0]!({ messages: [old, toolResult] }, ctx)).toEqual({
+      messages: [toolResult],
+    });
+    await handlers.session_shutdown![0]!({}, ctx);
+    expect(provider.search).not.toHaveBeenCalled();
+    expect(provider.add).not.toHaveBeenCalled();
+  });
+
+  it('refreshes a restored session recall once and retains it across later input', async () => {
+    vi.stubEnv('MIRRORX_AUTOMATIC_MEMORY_SCOPE', 'task');
+    vi.stubEnv('AMASTER_EMPLOYEE_COMPANY_ID', '55598358-ef7e-4acd-b5ac-c3d1730666d3');
+    vi.stubEnv('AMASTER_RUNTIME_ISSUE_ID', '1fdf4704-c76f-4583-938a-e288a9410237');
+    const provider = mockActiveProvider({
+      search: vi.fn().mockResolvedValue([{ id: '1', memory: 'current task evidence' }]),
+    });
+    vi.mocked(loadPiSettings).mockReturnValue({
+      mode: 'platform',
+      apiKey: 'test',
+      userId: 'company',
+      recallFrequency: 'session',
+    });
+    const { pi, handlers } = createMockPi();
+    mem0Extension(pi as never);
+    const ctx = createMockCtx({
+      sessionId: 'restored',
+      entries: [{ type: 'custom', customType: 'mem0-session-recall', data: 'restored' }],
+    });
+    await handlers.session_start![0]!({}, ctx);
+    await handlers.input![0]!({ text: 'resume current task' }, ctx);
+    const recall = (await handlers.before_agent_start![0]!({}, ctx)) as {
+      message: { content: string };
+    };
+    expect(provider.search).toHaveBeenCalledTimes(1);
+    await handlers.input![0]!({ text: 'continue with that evidence' }, ctx);
+    await handlers.before_agent_start![0]!({}, ctx);
+    expect(provider.search).toHaveBeenCalledTimes(1);
+    const old = { role: 'custom', customType: 'mem0-recall', content: 'old recall' };
+    const current = { ...old, content: recall.message.content };
+    expect(await handlers.context![0]!({ messages: [old, current] }, ctx)).toEqual({
+      messages: [current],
+    });
+    await handlers.session_shutdown![0]!({}, ctx);
+  });
+
+  it('isolates passive capture and recall, preserves explicit Company tools and supersedes old recall', async () => {
+    vi.stubEnv('MIRRORX_AUTOMATIC_MEMORY_SCOPE', 'task');
+    vi.stubEnv('AMASTER_EMPLOYEE_COMPANY_ID', '55598358-ef7e-4acd-b5ac-c3d1730666d3');
+    vi.stubEnv('AMASTER_RUNTIME_ISSUE_ID', '1fdf4704-c76f-4583-938a-e288a9410237');
+    const provider = mockActiveProvider({
+      search: vi.fn().mockResolvedValue([{ id: '1', memory: 'same task fact' }]),
+    });
+    vi.mocked(loadPiSettings).mockReturnValue({
+      mode: 'platform',
+      apiKey: 'test',
+      userId: 'company',
+      userIdScope: 'exact',
+      agentId: 'ceo',
+    });
+    const { pi, handlers, commands, tools } = createMockPi();
+    mem0Extension(pi as never);
+    const ctx = createMockCtx();
+    await handlers.session_start![0]!({}, ctx);
+    await handlers.input![0]!({ text: 'current task' }, ctx);
+    const recall = (await handlers.before_agent_start![0]!({}, ctx)) as {
+      message: { content: string };
+    };
+    expect(provider.search).toHaveBeenCalledWith('current task', {
+      userId: expect.stringMatching(/^mirrorx-task-memory-v1:[a-f0-9]{64}$/),
+      topK: 5,
+    });
+    await handlers.turn_end![0]!(
+      { message: { role: 'assistant', content: 'next step for this task' } },
+      ctx,
+    );
+    expect(tools.map((tool) => tool.name)).toContain('mem0_memory');
+    // Explicit profile still queries the reusable Company scope.
+    await commands.mem0!.handler('profile', ctx);
+    expect(provider.getAll).toHaveBeenCalledWith({ userId: 'company', agentId: 'ceo' });
+    const old = { role: 'custom', customType: 'mem0-recall', content: 'other task progress' };
+    const current = { ...old, content: recall.message.content };
+    const toolResult = { role: 'toolResult', content: 'receipt' };
+    const messages = [old, toolResult, current];
+    const result = (await handlers.context![0]!({ messages }, ctx)) as { messages: unknown[] };
+    expect(result.messages).toEqual([toolResult, current]);
+    expect(messages).toEqual([old, toolResult, current]);
+    await handlers.session_shutdown![0]!({}, ctx);
+    expect(provider.add.mock.calls[0]![1]).toEqual({
+      userId: provider.search.mock.calls[0]![1].userId,
+    });
+  });
+});

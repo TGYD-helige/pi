@@ -362,3 +362,22 @@ const result = await dedupMemories({
 ```
 
 Dedup normalizes entries using Unicode NFC, case-insensitive comparison, and collapsed whitespace, then keeps the newest exact match. Platform user and agent entity scopes are processed independently; embedded and self-hosted modes use the exact `userId` + `agentId` scope. Platform and embedded scopes are limited to 10,000 memories; self-hosted dedup requests the server maximum of 1,000 and fails closed when that limit is reached, so it only applies to scopes proven to contain at most 999 memories. Invalid or repeated IDs, empty memory content, missing, invalid, or tied timestamps, incomplete pagination, inconsistent Platform counts, and cancellation all fail closed; individual deletion failures are reported, and no automatic background cleanup is installed.
+
+### MirrorX automatic task memory
+
+The managed Runner sets `MIRRORX_AUTOMATIC_MEMORY_SCOPE=task` with
+`AMASTER_EMPLOYEE_COMPANY_ID` and `AMASTER_RUNTIME_ISSUE_ID`. Passive capture and
+prefetch then use a separate namespace for that Company and Issue, stable across
+run IDs and workspace moves. Shared agent filters are omitted from those queries
+so platform OR filters cannot widen them back to Company history. `none` disables
+passive capture and recall; an invalid task identity fails initialization closed.
+Ordinary Pi sessions without this environment contract keep their existing behavior.
+
+Explicit `mem0_memory` and `/mem0` operations keep the configured reusable memory
+scope. Use explicit saves for durable knowledge; automatic task transcripts are
+not promoted to Company knowledge. Existing Company memories are retained, not
+migrated or deleted, and are no longer automatically injected into managed tasks.
+On resume, the model sees only the current automatic recall block; old custom
+recall messages stay in the session audit history. No fresh recall means no old
+recall is silently reused. Task memory is historical reference, never authority
+for current task state, permissions, revisions or completion.
