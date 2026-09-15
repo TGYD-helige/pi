@@ -30,6 +30,7 @@ dist/
 node_modules/
 
 # Release-time native artifacts
+packages/pi-computer-use/platforms/cua-driver-*/bin/
 packages/pi-video-gen/platforms/ffmpeg-*/bin/
 packages/pi-video-gen/platforms/ffmpeg-*/LICENSE
 packages/pi-video-gen/platforms/ffmpeg-*/GPLv2.txt

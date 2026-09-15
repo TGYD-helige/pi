@@ -26,6 +26,8 @@ const HIGH_RISK_TOOLS = new Set([
   'browser_download',
   'browser_prepare',
   'browser_set_input_files',
+  'clipboard_read',
+  'clipboard_write',
   'install_ffmpeg',
   'kill_app',
   'replay_trajectory',

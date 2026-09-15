@@ -1,0 +1,16 @@
+{
+  "name": "@amaster.ai/pi-computer-use-cua-driver-linux-arm64",
+  "version": "0.1.0",
+  "cuaDriverVersion": "0.28.1",
+  "description": "Cua Driver runtime for pi-computer-use on Linux ARM64",
+  "license": "MIT",
+  "files": ["bin", "LICENSE.md", "SOURCE.md"],
+  "os": ["linux"],
+  "cpu": ["arm64"],
+  "libc": ["glibc"],
+  "exports": { "./package.json": "./package.json" },
+  "publishConfig": {
+    "access": "public",
+    "executableFiles": ["./bin/cua-driver", "./bin/cua-cursor-theme", "./bin/wayland-helper/install.sh"]
+  }
+}

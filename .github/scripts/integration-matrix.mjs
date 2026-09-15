@@ -4,6 +4,14 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
+const computerUseE2E = {
+  extension: 'pi-computer-use',
+  tools: 'computer_use_health_report',
+  prompt: 'Use computer_use_health_report exactly once with include=[binary_version, platform_supported, session_active]. Report the schema version, platform, driver version, and overall status.',
+  assert_pattern: '(schema_version|driver_version|overall)',
+  assert_tool: 'computer_use_health_report',
+};
+
 export const fullMatrix = [
   {
     extension: 'pi-channels',
@@ -42,11 +50,22 @@ export const fullMatrix = [
     assert_pattern: '(0|task|tasks|empty|none)',
   },
   {
-    extension: 'pi-computer-use',
-    tools: 'computer_use_health_report',
-    prompt: 'Use computer_use_health_report exactly once with include=[binary_version, platform_supported, session_active]. Report the schema version, platform, driver version, and overall status.',
-    assert_pattern: '(schema_version|driver_version|overall)',
-    assert_tool: 'computer_use_health_report',
+    ...computerUseE2E,
+    scenario: 'linux',
+  },
+  {
+    ...computerUseE2E,
+    scenario: 'macos',
+    tools: 'computer_use_check_permissions',
+    prompt: 'Use computer_use_check_permissions exactly once with prompt=false. Report the Accessibility and Screen Recording statuses.',
+    assert_pattern: 'permissions_pending',
+    assert_tool: 'computer_use_check_permissions',
+    assert_tool_count: 1,
+    allow_tool_error: true,
+  },
+  {
+    ...computerUseE2E,
+    scenario: 'windows',
   },
   {
     extension: 'pi-goal',
@@ -188,7 +207,7 @@ export function selectIntegrationMatrix(changedFiles, { forceAll = false } = {})
     // A package with its own dedicated entry runs it alongside any aliased
     // companion job (pi-memory-mem0 runs both pi-memory and its own).
     if (testedExtensions.has(packageName)) selected.add(packageName);
-    if (file === 'tests/computer-use-owner-exit.mjs') selected.add('pi-computer-use');
+    if (file.startsWith('tests/computer-use-')) selected.add('pi-computer-use');
     if (file.startsWith('.github/scripts/telemetry-')) selected.add('pi-telemetry');
   }
   return fullMatrix.filter((entry) => selected.has(entry.extension));

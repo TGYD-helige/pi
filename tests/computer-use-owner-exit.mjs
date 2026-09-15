@@ -13,8 +13,9 @@ if (process.platform !== 'linux') {
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const packageRoot = path.join(repoRoot, 'packages', 'pi-computer-use');
-const binaryPath = path.join(packageRoot, 'bin', `linux-${process.arch}`, 'cua-driver');
 const extensionUrl = pathToFileURL(path.join(packageRoot, 'dist', 'index.js')).href;
+const { resolveDriverLayout } = await import(extensionUrl);
+const { binaryPath } = resolveDriverLayout({ mode: 'bundled' });
 
 const owner = execFile(
   process.execPath,

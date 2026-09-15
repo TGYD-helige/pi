@@ -97,6 +97,47 @@ jobs:
             exit 1
           fi
 
+  computer-use-platform-e2e:
+    name: Computer use driver E2E (${{ matrix.target }})
+    needs: detect-extension-matrix
+    if: contains(needs.detect-extension-matrix.outputs.matrix, 'pi-computer-use')
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-universal
+            runner: macos-15
+          - target: win32-x64
+            runner: windows-2025
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ env.INTEGRATION_CHECKOUT_REPOSITORY }}
+          ref: ${{ env.INTEGRATION_CHECKOUT_REF }}
+          persist-credentials: false
+          allow-unsafe-pr-checkout: ${{ github.event_name == 'pull_request_target' }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@v6
+        with:
+          cache: false
+          dest: ${{ runner.temp }}/setup-pnpm
+      - run: pnpm install --frozen-lockfile
+        shell: bash
+      - name: Fetch verified Cua Driver runtime
+        run: node packages/pi-computer-use/scripts/fetch-driver.mjs ${{ matrix.target }}
+        shell: bash
+      - run: pnpm --filter @amaster.ai/pi-shared build
+        shell: bash
+      - run: pnpm --filter @amaster.ai/pi-computer-use build
+        shell: bash
+      - name: Exercise driver daemon and MCP lifecycle
+        run: node tests/computer-use-driver-e2e.mjs
+        shell: bash
+
   # ──────────────────────────────────────────────────────────────────────
   integration-approval:
     name: Approve secret-backed Integration
@@ -251,11 +292,14 @@ jobs:
     if: >
       needs.detect-extension-matrix.outputs.has_extensions == 'true' &&
       vars.PI_INTEGRATION_SKIP_STAGE_C != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.extension == 'pi-computer-use' && matrix.scenario == 'macos' && 'macos-15' || matrix.extension == 'pi-computer-use' && matrix.scenario == 'windows' && 'windows-2025' || 'ubuntu-latest' }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.detect-extension-matrix.outputs.matrix) }}
+    defaults:
+      run:
+        shell: bash
     env:
       PI_INTEGRATION_BASE_URL: ${{ secrets.PI_INTEGRATION_BASE_URL }}
       PI_INTEGRATION_API_KEY: ${{ secrets.PI_INTEGRATION_API_KEY }}
@@ -284,13 +328,21 @@ jobs:
         with:
           set-pi-agent-dir: 'true'
           install-pi-cli: 'true'
+          build: ${{ matrix.extension != 'pi-computer-use' && 'true' || 'false' }}
           install-video-tools: ${{ matrix.extension == 'pi-video-gen' && 'true' || 'false' }}
-          # pi-memory job loads pi-memory-mem0 which needs better-sqlite3's
-          # native binding for its OSS vector store. We rebuild for every
-          # matrix entry because conditional `if:` on composite-action steps
-          # is fine but routing per-extension setup is noisier than just
-          # running a cheap prebuild-install across the board.
-          prebuild-better-sqlite3: 'true'
+          # pi-memory jobs need better-sqlite3's native binding; computer-use
+          # does not, and its platform legs use the narrow build below.
+          prebuild-better-sqlite3: ${{ matrix.extension != 'pi-computer-use' && 'true' || 'false' }}
+
+      - name: Fetch verified Cua Driver runtime
+        if: matrix.extension == 'pi-computer-use'
+        run: node packages/pi-computer-use/scripts/fetch-driver.mjs
+
+      - name: Build computer-use extension
+        if: matrix.extension == 'pi-computer-use'
+        run: |
+          pnpm --filter @amaster.ai/pi-shared build
+          pnpm --filter @amaster.ai/pi-computer-use build
 
       - name: Configure pi settings (provider, models, extensions)
         if: >
@@ -299,6 +351,7 @@ jobs:
           env.PI_INTEGRATION_API_KEY != '')
         run: |
           set -euo pipefail
+          RUNNER_TEMP="${RUNNER_TEMP//\\//}"
           if [ "${{ matrix.extension }}" = "pi-video-gen" ] &&
              { [ -z "${PI_INTEGRATION_BASE_URL:-}" ] || [ -z "${PI_INTEGRATION_API_KEY:-}" ]; }; then
             echo "::error::PI_INTEGRATION_BASE_URL and PI_INTEGRATION_API_KEY are required for pi-video-gen provider configuration."
@@ -580,8 +633,9 @@ jobs:
           pi list
 
       - name: Verify computer-use daemon follows abrupt owner exit
-        if: matrix.extension == 'pi-computer-use'
-        run: node tests/computer-use-owner-exit.mjs
+        if: matrix.extension == 'pi-computer-use' && runner.os == 'Linux'
+        run: |
+          node tests/computer-use-owner-exit.mjs
 
       - name: Compose preview video (pi-video-gen only)
         if: matrix.extension == 'pi-video-gen'
@@ -926,7 +980,7 @@ jobs:
 
           # Cases with assert_tool must prove that the expected text came from
           # a successful tool result, not from the prompt or model commentary.
-          if [ -n "${{ matrix.assert_tool }}" ]; then
+          if [ -n "${{ matrix.assert_tool }}" ] && [ "${{ matrix.allow_tool_error }}" != "true" ]; then
             if ! command -v jq >/dev/null 2>&1; then
               echo "::error::jq is required for the tool result assertion"
               exit 1

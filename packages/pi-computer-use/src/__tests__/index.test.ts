@@ -214,7 +214,7 @@ describe('computerUseExtension', () => {
     Object.defineProperty(process, 'platform', { value: 'darwin' });
   });
 
-  it('registers the pinned Rust 0.9 tool manifest on macOS', async () => {
+  it('registers the pinned Rust tool manifest on macOS', async () => {
     await start();
 
     expect(tools.size).toBe(toolManifest.tools.length);
@@ -966,6 +966,25 @@ describe('computerUseExtension', () => {
       .execute('id', { pid: 42 }, undefined, undefined, mockCtx)) as any;
 
     expect(invoked).toBe(false);
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('requires interactive user confirmation');
+  });
+
+  it.each(['clipboard_read', 'clipboard_write'])('confirms the new %s capability', async (name) => {
+    let invoked = false;
+    mockCtx.ui.confirm.mockResolvedValueOnce(false);
+    await start();
+    mockCallTool = () => {
+      invoked = true;
+      return { content: [{ type: 'text', text: 'clipboard' }] };
+    };
+
+    const result = (await tools
+      .get(`computer_use_${name}`)!
+      .execute('id', {}, undefined, undefined, mockCtx)) as any;
+
+    expect(invoked).toBe(false);
+    expect(mockCtx.ui.confirm).toHaveBeenCalledOnce();
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain('requires interactive user confirmation');
   });

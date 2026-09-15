@@ -36,6 +36,17 @@ describe('CuaDriverClient', () => {
     });
   });
 
+  it('uses the matching platform package on Linux and Windows', () => {
+    expect(resolveDriverLayout({ mode: 'bundled' }, '/linux-package', 'linux', 'x64')).toEqual({
+      binaryPath: '/linux-package/bin/linux-x64/cua-driver',
+      embedded: false,
+    });
+    expect(resolveDriverLayout({ mode: 'bundled' }, '/windows-package', 'win32', 'arm64')).toEqual({
+      binaryPath: '/windows-package/bin/win32-arm64/cua-driver.exe',
+      embedded: false,
+    });
+  });
+
   it('uses embedded mode for a custom macOS binary', () => {
     expect(
       resolveDriverLayout(
