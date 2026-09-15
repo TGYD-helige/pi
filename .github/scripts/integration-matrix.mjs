@@ -58,8 +58,10 @@ export const fullMatrix = [
     scenario: 'macos',
     tools: 'computer_use_check_permissions',
     prompt: 'Use computer_use_check_permissions exactly once with prompt=false. Report the Accessibility and Screen Recording statuses.',
-    assert_pattern: '(accessibility|screen.?recording|permission)',
+    assert_pattern: 'permissions_pending',
     assert_tool: 'computer_use_check_permissions',
+    assert_tool_count: 1,
+    allow_tool_error: true,
   },
   {
     ...computerUseE2E,

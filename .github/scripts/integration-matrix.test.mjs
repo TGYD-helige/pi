@@ -52,6 +52,10 @@ test('runs model-backed computer-use E2E on Linux, macOS, and Windows', async ()
   const macos = fullMatrix.find(({ extension, scenario }) => extension === 'pi-computer-use' && scenario === 'macos');
   assert.equal(macos.tools, 'computer_use_check_permissions');
   assert.match(macos.prompt, /prompt=false/);
+  assert.equal(macos.assert_tool, 'computer_use_check_permissions');
+  assert.equal(macos.assert_tool_count, 1);
+  assert.equal(macos.allow_tool_error, true);
+  assert.equal(macos.assert_pattern, 'permissions_pending');
   assert.doesNotMatch(matrixJob, /matrix\.runner/);
   assert.match(matrixJob, /matrix\.scenario == 'macos' && 'macos-15'/);
   assert.match(matrixJob, /matrix\.scenario == 'windows' && 'windows-2025'/);
@@ -60,6 +64,7 @@ test('runs model-backed computer-use E2E on Linux, macOS, and Windows', async ()
   assert.match(matrixJob, /pnpm --filter @amaster\.ai\/pi-shared build/);
   assert.match(matrixJob, /pnpm --filter @amaster\.ai\/pi-computer-use build/);
   assert.match(matrixJob, /RUNNER_TEMP="\$\{RUNNER_TEMP\/\/\\\\\/\/\}"/);
+  assert.match(matrixJob, /matrix\.allow_tool_error.*!= "true"/);
   assert.match(matrixJob, /Run extension prompt \(Stage C\)/);
 });
 

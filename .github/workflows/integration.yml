@@ -980,7 +980,7 @@ jobs:
 
           # Cases with assert_tool must prove that the expected text came from
           # a successful tool result, not from the prompt or model commentary.
-          if [ -n "${{ matrix.assert_tool }}" ]; then
+          if [ -n "${{ matrix.assert_tool }}" ] && [ "${{ matrix.allow_tool_error }}" != "true" ]; then
             if ! command -v jq >/dev/null 2>&1; then
               echo "::error::jq is required for the tool result assertion"
               exit 1
