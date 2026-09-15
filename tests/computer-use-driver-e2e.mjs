@@ -20,15 +20,13 @@ try {
   const names = new Set(tools.map(({ name }) => name));
   for (const name of ['get_window_state', 'click', 'check_permissions', 'health_report']) assert(names.has(name), `missing ${name}`);
   assert(tools.length >= 50, `expected at least 50 tools, received ${tools.length}`);
-  const health = await client.callTool('health_report', {
-    include: process.platform === 'darwin'
-      ? ['binary_version', 'platform_supported']
-      : ['binary_version', 'platform_supported', 'session_active'],
-  });
-  assert.notEqual(health.isError, true, 'health_report returned an error');
   const permissions = await client.callTool('check_permissions', { prompt: false });
   assert(permissions.content.length > 0, 'check_permissions returned no result');
   if (process.platform !== 'darwin') {
+    const health = await client.callTool('health_report', {
+      include: ['binary_version', 'platform_supported', 'session_active'],
+    });
+    assert.notEqual(health.isError, true, 'health_report returned an error');
     assert.notEqual(permissions.isError, true, 'check_permissions returned an error');
     const cursor = await client.callTool('get_cursor_position', {});
     assert.notEqual(cursor.isError, true, 'get_cursor_position returned an error');

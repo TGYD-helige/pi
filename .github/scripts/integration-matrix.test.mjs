@@ -49,10 +49,9 @@ test('runs model-backed computer-use E2E on Linux, macOS, and Windows', async ()
     .map(({ extension, scenario }) => [extension, scenario]);
 
   assert.deepEqual(scenarios, expectedComputerUseScenarios);
-  assert.doesNotMatch(
-    fullMatrix.find(({ extension, scenario }) => extension === 'pi-computer-use' && scenario === 'macos').prompt,
-    /session_active/,
-  );
+  const macos = fullMatrix.find(({ extension, scenario }) => extension === 'pi-computer-use' && scenario === 'macos');
+  assert.equal(macos.tools, 'computer_use_check_permissions');
+  assert.match(macos.prompt, /prompt=false/);
   assert.doesNotMatch(matrixJob, /matrix\.runner/);
   assert.match(matrixJob, /matrix\.scenario == 'macos' && 'macos-15'/);
   assert.match(matrixJob, /matrix\.scenario == 'windows' && 'windows-2025'/);

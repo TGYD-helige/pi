@@ -56,8 +56,10 @@ export const fullMatrix = [
   {
     ...computerUseE2E,
     scenario: 'macos',
-    // GitHub-hosted macOS has no interactive console session.
-    prompt: 'Use computer_use_health_report exactly once with include=[binary_version, platform_supported]. Report the schema version, platform, driver version, and overall status.',
+    tools: 'computer_use_check_permissions',
+    prompt: 'Use computer_use_check_permissions exactly once with prompt=false. Report the Accessibility and Screen Recording statuses.',
+    assert_pattern: '(accessibility|screen.?recording|permission)',
+    assert_tool: 'computer_use_check_permissions',
   },
   {
     ...computerUseE2E,
