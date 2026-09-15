@@ -10,6 +10,12 @@ const expectedComputerUseScenarios = [
   ['pi-computer-use', 'windows'],
 ];
 
+const expectedVideoGenScenarios = [
+  ['pi-video-gen', 'linux'],
+  ['pi-video-gen', 'macos'],
+  ['pi-video-gen', 'windows'],
+];
+
 test('requires environment approval for secret-backed fork integration', async () => {
   const workflow = await readFile(new URL('../workflows/integration.yml', import.meta.url), 'utf8');
 
@@ -66,6 +72,22 @@ test('runs model-backed computer-use E2E on Linux, macOS, and Windows', async ()
   assert.match(matrixJob, /RUNNER_TEMP="\$\{RUNNER_TEMP\/\/\\\\\/\/\}"/);
   assert.match(matrixJob, /matrix\.allow_tool_error.*!= "true"/);
   assert.match(matrixJob, /Run extension prompt \(Stage C\)/);
+});
+
+test('runs video composition E2E on Linux, macOS, and Windows', async () => {
+  const workflow = await readFile(new URL('../workflows/integration.yml', import.meta.url), 'utf8');
+  const setup = await readFile(new URL('../actions/setup-pi-build/action.yml', import.meta.url), 'utf8');
+  const matrixJob = workflow.slice(workflow.indexOf('  extension-tool-matrix:'));
+  const scenarios = selectIntegrationMatrix(['packages/pi-video-gen/src/index.ts'])
+    .map(({ extension, scenario }) => [extension, scenario]);
+
+  assert.deepEqual(scenarios, expectedVideoGenScenarios);
+  assert.match(matrixJob, /matrix\.scenario == 'macos' && 'macos-15'/);
+  assert.match(matrixJob, /matrix\.scenario == 'windows' && 'windows-2025'/);
+  assert.match(matrixJob, /name: pi-video-gen-preview-promo-\$\{\{ matrix\.scenario \}\}/);
+  assert.match(setup, /if \[ "\$RUNNER_OS" = "Windows" \]; then/);
+  assert.match(setup, /"\$BIN_DIR\/ffmpeg\$EXE_SUFFIX"/);
+  assert.match(setup, /"\$BIN_DIR\/ffprobe\$EXE_SUFFIX"/);
 });
 
 test('loads pi-telemetry for every model-backed integration run', async () => {

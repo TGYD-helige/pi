@@ -12,6 +12,12 @@ const computerUseE2E = {
   assert_tool: 'computer_use_health_report',
 };
 
+const videoGenE2E = {
+  extension: 'pi-video-gen',
+  tools: 'video_compose',
+  assert_pattern: 'Promo video ready:',
+};
+
 export const fullMatrix = [
   {
     extension: 'pi-channels',
@@ -129,11 +135,9 @@ export const fullMatrix = [
     prompt: "Use image_generate to generate a test image with prompt 'a solid red square'. Report the generated file path.",
     assert_pattern: '(image|generated|.png|.jpg|.webp|pi-images)',
   },
-  {
-    extension: 'pi-video-gen',
-    tools: 'video_compose',
-    assert_pattern: 'Promo video ready:',
-  },
+  { ...videoGenE2E, scenario: 'linux' },
+  { ...videoGenE2E, scenario: 'macos' },
+  { ...videoGenE2E, scenario: 'windows' },
   {
     extension: 'pi-telemetry',
     tools: 'bash',

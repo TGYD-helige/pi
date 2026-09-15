@@ -292,7 +292,7 @@ jobs:
     if: >
       needs.detect-extension-matrix.outputs.has_extensions == 'true' &&
       vars.PI_INTEGRATION_SKIP_STAGE_C != 'true'
-    runs-on: ${{ matrix.extension == 'pi-computer-use' && matrix.scenario == 'macos' && 'macos-15' || matrix.extension == 'pi-computer-use' && matrix.scenario == 'windows' && 'windows-2025' || 'ubuntu-latest' }}
+    runs-on: ${{ matrix.scenario == 'macos' && 'macos-15' || matrix.scenario == 'windows' && 'windows-2025' || 'ubuntu-latest' }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -785,7 +785,7 @@ jobs:
         if: matrix.extension == 'pi-video-gen'
         uses: actions/upload-artifact@v7
         with:
-          name: pi-video-gen-preview-promo
+          name: pi-video-gen-preview-promo-${{ matrix.scenario }}
           path: |
             ${{ runner.temp }}/pi-video-gen/preview-promo/final_video.mp4
             ${{ runner.temp }}/pi-video-gen/preview-promo/qc/*.png

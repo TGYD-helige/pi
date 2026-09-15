@@ -58,10 +58,10 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "0.80.10",
-    "@earendil-works/pi-coding-agent": "0.80.10",
+    "@earendil-works/pi-ai": "0.85.1",
+    "@earendil-works/pi-coding-agent": "0.85.1",
     "tsup": "^8.4.0",
-    "typebox": "*",
+    "typebox": "1.3.7",
     "vitest": "^4.0.0"
   }
 }
