@@ -32,6 +32,7 @@ test('runs the real Cua Driver MCP lifecycle on macOS and Windows', async () => 
   assert.match(job, /runner: macos-15/);
   assert.match(job, /runner: windows-2025/);
   assert.match(job, /node packages\/pi-computer-use\/scripts\/fetch-driver\.mjs/);
+  assert.match(job, /pnpm --filter @amaster\.ai\/pi-shared build/);
   assert.match(job, /node tests\/computer-use-driver-e2e\.mjs/);
 });
 

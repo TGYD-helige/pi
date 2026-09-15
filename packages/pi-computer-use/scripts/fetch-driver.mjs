@@ -27,7 +27,7 @@ try {
   if (artifact.asset.endsWith('.zip') && process.platform !== 'win32') {
     execFileSync('unzip', ['-q', archive, '-d', unpacked]);
   } else {
-    execFileSync('tar', ['-xf', archive, '-C', unpacked]);
+    execFileSync('tar', ['-xf', artifact.asset, '-C', 'unpacked'], { cwd: work });
   }
 
   const sourceRoot = join(unpacked, readdirSync(unpacked)[0]);

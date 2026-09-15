@@ -130,6 +130,8 @@ jobs:
       - name: Fetch verified Cua Driver runtime
         run: node packages/pi-computer-use/scripts/fetch-driver.mjs ${{ matrix.target }}
         shell: bash
+      - run: pnpm --filter @amaster.ai/pi-shared build
+        shell: bash
       - run: pnpm --filter @amaster.ai/pi-computer-use build
         shell: bash
       - name: Exercise driver daemon and MCP lifecycle
