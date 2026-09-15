@@ -24,8 +24,18 @@ try {
 
   const unpacked = join(work, 'unpacked');
   mkdirSync(unpacked);
-  if (artifact.asset.endsWith('.zip') && process.platform !== 'win32') {
-    execFileSync('unzip', ['-q', archive, '-d', unpacked]);
+  if (artifact.asset.endsWith('.zip')) {
+    if (process.platform === 'win32') {
+      execFileSync('powershell.exe', [
+        '-NoLogo',
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        'Expand-Archive -LiteralPath $env:CUA_ARCHIVE -DestinationPath $env:CUA_UNPACKED',
+      ], { env: { ...process.env, CUA_ARCHIVE: archive, CUA_UNPACKED: unpacked } });
+    } else {
+      execFileSync('unzip', ['-q', archive, '-d', unpacked]);
+    }
   } else {
     execFileSync('tar', ['-xf', artifact.asset, '-C', 'unpacked'], { cwd: work });
   }
