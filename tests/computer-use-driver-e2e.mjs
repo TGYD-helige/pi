@@ -21,7 +21,9 @@ try {
   for (const name of ['get_window_state', 'click', 'check_permissions', 'health_report']) assert(names.has(name), `missing ${name}`);
   assert(tools.length >= 50, `expected at least 50 tools, received ${tools.length}`);
   const health = await client.callTool('health_report', {
-    include: ['binary_version', 'platform_supported', 'session_active'],
+    include: process.platform === 'darwin'
+      ? ['binary_version', 'platform_supported']
+      : ['binary_version', 'platform_supported', 'session_active'],
   });
   assert.notEqual(health.isError, true, 'health_report returned an error');
   const permissions = await client.callTool('check_permissions', { prompt: false });

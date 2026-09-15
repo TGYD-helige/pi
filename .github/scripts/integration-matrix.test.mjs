@@ -4,6 +4,12 @@ import { readFile } from 'node:fs/promises';
 import { test } from 'vitest';
 import { fullMatrix, selectIntegrationMatrix } from './integration-matrix.mjs';
 
+const expectedComputerUseScenarios = [
+  ['pi-computer-use', 'linux'],
+  ['pi-computer-use', 'macos'],
+  ['pi-computer-use', 'windows'],
+];
+
 test('requires environment approval for secret-backed fork integration', async () => {
   const workflow = await readFile(new URL('../workflows/integration.yml', import.meta.url), 'utf8');
 
@@ -34,6 +40,28 @@ test('runs the real Cua Driver MCP lifecycle on macOS and Windows', async () => 
   assert.match(job, /node packages\/pi-computer-use\/scripts\/fetch-driver\.mjs/);
   assert.match(job, /pnpm --filter @amaster\.ai\/pi-shared build/);
   assert.match(job, /node tests\/computer-use-driver-e2e\.mjs/);
+});
+
+test('runs model-backed computer-use E2E on Linux, macOS, and Windows', async () => {
+  const workflow = await readFile(new URL('../workflows/integration.yml', import.meta.url), 'utf8');
+  const matrixJob = workflow.slice(workflow.indexOf('  extension-tool-matrix:'));
+  const scenarios = selectIntegrationMatrix(['packages/pi-computer-use/src/index.ts'])
+    .map(({ extension, scenario }) => [extension, scenario]);
+
+  assert.deepEqual(scenarios, expectedComputerUseScenarios);
+  assert.doesNotMatch(
+    fullMatrix.find(({ extension, scenario }) => extension === 'pi-computer-use' && scenario === 'macos').prompt,
+    /session_active/,
+  );
+  assert.doesNotMatch(matrixJob, /matrix\.runner/);
+  assert.match(matrixJob, /matrix\.scenario == 'macos' && 'macos-15'/);
+  assert.match(matrixJob, /matrix\.scenario == 'windows' && 'windows-2025'/);
+  assert.match(matrixJob, /defaults:\s+run:\s+shell: bash/);
+  assert.match(matrixJob, /build: \$\{\{ matrix\.extension != 'pi-computer-use' && 'true' \|\| 'false' \}\}/);
+  assert.match(matrixJob, /pnpm --filter @amaster\.ai\/pi-shared build/);
+  assert.match(matrixJob, /pnpm --filter @amaster\.ai\/pi-computer-use build/);
+  assert.match(matrixJob, /RUNNER_TEMP="\$\{RUNNER_TEMP\/\/\\\\\/\/\}"/);
+  assert.match(matrixJob, /Run extension prompt \(Stage C\)/);
 });
 
 test('loads pi-telemetry for every model-backed integration run', async () => {
@@ -81,14 +109,12 @@ test('routes companion packages and package-specific integration tests', () => {
     selectIntegrationMatrix(['packages/pi-memory-mem0/src/index.ts']).map(({ extension }) => extension),
     ['pi-memory', 'pi-memory-mem0'],
   );
-  assert.deepEqual(
-    selectIntegrationMatrix(['tests/computer-use-owner-exit.mjs']).map(({ extension }) => extension),
-    ['pi-computer-use'],
-  );
-  assert.deepEqual(
-    selectIntegrationMatrix(['tests/computer-use-driver-e2e.mjs']).map(({ extension }) => extension),
-    ['pi-computer-use'],
-  );
+  for (const file of ['tests/computer-use-owner-exit.mjs', 'tests/computer-use-driver-e2e.mjs']) {
+    assert.deepEqual(
+      selectIntegrationMatrix([file]).map(({ extension, scenario }) => [extension, scenario]),
+      expectedComputerUseScenarios,
+    );
+  }
 });
 
 test('runs the full matrix for shared and integration infrastructure changes', () => {

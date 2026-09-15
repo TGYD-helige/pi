@@ -4,6 +4,14 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
+const computerUseE2E = {
+  extension: 'pi-computer-use',
+  tools: 'computer_use_health_report',
+  prompt: 'Use computer_use_health_report exactly once with include=[binary_version, platform_supported, session_active]. Report the schema version, platform, driver version, and overall status.',
+  assert_pattern: '(schema_version|driver_version|overall)',
+  assert_tool: 'computer_use_health_report',
+};
+
 export const fullMatrix = [
   {
     extension: 'pi-channels',
@@ -42,11 +50,18 @@ export const fullMatrix = [
     assert_pattern: '(0|task|tasks|empty|none)',
   },
   {
-    extension: 'pi-computer-use',
-    tools: 'computer_use_health_report',
-    prompt: 'Use computer_use_health_report exactly once with include=[binary_version, platform_supported, session_active]. Report the schema version, platform, driver version, and overall status.',
-    assert_pattern: '(schema_version|driver_version|overall)',
-    assert_tool: 'computer_use_health_report',
+    ...computerUseE2E,
+    scenario: 'linux',
+  },
+  {
+    ...computerUseE2E,
+    scenario: 'macos',
+    // GitHub-hosted macOS has no interactive console session.
+    prompt: 'Use computer_use_health_report exactly once with include=[binary_version, platform_supported]. Report the schema version, platform, driver version, and overall status.',
+  },
+  {
+    ...computerUseE2E,
+    scenario: 'windows',
   },
   {
     extension: 'pi-goal',
