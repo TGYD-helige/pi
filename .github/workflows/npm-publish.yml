@@ -17,12 +17,12 @@ on:
         default: auto
         type: string
       build_ffmpeg:
-        description: Rebuild and publish the FFmpeg platform packages first (at their committed versions); off = reuse the versions already on npm
+        description: Publish FFmpeg platform packages
         required: true
         default: false
         type: boolean
       publish_cua_driver:
-        description: Publish missing Cua Driver platform packages before the monorepo release
+        description: Publish Cua Driver platform packages
         required: true
         default: false
         type: boolean
