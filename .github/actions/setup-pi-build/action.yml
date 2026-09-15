@@ -117,11 +117,15 @@ runs:
             );
           "
         )"
-        chmod 0755 "$FFMPEG_BIN" "$FFPROBE_BIN"
-        ln -sf "$FFMPEG_BIN" "$BIN_DIR/ffmpeg"
-        ln -sf "$FFPROBE_BIN" "$BIN_DIR/ffprobe"
-        "$BIN_DIR/ffmpeg" -version
-        "$BIN_DIR/ffprobe" -version
+        EXE_SUFFIX=""
+        if [ "$RUNNER_OS" = "Windows" ]; then
+          EXE_SUFFIX=".exe"
+        fi
+        cp "$FFMPEG_BIN" "$BIN_DIR/ffmpeg$EXE_SUFFIX"
+        cp "$FFPROBE_BIN" "$BIN_DIR/ffprobe$EXE_SUFFIX"
+        chmod 0755 "$BIN_DIR/ffmpeg$EXE_SUFFIX" "$BIN_DIR/ffprobe$EXE_SUFFIX"
+        "$BIN_DIR/ffmpeg$EXE_SUFFIX" -version
+        "$BIN_DIR/ffprobe$EXE_SUFFIX" -version
         echo "$BIN_DIR" >> "$GITHUB_PATH"
 
     - name: Force-fetch better-sqlite3 prebuilt binary
