@@ -188,7 +188,7 @@ export function selectIntegrationMatrix(changedFiles, { forceAll = false } = {})
     // A package with its own dedicated entry runs it alongside any aliased
     // companion job (pi-memory-mem0 runs both pi-memory and its own).
     if (testedExtensions.has(packageName)) selected.add(packageName);
-    if (file === 'tests/computer-use-owner-exit.mjs') selected.add('pi-computer-use');
+    if (file.startsWith('tests/computer-use-')) selected.add('pi-computer-use');
     if (file.startsWith('.github/scripts/telemetry-')) selected.add('pi-telemetry');
   }
   return fullMatrix.filter((entry) => selected.has(entry.extension));

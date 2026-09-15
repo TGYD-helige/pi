@@ -1,4 +1,5 @@
 packages:
   - "packages/*"
+  - "packages/pi-computer-use/platforms/*"
   - "packages/pi-video-gen/platforms/*"
   - "tests/eval"

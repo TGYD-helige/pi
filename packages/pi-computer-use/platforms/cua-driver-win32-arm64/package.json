@@ -1,0 +1,15 @@
+{
+  "name": "@amaster.ai/pi-computer-use-cua-driver-win32-arm64",
+  "version": "0.1.0",
+  "cuaDriverVersion": "0.28.1",
+  "description": "Cua Driver runtime for pi-computer-use on Windows ARM64",
+  "license": "MIT",
+  "files": ["bin", "LICENSE.md", "SOURCE.md"],
+  "os": ["win32"],
+  "cpu": ["arm64"],
+  "exports": { "./package.json": "./package.json" },
+  "publishConfig": {
+    "access": "public",
+    "executableFiles": ["./bin/cua-driver.exe", "./bin/cua-driver-uia.exe", "./bin/cua-cursor-theme.exe"]
+  }
+}

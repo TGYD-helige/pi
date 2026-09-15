@@ -21,6 +21,11 @@ on:
         required: true
         default: false
         type: boolean
+      publish_cua_driver:
+        description: Publish missing Cua Driver platform packages before the monorepo release
+        required: true
+        default: false
+        type: boolean
 permissions:
   contents: write
 
@@ -35,10 +40,19 @@ jobs:
     uses: ./.github/workflows/ffmpeg-build.yml
     secrets: inherit
 
+  cua-driver:
+    name: publish Cua Driver platform packages
+    if: inputs.publish_cua_driver
+    uses: ./.github/workflows/cua-driver-publish.yml
+    secrets: inherit
+
   publish:
     name: publish packages
-    needs: ffmpeg
-    if: always() && (needs.ffmpeg.result == 'success' || needs.ffmpeg.result == 'skipped')
+    needs: [ffmpeg, cua-driver]
+    if: >
+      always() &&
+      (needs.ffmpeg.result == 'success' || needs.ffmpeg.result == 'skipped') &&
+      (needs.cua-driver.result == 'success' || needs.cua-driver.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     outputs:
@@ -77,28 +91,42 @@ jobs:
             exit 1
           fi
 
-      # FFmpeg platform packages are versioned and published independently by
-      # the ffmpeg-build workflow. pi-video-gen pins them via workspace:* at
-      # publish time, so their committed versions must already exist on npm.
-      - name: Verify FFmpeg platform packages are published
+      # Native platform packages are versioned and published independently.
+      # workspace:* resolves to their committed versions when the parent packages are packed.
+      - name: Verify native platform packages are published
         run: |
           node <<'EOF'
           const fs = require("node:fs");
           const path = require("node:path");
           const { execFileSync } = require("node:child_process");
+          const cuaDriverVersion = JSON.parse(fs.readFileSync(
+            path.join(process.cwd(), "packages", "pi-computer-use", "driver-release.json"),
+            "utf8"
+          )).version;
 
-          const platformsDir = path.join(process.cwd(), "packages", "pi-video-gen", "platforms");
-          const platformPackages = fs.readdirSync(platformsDir, { withFileTypes: true })
-            .filter((entry) => entry.isDirectory())
-            .map((entry) =>
-              JSON.parse(fs.readFileSync(path.join(platformsDir, entry.name, "package.json"), "utf8"))
-            );
+          const platformPackages = ["pi-video-gen", "pi-computer-use"].flatMap((packageName) => {
+            const root = path.join(process.cwd(), "packages", packageName, "platforms");
+            return fs.readdirSync(root, { withFileTypes: true })
+              .filter((entry) => entry.isDirectory())
+              .map((entry) => JSON.parse(fs.readFileSync(path.join(root, entry.name, "package.json"), "utf8")));
+          });
 
           let missing = false;
           for (const pkg of platformPackages) {
             const ref = `${pkg.name}@${pkg.version}`;
             try {
-              execFileSync("npm", ["view", ref, "version"], { stdio: ["ignore", "ignore", "pipe"] });
+              if (pkg.cuaDriverVersion && pkg.cuaDriverVersion !== cuaDriverVersion) {
+                throw new Error(`${ref} declares Cua Driver ${pkg.cuaDriverVersion}, expected ${cuaDriverVersion}`);
+              }
+              const field = pkg.cuaDriverVersion ? "cuaDriverVersion" : "version";
+              const expected = pkg.cuaDriverVersion || pkg.version;
+              const published = execFileSync("npm", ["view", ref, field], {
+                encoding: "utf8",
+                stdio: ["ignore", "pipe", "pipe"],
+              }).trim();
+              if (published !== expected) {
+                throw new Error(`${ref} contains ${field}=${published || "unknown"}, expected ${expected}`);
+              }
               console.log(`ok: ${ref} is published`);
             } catch (error) {
               const stderr = error.stderr?.toString?.() ?? "";
@@ -110,9 +138,7 @@ jobs:
             }
           }
           if (missing) {
-            console.error(
-              "FFmpeg platform packages are published by the ffmpeg-build workflow; run it and let it finish before publishing the monorepo packages."
-            );
+            console.error("Publish the missing native platform packages before the monorepo packages.");
             process.exit(1);
           }
           EOF

@@ -1,9 +1,9 @@
 import { type ChildProcess, execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { accessSync, chmodSync, constants, existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import {
@@ -40,7 +40,7 @@ while [ "$attempt" -lt 100 ]; do
 done
 `;
 const execFileAsync = promisify(execFile);
-const packageDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const localRequire = createRequire(import.meta.url);
 
 function requestOptions(signal?: AbortSignal) {
   return signal ? { signal, timeout: MCP_TIMEOUT_MS } : { timeout: MCP_TIMEOUT_MS };
@@ -93,6 +93,16 @@ export function resolveBundledTarget(platform: string, arch: string): string {
   return `${platform}-${arch}`;
 }
 
+function resolveDriverPackageRoot(platform: string, arch: string): string {
+  const target = resolveBundledTarget(platform, arch);
+  const packageName = `@amaster.ai/pi-computer-use-cua-driver-${target}`;
+  try {
+    return path.dirname(localRequire.resolve(`${packageName}/package.json`));
+  } catch {
+    throw new Error(`Cua Driver runtime package is not installed for ${target}.`);
+  }
+}
+
 export function resolveUnixSocketPath(tempDir: string, suffix: string): string {
   const filename = `pi-cua-${suffix}.sock`;
   const configuredTmpPath = path.join(tempDir, filename);
@@ -143,7 +153,7 @@ export interface DriverLayout {
 
 export function resolveDriverLayout(
   config: ComputerUseConfig,
-  rootDir = packageDir,
+  rootDir: string | undefined = undefined,
   platform = process.platform,
   arch = process.arch,
 ): DriverLayout {
@@ -151,8 +161,9 @@ export function resolveDriverLayout(
     return { binaryPath: config.binaryPath, embedded: platform === 'darwin' };
   }
 
-  const target = resolveBundledTarget(platform, arch);
-  const binDir = path.join(rootDir, 'bin', target);
+  const binDir = rootDir
+    ? path.join(rootDir, 'bin', resolveBundledTarget(platform, arch))
+    : path.join(resolveDriverPackageRoot(platform, arch), 'bin');
   if (platform === 'darwin') {
     const appPath = path.join(binDir, 'CuaDriver.app');
     return {

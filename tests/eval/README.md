@@ -114,7 +114,7 @@ Flags are identical to the browser runner. Result file: `results/computer-tasks.
 
 **macOS-only, and skips gracefully elsewhere.** On any non-macOS platform (e.g. a Linux CI runner) the runner writes a `{skipped: true}` result and exits 0 — it never fails a cross-platform pipeline. On macOS it requires:
 - The bundled `cua-driver` binary for your platform
-  (`packages/pi-computer-use/bin/<platform>/`).
+  (`packages/pi-computer-use/platforms/cua-driver-<platform>/bin/`).
 - **Accessibility** *and* **Screen Recording** granted to the process running the
   eval (System Settings → Privacy & Security). Without them cua-driver returns
   `ax_not_granted` / `sc_not_granted`; the extension's own permission hint then

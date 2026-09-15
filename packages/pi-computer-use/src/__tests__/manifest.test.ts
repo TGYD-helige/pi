@@ -4,26 +4,23 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import toolManifest from '../generated/cua-driver-tools.js';
 
-function plistStringValue(plist: string, key: string): string | undefined {
-  return plist.match(new RegExp(`<key>${key}</key>\\s*<string>([^<]*)</string>`))?.[1];
-}
-
 describe('bundled tool manifest', () => {
-  it('matches the bundled macOS driver version metadata', () => {
+  it('matches the pinned Cua Driver release', () => {
     const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-    const releaseTag = readFileSync(
-      resolve(packageDir, 'bin/darwin-universal/.version'),
-      'utf8',
-    ).split(/\r?\n/, 1)[0];
-    const infoPlist = readFileSync(
-      resolve(packageDir, 'bin/darwin-universal/CuaDriver.app/Contents/Info.plist'),
-      'utf8',
-    );
+    const release = JSON.parse(readFileSync(resolve(packageDir, 'driver-release.json'), 'utf8'));
 
-    expect(releaseTag).toBe(`cua-driver-rs-v${toolManifest.driverVersion}`);
-    expect(plistStringValue(infoPlist, 'CFBundleShortVersionString')).toBe(
-      toolManifest.driverVersion,
-    );
-    expect(plistStringValue(infoPlist, 'CFBundleVersion')).toBe(toolManifest.driverVersion);
+    expect(release.version).toBe(toolManifest.driverVersion);
+    expect(release.tag).toBe(`cua-driver-rs-v${toolManifest.driverVersion}`);
+  });
+
+  it('documents the upstream cursor tool migration', () => {
+    const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+    const readme = readFileSync(resolve(packageDir, 'README.md'), 'utf8');
+    const toolNames = toolManifest.tools.map(({ name }) => name);
+
+    expect(toolNames).toContain('set_agent_cursor_theme');
+    expect(toolNames).not.toContain('set_agent_cursor_style');
+    expect(readme).toContain('`set_agent_cursor_style`');
+    expect(readme).toContain('`set_agent_cursor_theme`');
   });
 });

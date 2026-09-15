@@ -15,12 +15,24 @@ test('requires environment approval for secret-backed fork integration', async (
   assert.match(workflow, /integration-approval:\s+name: Approve secret-backed Integration/);
   assert.match(workflow, /pi-runtime-smoke:[\s\S]*?needs: integration-approval/);
   assert.match(workflow, /extension-tool-matrix:[\s\S]*?needs: \[detect-extension-matrix, integration-approval\]/);
-  assert.equal(workflow.match(/allow-unsafe-pr-checkout:/g)?.length, 4);
-  assert.equal(workflow.match(/persist-credentials: false/g)?.length, 4);
-  assert.equal(workflow.match(/ref: \$\{\{ env\.INTEGRATION_CHECKOUT_REF \}\}/g)?.length, 4);
+  assert.equal(workflow.match(/allow-unsafe-pr-checkout:/g)?.length, 5);
+  assert.equal(workflow.match(/persist-credentials: false/g)?.length, 5);
+  assert.equal(workflow.match(/ref: \$\{\{ env\.INTEGRATION_CHECKOUT_REF \}\}/g)?.length, 5);
   assert.doesNotMatch(workflow, /integration-approved/);
   assert.match(workflow, /PI_INTEGRATION_BASE_URL and PI_INTEGRATION_API_KEY are required for Stage B/);
   assert.match(workflow, /PI_INTEGRATION_\* secrets are required for Stage C/);
+});
+
+test('runs the real Cua Driver MCP lifecycle on macOS and Windows', async () => {
+  const workflow = await readFile(new URL('../workflows/integration.yml', import.meta.url), 'utf8');
+  const job = workflow.slice(
+    workflow.indexOf('  computer-use-platform-e2e:'),
+    workflow.indexOf('  integration-approval:'),
+  );
+  assert.match(job, /runner: macos-15/);
+  assert.match(job, /runner: windows-2025/);
+  assert.match(job, /node packages\/pi-computer-use\/scripts\/fetch-driver\.mjs/);
+  assert.match(job, /node tests\/computer-use-driver-e2e\.mjs/);
 });
 
 test('loads pi-telemetry for every model-backed integration run', async () => {
@@ -70,6 +82,10 @@ test('routes companion packages and package-specific integration tests', () => {
   );
   assert.deepEqual(
     selectIntegrationMatrix(['tests/computer-use-owner-exit.mjs']).map(({ extension }) => extension),
+    ['pi-computer-use'],
+  );
+  assert.deepEqual(
+    selectIntegrationMatrix(['tests/computer-use-driver-e2e.mjs']).map(({ extension }) => extension),
     ['pi-computer-use'],
   );
 });

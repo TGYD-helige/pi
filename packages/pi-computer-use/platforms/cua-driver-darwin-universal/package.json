@@ -1,0 +1,14 @@
+{
+  "name": "@amaster.ai/pi-computer-use-cua-driver-darwin-universal",
+  "version": "0.1.0",
+  "cuaDriverVersion": "0.28.1",
+  "description": "Cua Driver runtime for pi-computer-use on macOS",
+  "license": "MIT",
+  "files": ["bin", "LICENSE.md", "SOURCE.md"],
+  "os": ["darwin"],
+  "exports": { "./package.json": "./package.json" },
+  "publishConfig": {
+    "access": "public",
+    "executableFiles": ["./bin/CuaDriver.app/Contents/MacOS/cua-driver", "./bin/CuaDriver.app/Contents/MacOS/cua-cursor-theme"]
+  }
+}

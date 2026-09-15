@@ -97,6 +97,45 @@ jobs:
             exit 1
           fi
 
+  computer-use-platform-e2e:
+    name: Computer use driver E2E (${{ matrix.target }})
+    needs: detect-extension-matrix
+    if: contains(needs.detect-extension-matrix.outputs.matrix, 'pi-computer-use')
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-universal
+            runner: macos-15
+          - target: win32-x64
+            runner: windows-2025
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ env.INTEGRATION_CHECKOUT_REPOSITORY }}
+          ref: ${{ env.INTEGRATION_CHECKOUT_REF }}
+          persist-credentials: false
+          allow-unsafe-pr-checkout: ${{ github.event_name == 'pull_request_target' }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@v6
+        with:
+          cache: false
+          dest: ${{ runner.temp }}/setup-pnpm
+      - run: pnpm install --frozen-lockfile
+        shell: bash
+      - name: Fetch verified Cua Driver runtime
+        run: node packages/pi-computer-use/scripts/fetch-driver.mjs ${{ matrix.target }}
+        shell: bash
+      - run: pnpm --filter @amaster.ai/pi-computer-use build
+        shell: bash
+      - name: Exercise driver daemon and MCP lifecycle
+        run: node tests/computer-use-driver-e2e.mjs
+        shell: bash
+
   # ──────────────────────────────────────────────────────────────────────
   integration-approval:
     name: Approve secret-backed Integration
@@ -581,7 +620,9 @@ jobs:
 
       - name: Verify computer-use daemon follows abrupt owner exit
         if: matrix.extension == 'pi-computer-use'
-        run: node tests/computer-use-owner-exit.mjs
+        run: |
+          node packages/pi-computer-use/scripts/fetch-driver.mjs
+          node tests/computer-use-owner-exit.mjs
 
       - name: Compose preview video (pi-video-gen only)
         if: matrix.extension == 'pi-video-gen'

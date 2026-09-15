@@ -19,8 +19,6 @@
   },
   "files": [
     "dist",
-    "bin",
-    "scripts",
     "preview.png",
     "README.md"
   ],
@@ -41,12 +39,18 @@
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc -b --pretty false",
-    "test": "vitest run src",
-    "postinstall": "node scripts/postinstall.js"
+    "test": "vitest run src"
   },
   "dependencies": {
     "@amaster.ai/pi-shared": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "optionalDependencies": {
+    "@amaster.ai/pi-computer-use-cua-driver-darwin-universal": "workspace:*",
+    "@amaster.ai/pi-computer-use-cua-driver-linux-arm64": "workspace:*",
+    "@amaster.ai/pi-computer-use-cua-driver-linux-x64": "workspace:*",
+    "@amaster.ai/pi-computer-use-cua-driver-win32-arm64": "workspace:*",
+    "@amaster.ai/pi-computer-use-cua-driver-win32-x64": "workspace:*"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": ">=0.80.10",
