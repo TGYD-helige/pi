@@ -7,7 +7,7 @@ description: >
 
 inputs:
   install-pi-cli:
-    description: When 'true', install pi-coding-agent 0.85.1 globally after build.
+    description: When 'true', install the latest pi-coding-agent globally after build.
     required: false
     default: 'false'
   prebuild-better-sqlite3:
@@ -150,4 +150,4 @@ runs:
     - name: Install pi-coding-agent
       if: inputs.install-pi-cli == 'true'
       shell: bash
-      run: npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.85.1
+      run: npm install -g --ignore-scripts @earendil-works/pi-coding-agent@latest
