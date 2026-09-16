@@ -81,7 +81,7 @@ jobs:
           PI_INTEGRATION_BASE_URL: ${{ secrets.PI_INTEGRATION_BASE_URL }}
         run: |
           set -euo pipefail
-          npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.83.0
+          npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.85.1
           echo "PI_CODING_AGENT_DIR=$RUNNER_TEMP/pi-skill-eval-agent" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/pi-skill-eval-agent"
           PI_CODING_AGENT_DIR="$RUNNER_TEMP/pi-skill-eval-agent" node <<'NODE'
