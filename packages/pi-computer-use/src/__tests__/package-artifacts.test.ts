@@ -11,12 +11,6 @@ const mainPackage = JSON.parse(readFileSync(join(packageRoot, 'package.json'), '
   scripts: Record<string, string>;
   optionalDependencies?: Record<string, string>;
 };
-const release = JSON.parse(readFileSync(join(packageRoot, 'driver-release.json'), 'utf8')) as {
-  version: string;
-  tag: string;
-  targets: Record<string, { asset: string; sha256: string }>;
-};
-
 const targets = [
   { suffix: 'darwin-universal', os: 'darwin', cpu: undefined },
   { suffix: 'linux-arm64', os: 'linux', cpu: 'arm64', libc: ['glibc'] },
@@ -46,7 +40,7 @@ describe('pi-computer-use package artifacts', () => {
       ) as {
         name: string;
         version: string;
-        cuaDriverVersion: string;
+        cuaDriverVersion?: string;
         os: string[];
         cpu?: string[];
         libc?: string[];
@@ -55,7 +49,7 @@ describe('pi-computer-use package artifacts', () => {
       };
       expect(pkg.name).toBe(`@amaster.ai/pi-computer-use-cua-driver-${target.suffix}`);
       expect(pkg.version).toBe('0.1.0');
-      expect(pkg.cuaDriverVersion).toBe(release.version);
+      expect(pkg.cuaDriverVersion).toBeUndefined();
       expect(pkg.os).toEqual([target.os]);
       expect(pkg.cpu).toEqual(target.cpu ? [target.cpu] : undefined);
       expect(pkg.libc).toEqual('libc' in target ? target.libc : undefined);
@@ -74,16 +68,16 @@ describe('pi-computer-use package artifacts', () => {
       'utf8',
     );
     expect(runtimeWorkflow).toContain('workflow_call');
+    expect(runtimeWorkflow).not.toContain('push:');
     expect(runtimeWorkflow).toContain('scripts/fetch-driver.mjs');
-    expect(runtimeWorkflow).toContain('cuaDriverVersion');
-    expect(runtimeWorkflow).toContain('bump the platform package version');
+    expect(runtimeWorkflow).toContain('npm pkg set version="$version" cuaDriverVersion="$version"');
     expect(runtimeWorkflow).toContain('npm pack');
     expect(runtimeWorkflow).not.toContain('pnpm/action-setup');
     expect(runtimeWorkflow).toContain('npm publish');
     expect(publishWorkflow).toContain('publish_cua_driver');
     expect(publishWorkflow).toContain('uses: ./.github/workflows/cua-driver-publish.yml');
     expect(publishWorkflow).toContain('Verify native platform packages are published');
-    expect(publishWorkflow).toContain('cuaDriverVersion');
+    expect(publishWorkflow).toContain('npm pkg set version="$version" cuaDriverVersion="$version"');
     expect(publishWorkflow).toContain('driver-release.json');
   });
 });

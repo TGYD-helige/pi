@@ -3,13 +3,6 @@ name: Publish pi-computer-use Cua Driver
 on:
   workflow_dispatch: {}
   workflow_call: {}
-  push:
-    branches: [master]
-    paths:
-      - "packages/pi-computer-use/driver-release.json"
-      - "packages/pi-computer-use/scripts/fetch-driver.mjs"
-      - "packages/pi-computer-use/platforms/**"
-      - ".github/workflows/cua-driver-publish.yml"
 
 permissions:
   contents: read
@@ -34,15 +27,10 @@ jobs:
           driver_version="$(node -p "require('./packages/pi-computer-use/driver-release.json').version")"
           for dir in packages/pi-computer-use/platforms/cua-driver-*; do
             name="$(node -p "require('./${dir}/package.json').name")"
-            version="$(node -p "require('./${dir}/package.json').version")"
-            package_driver_version="$(node -p "require('./${dir}/package.json').cuaDriverVersion")"
-            if [ "$package_driver_version" != "$driver_version" ]; then
-              echo "${name} declares Cua Driver ${package_driver_version}, expected ${driver_version}."
-              exit 1
-            fi
+            version="$driver_version"
             if published_driver_version="$(npm view "${name}@${version}" cuaDriverVersion 2>/dev/null)"; then
               if [ "$published_driver_version" != "$driver_version" ]; then
-                echo "${name}@${version} contains Cua Driver ${published_driver_version:-unknown}; bump the platform package version."
+                echo "${name}@${version} contains Cua Driver ${published_driver_version:-unknown}, expected ${driver_version}."
                 exit 1
               fi
               echo "already on npm: ${name}@${version}"
@@ -84,10 +72,11 @@ jobs:
         shell: bash
         run: |
           dir="packages/pi-computer-use/platforms/cua-driver-${{ matrix.target }}"
+          version="$(node -p "require('./packages/pi-computer-use/driver-release.json').version")"
+          npm pkg set version="$version" cuaDriverVersion="$version" --prefix "$dir"
           case "${{ matrix.target }}" in
             darwin-universal)
               bin="$dir/bin/CuaDriver.app/Contents/MacOS/cua-driver"
-              version="$(node -p "require('./packages/pi-computer-use/driver-release.json').version")"
               codesign --verify --deep --strict "$dir/bin/CuaDriver.app"
               lipo -archs "$bin" | grep -q arm64
               lipo -archs "$bin" | grep -q x86_64
@@ -97,7 +86,7 @@ jobs:
             win32-*) bin="$dir/bin/cua-driver.exe" ;;
             *) bin="$dir/bin/cua-driver" ;;
           esac
-          "$bin" --version | grep -F "$(node -p "require('./packages/pi-computer-use/driver-release.json').version")"
+          "$bin" --version | grep -F "$version"
           "$bin" list-tools | grep -F 'get_window_state:'
           npm pack "$dir" --pack-destination "$RUNNER_TEMP"
       - uses: actions/upload-artifact@v7
