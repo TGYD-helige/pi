@@ -670,13 +670,14 @@ jobs:
           await writeFile(process.env.SPEC_PATH, `${JSON.stringify(spec, null, 2)}\n`);
           NODE
 
-          PI_E2E_SPEC="$SPEC_PATH" node --input-type=module <<'NODE'
+          PI_E2E_CLI="$(npm root --global)/@earendil-works/pi-coding-agent/dist/cli.js" PI_E2E_SPEC="$SPEC_PATH" node --input-type=module <<'NODE'
           import { spawn } from 'node:child_process';
           import { createInterface } from 'node:readline';
 
           const child = spawn(
-            'pi',
+            process.execPath,
             [
+              process.env.PI_E2E_CLI,
               '--mode',
               'rpc',
               '--no-session',

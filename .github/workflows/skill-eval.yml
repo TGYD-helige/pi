@@ -75,13 +75,13 @@ jobs:
           test -n "$PI_INTEGRATION_BASE_URL" || { echo '::error::PI_INTEGRATION_BASE_URL is not configured'; exit 1; }
           test -n "$PI_INTEGRATION_API_KEY" || { echo '::error::PI_INTEGRATION_API_KEY is not configured'; exit 1; }
 
-      - name: Install pinned Pi and prepare isolated config
+      - name: Install latest Pi and prepare isolated config
         if: steps.changes.outputs.has_skills == 'true'
         env:
           PI_INTEGRATION_BASE_URL: ${{ secrets.PI_INTEGRATION_BASE_URL }}
         run: |
           set -euo pipefail
-          npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.83.0
+          npm install --global --ignore-scripts @earendil-works/pi-coding-agent@latest
           echo "PI_CODING_AGENT_DIR=$RUNNER_TEMP/pi-skill-eval-agent" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/pi-skill-eval-agent"
           PI_CODING_AGENT_DIR="$RUNNER_TEMP/pi-skill-eval-agent" node <<'NODE'

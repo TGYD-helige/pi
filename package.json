@@ -9,9 +9,9 @@
     "node": ">=24.0.0"
   },
   "scripts": {
-    "build": "pnpm --filter @amaster.ai/pi-storage clean && pnpm --filter @amaster.ai/pi-storage prisma:generate && tsc -b packages/*/tsconfig.json",
+    "build": "pnpm --filter @amaster.ai/pi-storage clean && pnpm --filter @amaster.ai/pi-storage prisma:generate && node .github/scripts/build-typescript.mjs",
     "pr-check": "pnpm build && pnpm test && pnpm typecheck",
-    "typecheck": "pnpm --filter @amaster.ai/pi-storage prisma:generate && tsc -b packages/*/tsconfig.json --pretty false && tsc -p tsconfig.check.json --pretty false",
+    "typecheck": "pnpm --filter @amaster.ai/pi-storage prisma:generate && node .github/scripts/build-typescript.mjs --pretty false && tsc -p tsconfig.check.json --pretty false",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "test": "vitest run",
