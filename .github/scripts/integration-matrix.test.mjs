@@ -88,6 +88,8 @@ test('runs video composition E2E on Linux, macOS, and Windows', async () => {
   assert.match(setup, /if \[ "\$RUNNER_OS" = "Windows" \]; then/);
   assert.match(setup, /"\$BIN_DIR\/ffmpeg\$EXE_SUFFIX"/);
   assert.match(setup, /"\$BIN_DIR\/ffprobe\$EXE_SUFFIX"/);
+  assert.match(matrixJob, /PI_E2E_CLI="\$\(npm root --global\)\/@earendil-works\/pi-coding-agent\/dist\/cli\.js"/);
+  assert.match(matrixJob, /const child = spawn\(\s*process\.execPath,\s*\[\s*process\.env\.PI_E2E_CLI,/);
 });
 
 test('loads pi-telemetry for every model-backed integration run', async () => {
