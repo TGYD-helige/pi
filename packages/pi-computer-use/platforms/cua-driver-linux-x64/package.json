@@ -1,7 +1,7 @@
 {
   "name": "@amaster.ai/pi-computer-use-cua-driver-linux-x64",
   "version": "0.1.0",
-  "cuaDriverVersion": "0.28.1",
+  "cuaDriverVersion": "0.28.2",
   "description": "Cua Driver runtime for pi-computer-use on Linux x64",
   "license": "MIT",
   "files": ["bin", "LICENSE.md", "SOURCE.md"],
