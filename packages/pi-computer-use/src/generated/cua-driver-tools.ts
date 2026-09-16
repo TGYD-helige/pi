@@ -1,6 +1,6 @@
-// biome-ignore-all format: Generated from Cua Driver Rust 0.28.1 tools/list. Do not edit manually.
+// biome-ignore-all format: Generated from Cua Driver Rust 0.28.2 tools/list. Do not edit manually.
 export default {
-  "driverVersion": "0.28.1",
+  "driverVersion": "0.28.2",
   "generatedFrom": "darwin-universal",
   "tools": [
     {

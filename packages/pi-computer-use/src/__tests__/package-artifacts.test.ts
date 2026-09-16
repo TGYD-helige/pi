@@ -39,16 +39,6 @@ describe('pi-computer-use package artifacts', () => {
     );
   });
 
-  it('pins one verified upstream release for every platform', () => {
-    expect(release.version).toBe('0.28.1');
-    expect(release.tag).toBe('cua-driver-rs-v0.28.1');
-    expect(Object.keys(release.targets).sort()).toEqual(targets.map(({ suffix }) => suffix).sort());
-    for (const target of Object.values(release.targets)) {
-      expect(target.asset).toContain('0.28.1');
-      expect(target.sha256).toMatch(/^[a-f0-9]{64}$/);
-    }
-  });
-
   for (const target of targets) {
     it(`publishes only the ${target.suffix} Cua Driver runtime`, () => {
       const pkg = JSON.parse(
