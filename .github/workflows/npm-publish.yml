@@ -79,6 +79,13 @@ jobs:
       - name: Setup pnpm
         run: corepack install -g pnpm@10.18.3
 
+      - name: Prepare Cua Driver platform package versions
+        run: |
+          version="$(node -p "require('./packages/pi-computer-use/driver-release.json').version")"
+          for dir in packages/pi-computer-use/platforms/cua-driver-*; do
+            npm pkg set version="$version" cuaDriverVersion="$version" --prefix "$dir"
+          done
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -91,8 +98,8 @@ jobs:
             exit 1
           fi
 
-      # Native platform packages are versioned and published independently.
-      # workspace:* resolves to their committed versions when the parent packages are packed.
+      # Native platform packages are published independently. FFmpeg uses its
+      # committed versions; Cua Driver uses driver-release.json.version.
       - name: Verify native platform packages are published
         run: |
           node <<'EOF'
