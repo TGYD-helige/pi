@@ -81,9 +81,16 @@ jobs:
 
       - name: Prepare Cua Driver platform package versions
         run: |
-          version="$(node -p "require('./packages/pi-computer-use/driver-release.json').version")"
+          driver_version="$(node -p "require('./packages/pi-computer-use/driver-release.json').version")"
+          package_version="${{ needs.cua-driver.outputs.package_version }}"
+          if [ -z "$package_version" ]; then
+            package_dir="packages/pi-computer-use/platforms/cua-driver-darwin-universal"
+            package_name="$(node -p "require('./${package_dir}/package.json').name")"
+            base_version="$(node -p "require('./${package_dir}/package.json').version")"
+            package_version="$(node .github/scripts/resolve-cua-driver-package-version.mjs "$package_name" "$base_version" "$driver_version")"
+          fi
           for dir in packages/pi-computer-use/platforms/cua-driver-*; do
-            npm pkg set version="$version" cuaDriverVersion="$version" --prefix "$dir"
+            npm pkg set version="$package_version" cuaDriverVersion="$driver_version" --prefix "$dir"
           done
 
       - name: Install dependencies
@@ -99,7 +106,8 @@ jobs:
           fi
 
       # Native platform packages are published independently. FFmpeg uses its
-      # committed versions; Cua Driver uses driver-release.json.version.
+      # committed versions; Cua Driver derives its next 0.1.x package version
+      # from npm and records driver-release.json.version as metadata.
       - name: Verify native platform packages are published
         run: |
           node <<'EOF'
