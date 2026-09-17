@@ -2,7 +2,11 @@ name: Publish pi-computer-use Cua Driver
 
 on:
   workflow_dispatch: {}
-  workflow_call: {}
+  workflow_call:
+    outputs:
+      package_version:
+        description: Cua Driver platform package version
+        value: ${{ jobs.decide.outputs.package_version }}
 
 permissions:
   contents: read
@@ -16,6 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       missing: ${{ steps.check.outputs.missing }}
+      package_version: ${{ steps.check.outputs.package_version }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -25,21 +30,25 @@ jobs:
         run: |
           missing=false
           driver_version="$(node -p "require('./packages/pi-computer-use/driver-release.json').version")"
+          package_dir="packages/pi-computer-use/platforms/cua-driver-darwin-universal"
+          package_name="$(node -p "require('./${package_dir}/package.json').name")"
+          base_version="$(node -p "require('./${package_dir}/package.json').version")"
+          package_version="$(node .github/scripts/resolve-cua-driver-package-version.mjs "$package_name" "$base_version" "$driver_version")"
           for dir in packages/pi-computer-use/platforms/cua-driver-*; do
             name="$(node -p "require('./${dir}/package.json').name")"
-            version="$driver_version"
-            if published_driver_version="$(npm view "${name}@${version}" cuaDriverVersion 2>/dev/null)"; then
+            if published_driver_version="$(npm view "${name}@${package_version}" cuaDriverVersion 2>/dev/null)"; then
               if [ "$published_driver_version" != "$driver_version" ]; then
-                echo "${name}@${version} contains Cua Driver ${published_driver_version:-unknown}, expected ${driver_version}."
+                echo "${name}@${package_version} contains Cua Driver ${published_driver_version:-unknown}, expected ${driver_version}."
                 exit 1
               fi
-              echo "already on npm: ${name}@${version}"
+              echo "already on npm: ${name}@${package_version}"
             else
-              echo "to publish: ${name}@${version}"
+              echo "to publish: ${name}@${package_version}"
               missing=true
             fi
           done
           echo "missing=${missing}" >> "$GITHUB_OUTPUT"
+          echo "package_version=${package_version}" >> "$GITHUB_OUTPUT"
 
   build:
     needs: decide
@@ -72,21 +81,22 @@ jobs:
         shell: bash
         run: |
           dir="packages/pi-computer-use/platforms/cua-driver-${{ matrix.target }}"
-          version="$(node -p "require('./packages/pi-computer-use/driver-release.json').version")"
-          npm pkg set version="$version" cuaDriverVersion="$version" --prefix "$dir"
+          driver_version="$(node -p "require('./packages/pi-computer-use/driver-release.json').version")"
+          package_version="${{ needs.decide.outputs.package_version }}"
+          npm pkg set version="$package_version" cuaDriverVersion="$driver_version" --prefix "$dir"
           case "${{ matrix.target }}" in
             darwin-universal)
               bin="$dir/bin/CuaDriver.app/Contents/MacOS/cua-driver"
               codesign --verify --deep --strict "$dir/bin/CuaDriver.app"
               lipo -archs "$bin" | grep -q arm64
               lipo -archs "$bin" | grep -q x86_64
-              [ "$(plutil -extract CFBundleShortVersionString raw "$dir/bin/CuaDriver.app/Contents/Info.plist")" = "$version" ]
-              [ "$(plutil -extract CFBundleVersion raw "$dir/bin/CuaDriver.app/Contents/Info.plist")" = "$version" ]
+              [ "$(plutil -extract CFBundleShortVersionString raw "$dir/bin/CuaDriver.app/Contents/Info.plist")" = "$driver_version" ]
+              [ "$(plutil -extract CFBundleVersion raw "$dir/bin/CuaDriver.app/Contents/Info.plist")" = "$driver_version" ]
               ;;
             win32-*) bin="$dir/bin/cua-driver.exe" ;;
             *) bin="$dir/bin/cua-driver" ;;
           esac
-          "$bin" --version | grep -F "$version"
+          "$bin" --version | grep -F "$driver_version"
           "$bin" list-tools | grep -F 'get_window_state:'
           npm pack "$dir" --pack-destination "$RUNNER_TEMP"
       - uses: actions/upload-artifact@v7

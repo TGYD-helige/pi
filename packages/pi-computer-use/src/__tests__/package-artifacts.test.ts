@@ -11,6 +11,9 @@ const mainPackage = JSON.parse(readFileSync(join(packageRoot, 'package.json'), '
   scripts: Record<string, string>;
   optionalDependencies?: Record<string, string>;
 };
+const release = JSON.parse(readFileSync(join(packageRoot, 'driver-release.json'), 'utf8')) as {
+  version: string;
+};
 const targets = [
   { suffix: 'darwin-universal', os: 'darwin', cpu: undefined },
   { suffix: 'linux-arm64', os: 'linux', cpu: 'arm64', libc: ['glibc'] },
@@ -18,6 +21,17 @@ const targets = [
   { suffix: 'win32-arm64', os: 'win32', cpu: 'arm64' },
   { suffix: 'win32-x64', os: 'win32', cpu: 'x64' },
 ] as const;
+const preparedForRelease = targets.some(({ suffix }) => {
+  const pkg = JSON.parse(
+    readFileSync(join(platformsRoot, `cua-driver-${suffix}`, 'package.json'), 'utf8'),
+  ) as { cuaDriverVersion?: string };
+  return pkg.cuaDriverVersion !== undefined;
+});
+const preparedPackageVersion = preparedForRelease
+  ? JSON.parse(
+      readFileSync(join(platformsRoot, `cua-driver-${targets[0].suffix}`, 'package.json'), 'utf8'),
+    ).version
+  : undefined;
 
 describe('pi-computer-use package artifacts', () => {
   it('installs Cua Driver through platform-specific optional packages', () => {
@@ -48,8 +62,9 @@ describe('pi-computer-use package artifacts', () => {
         publishConfig: { executableFiles: string[] };
       };
       expect(pkg.name).toBe(`@amaster.ai/pi-computer-use-cua-driver-${target.suffix}`);
-      expect(pkg.version).toBe('0.1.0');
-      expect(pkg.cuaDriverVersion).toBeUndefined();
+      expect(pkg.version).toBe(preparedPackageVersion ?? '0.1.0');
+      expect(pkg.version).toMatch(/^0\.1\.\d+$/);
+      expect(pkg.cuaDriverVersion).toBe(preparedForRelease ? release.version : undefined);
       expect(pkg.os).toEqual([target.os]);
       expect(pkg.cpu).toEqual(target.cpu ? [target.cpu] : undefined);
       expect(pkg.libc).toEqual('libc' in target ? target.libc : undefined);
@@ -70,14 +85,20 @@ describe('pi-computer-use package artifacts', () => {
     expect(runtimeWorkflow).toContain('workflow_call');
     expect(runtimeWorkflow).not.toContain('push:');
     expect(runtimeWorkflow).toContain('scripts/fetch-driver.mjs');
-    expect(runtimeWorkflow).toContain('npm pkg set version="$version" cuaDriverVersion="$version"');
+    expect(runtimeWorkflow).toContain('resolve-cua-driver-package-version.mjs');
+    expect(runtimeWorkflow).toContain(
+      'npm pkg set version="$package_version" cuaDriverVersion="$driver_version"',
+    );
     expect(runtimeWorkflow).toContain('npm pack');
     expect(runtimeWorkflow).not.toContain('pnpm/action-setup');
     expect(runtimeWorkflow).toContain('npm publish');
     expect(publishWorkflow).toContain('publish_cua_driver');
     expect(publishWorkflow).toContain('uses: ./.github/workflows/cua-driver-publish.yml');
     expect(publishWorkflow).toContain('Verify native platform packages are published');
-    expect(publishWorkflow).toContain('npm pkg set version="$version" cuaDriverVersion="$version"');
+    expect(publishWorkflow).toContain('resolve-cua-driver-package-version.mjs');
+    expect(publishWorkflow).toContain(
+      'npm pkg set version="$package_version" cuaDriverVersion="$driver_version"',
+    );
     expect(publishWorkflow).toContain('driver-release.json');
   });
 });
