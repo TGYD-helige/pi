@@ -5,6 +5,7 @@ import type { BrowserCredentialAuthority } from './credential-auth.js';
 const REQUEST_FD = 5;
 const RESPONSE_FD = 6;
 const MAX_BYTES = 16 * 1024;
+const PRIVATE_CHANNEL_MARKER = 'AMASTER_BROWSER_CREDENTIAL_PRIVATE_CHANNEL';
 
 type CredentialFrame = { type: 'A' | 'C' | 'E' | 'R' | 'V'; payload: Buffer };
 
@@ -25,6 +26,7 @@ export function decodeCredentialFrame(input: Buffer): CredentialFrame {
 }
 
 export function browserCredentialPrivateChannelAvailable(): boolean {
+  if (process.env[PRIVATE_CHANNEL_MARKER] !== '1') return false;
   try {
     fstatSync(REQUEST_FD);
     fstatSync(RESPONSE_FD);

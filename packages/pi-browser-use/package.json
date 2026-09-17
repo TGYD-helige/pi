@@ -37,6 +37,13 @@
   "mirrorxCapabilities": [
     "browser_credential_auth_transaction_v1"
   ],
+  "mirrorxCredentialBrowserTcb": {
+    "package": "chrome-devtools-mcp",
+    "version": "1.6.0",
+    "mode": "puppeteer_pipe",
+    "buildFileCount": 348,
+    "buildTreeSha256": "c75935d92332a872c15afb42b36d8488347d03e0f257cd87b107556f9adf1e5c"
+  },
   "publishConfig": {
     "access": "public"
   },
@@ -48,12 +55,13 @@
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc -b --pretty false",
-    "test": "vitest run src"
+    "test": "vitest run src",
+    "verify:credential-transport": "node scripts/verify-credential-browser-pipe.mjs"
   },
   "dependencies": {
     "@amaster.ai/pi-shared": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "chrome-devtools-mcp": "^1.6.0"
+    "chrome-devtools-mcp": "1.6.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": ">=0.80.10",

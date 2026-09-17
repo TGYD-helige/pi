@@ -830,6 +830,10 @@ jobs:
             exit 1
           fi
 
+      - name: Verify sealed credential browser transport (pi-browser-use only)
+        if: matrix.extension == 'pi-browser-use'
+        run: pnpm --dir packages/pi-browser-use verify:credential-transport
+
       - name: Run extension prompt (Stage C)
         if: >
           matrix.extension != 'pi-video-gen' &&

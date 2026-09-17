@@ -147,12 +147,18 @@ This avoids relying on `browser_select_page` when multiple browser calls or tabs
 
 ### MirrorX credential-bound authentication
 
-When the runtime provides private credential file descriptors 5/6 and a run-owned
-`AMASTER_BROWSER_SESSION_USER_DATA_DIR`, the extension exposes a fail-closed
-single-page authentication transaction:
+When the runtime provides its private-channel marker, credential file descriptors 5/6,
+and a run-owned `AMASTER_BROWSER_SESSION_USER_DATA_DIR`, the extension exposes a
+fail-closed single-page authentication transaction:
 
-- `browser_auth_preflight` validates exact origin, fresh page generation, one visible
-  `autocomplete=current-password` control, username semantics, and same-form submit;
+- credential mode ignores project browser settings, attests the exact reviewed
+  `chrome-devtools-mcp` pipe transport, and does not register generic browser, evaluate,
+  screenshot, snapshot, vision, console, network, storage, or tab-management tools;
+- `browser_auth_list_pages` returns only page IDs and HTTPS origins, and
+  `browser_auth_navigate` performs exact-origin HTTPS navigation with metadata-only proof;
+- `browser_auth_preflight` privately discovers and validates exact origin, fresh page
+  generation, one visible `autocomplete=current-password` control, username semantics,
+  and same-form submit without accepting model-selected DOM handles;
 - `browser_auth_submit_with_credential_refs` resolves opaque references only after that
   validation, seals all generic browser calls, fills and submits inside one trusted call,
   scrubs the controls, reloads the document while retaining the browser profile, and

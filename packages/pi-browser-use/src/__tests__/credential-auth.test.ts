@@ -24,9 +24,6 @@ const passwordAuthority: BrowserCredentialAuthority = {
 const authInput = {
   pageId: 7,
   pageGeneration: 'page-generation-1',
-  usernameControlUid: 'uid-user',
-  passwordControlUid: 'uid-password',
-  submitControlUid: 'uid-submit',
   usernameValue: 'qa@example.com',
   credentialRefs: [passwordAuthority],
 };
@@ -45,7 +42,9 @@ function jsonResult(value: unknown) {
 describe('BrowserCredentialGate', () => {
   it('blocks every generic command while sealed and keeps dangerous reads blocked after auth', () => {
     const gate = new BrowserCredentialGate();
+    expect(gate.currentPhase()).toBe('open');
     gate.seal();
+    expect(gate.currentPhase()).toBe('sealed');
 
     for (const name of [
       'evaluate_script',
@@ -57,6 +56,7 @@ describe('BrowserCredentialGate', () => {
     }
 
     gate.bindCredentialSession('https://login.example.com', 7);
+    expect(gate.currentPhase()).toBe('credential_bound');
     expect(() => gate.assertGenericAllowed('evaluate_script', {})).toThrow(
       'browser_credential_session_tool_forbidden',
     );
@@ -104,6 +104,11 @@ describe('BrowserCredentialAuthTransaction', () => {
     );
     expect(resolveCredential).not.toHaveBeenCalled();
     expect(callTrustedTool).toHaveBeenCalledTimes(1);
+    expect(callTrustedTool).toHaveBeenCalledWith(
+      'evaluate_script',
+      expect.objectContaining({ args: [] }),
+      undefined,
+    );
     expect(destroyBrowser).toHaveBeenCalledOnce();
   });
 
@@ -140,9 +145,6 @@ describe('BrowserCredentialAuthTransaction', () => {
       transaction.authenticate({
         pageId: authInput.pageId,
         pageGeneration: authInput.pageGeneration,
-        usernameControlUid: authInput.usernameControlUid,
-        passwordControlUid: authInput.passwordControlUid,
-        submitControlUid: authInput.submitControlUid,
         credentialRefs: authInput.credentialRefs,
       }),
     ).rejects.toThrow('human_session_handoff:username_value_required');

@@ -7,7 +7,7 @@ const mockClientPing = vi.fn(() => Promise.resolve({}));
 const mockTransports: Array<{
   onclose?: () => void;
   onerror?: (error: Error) => void;
-  opts?: { command?: string; args?: string[] };
+  opts?: { command?: string; args?: string[]; env?: Record<string, string> };
   stderr?: PassThrough;
 }> = [];
 let _listToolsCalls = 0;
@@ -43,7 +43,7 @@ vi.mock('@modelcontextprotocol/sdk/client/stdio.js', () => ({
     onclose?: () => void;
     onerror?: (error: Error) => void;
     stderr = new PassThrough();
-    constructor(public opts: { command?: string; args?: string[] }) {
+    constructor(public opts: { command?: string; args?: string[]; env?: Record<string, string> }) {
       mockTransports.push(this);
     }
   },
@@ -130,6 +130,55 @@ describe('DevToolsClient', () => {
         } else {
           process.env.PI_BROWSER_USE_NODE = originalNode;
         }
+      }
+    });
+
+    it('uses the current Node and a minimal child environment in credential mode', async () => {
+      const originalNode = process.env.PI_BROWSER_USE_NODE;
+      const originalDebug = process.env.DEBUG;
+      const originalNodeOptions = process.env.NODE_OPTIONS;
+      const originalProxy = process.env.HTTPS_PROXY;
+      process.env.PI_BROWSER_USE_NODE = '/tmp/untrusted-node-wrapper';
+      process.env.DEBUG = 'mcp:*';
+      process.env.NODE_OPTIONS = '--require=/tmp/untrusted-hook.cjs';
+      process.env.HTTPS_PROXY = 'http://attacker.invalid:8080';
+      try {
+        const client = new DevToolsClient(
+          {
+            sessionMode: 'persistent',
+            userDataDir: '/runtime/browser-profile',
+            usageStatistics: false,
+            categoryNetwork: false,
+            experimentalPageIdRouting: true,
+          },
+          undefined,
+          true,
+        );
+        await client.connect();
+
+        expect(mockTransports[0]!.opts?.command).toBe(process.execPath);
+        expect(mockTransports[0]!.opts?.args).toEqual([
+          expect.stringMatching(
+            /chrome-devtools-mcp[/\\]build[/\\]src[/\\]bin[/\\]chrome-devtools-mcp\.js$/,
+          ),
+          '--user-data-dir=/runtime/browser-profile',
+          '--category-network=false',
+          '--experimental-page-id-routing',
+          '--no-usage-statistics',
+        ]);
+        expect(mockTransports[0]!.opts?.env).not.toHaveProperty('DEBUG');
+        expect(mockTransports[0]!.opts?.env).not.toHaveProperty('NODE_OPTIONS');
+        expect(mockTransports[0]!.opts?.env).not.toHaveProperty('PI_BROWSER_USE_NODE');
+        expect(mockTransports[0]!.opts?.env).not.toHaveProperty('HTTPS_PROXY');
+      } finally {
+        if (originalNode === undefined) delete process.env.PI_BROWSER_USE_NODE;
+        else process.env.PI_BROWSER_USE_NODE = originalNode;
+        if (originalDebug === undefined) delete process.env.DEBUG;
+        else process.env.DEBUG = originalDebug;
+        if (originalNodeOptions === undefined) delete process.env.NODE_OPTIONS;
+        else process.env.NODE_OPTIONS = originalNodeOptions;
+        if (originalProxy === undefined) delete process.env.HTTPS_PROXY;
+        else process.env.HTTPS_PROXY = originalProxy;
       }
     });
 

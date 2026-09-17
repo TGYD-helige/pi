@@ -29,6 +29,11 @@ import {
   parseBrowserJson,
 } from './credential-auth.js';
 import {
+  attestCredentialBrowserTcb,
+  credentialBrowserChildEnv,
+  credentialBrowserConfig,
+} from './credential-browser-tcb.js';
+import {
   BrowserCredentialChannelClient,
   browserCredentialPrivateChannelAvailable,
 } from './credential-channel.js';
@@ -39,14 +44,30 @@ import {
   postProcessToolResult,
 } from './tool-augment.js';
 
+export {
+  attestCredentialBrowserTcb,
+  credentialBrowserChildEnv,
+  credentialBrowserConfig,
+} from './credential-browser-tcb.js';
 export type { BrowserSessionMode, BrowserUseConfig, VisionModelConfig };
-export { configToArgs, resolveConfig };
+export { BrowserCredentialGate, configToArgs, resolveConfig };
 export const BROWSER_CREDENTIAL_AUTH_TRANSACTION_CAPABILITY =
   'browser_credential_auth_transaction_v1' as const;
 
 // All upstream tools are re-exported with this prefix to avoid name collisions with other extensions.
 const TOOL_PREFIX = 'browser_';
-const CREDENTIAL_SCOPE_ALLOWED_TOOL = /^(?:browser_|mirrorx_|runtime_action_)/u;
+const CREDENTIAL_CONTROL_PLANE_TOOL = /^(?:mirrorx_|runtime_action_)/u;
+const CREDENTIAL_OPEN_TOOLS = new Set([
+  'browser_auth_list_pages',
+  'browser_auth_navigate',
+  'browser_auth_preflight',
+  'browser_auth_submit_with_credential_refs',
+]);
+const CREDENTIAL_BOUND_TOOLS = new Set([
+  'browser_credential_read',
+  'browser_credential_activate',
+  'browser_credential_navigate',
+]);
 
 // These upstream tools are noisy or slow; skip them during registration.
 const EXCLUDED_TOOLS = new Set([
@@ -70,6 +91,54 @@ const MCP_STDERR_LIMIT = 4_096;
 const MCP_SYSTEM_ERROR_CODE_PATTERN =
   /^(?:EACCES|EADDRINUSE|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENOENT|ENOTEMPTY|ENOTFOUND|EPERM|ETIMEDOUT)$/;
 const require = createRequire(import.meta.url);
+const ORIGIN_PROOF_FUNCTION = `async () => {
+  globalThis.__mirrorxAuthPageGeneration ||= crypto.randomUUID();
+  return { origin: location.origin, pageGeneration: globalThis.__mirrorxAuthPageGeneration };
+}`;
+
+function exactCredentialNavigation(urlValue: string, originValue: string): URL {
+  const url = new URL(urlValue);
+  const origin = new URL(originValue);
+  if (
+    url.protocol !== 'https:' ||
+    url.username ||
+    url.password ||
+    origin.protocol !== 'https:' ||
+    origin.username ||
+    origin.password ||
+    origin.pathname !== '/' ||
+    origin.search ||
+    origin.hash ||
+    originValue !== origin.origin ||
+    url.origin !== origin.origin
+  ) {
+    throw new Error('browser_credential_navigation_invalid');
+  }
+  return url;
+}
+
+function sanitizedPageList(result: {
+  content?: Array<{ type: string; text?: string }>;
+  isError?: boolean;
+}): Array<{ pageId: number; origin: string | null }> {
+  if (result.isError) throw new Error('browser_credential_page_list_failed');
+  const text = result.content?.find((entry) => entry.type === 'text')?.text ?? '';
+  const pages: Array<{ pageId: number; origin: string | null }> = [];
+  for (const match of text.matchAll(/^\s*(\d+):\s+(\S+)/gmu)) {
+    const pageId = Number(match[1]);
+    if (!Number.isSafeInteger(pageId)) continue;
+    let origin: string | null = null;
+    try {
+      const url = new URL(match[2]!);
+      if (url.protocol === 'https:' && !url.username && !url.password) origin = url.origin;
+    } catch {
+      // about:blank and internal pages intentionally expose no URL details.
+    }
+    pages.push({ pageId, origin });
+  }
+  if (pages.length === 0) throw new Error('browser_credential_page_list_unproven');
+  return pages;
+}
 
 // Resolved lazily at connect time so extension load does no filesystem work.
 function resolveChromeDevToolsMcpEntrypoint(): string {
@@ -143,10 +212,15 @@ export class DevToolsClient {
   private hasConnected = false;
   private explicitlyClosed = false;
   private lastHealthCheckAt = 0;
+  private recentStderr = '';
   private readonly credentialGate: BrowserCredentialGate;
 
-  constructor(config?: BrowserUseConfig, credentialGate = new BrowserCredentialGate()) {
-    this.config = resolveConfig(config);
+  constructor(
+    config?: BrowserUseConfig,
+    credentialGate = new BrowserCredentialGate(),
+    private readonly credentialMode = false,
+  ) {
+    this.config = credentialMode ? { ...config } : resolveConfig(config);
     this.credentialGate = credentialGate;
   }
 
@@ -156,6 +230,12 @@ export class DevToolsClient {
 
   getState(): ConnectionState {
     return this.state;
+  }
+
+  getCredentialTransportDiagnosticsForVerification(): string {
+    if (!this.credentialMode)
+      throw new Error('browser_credential_transport_verification_unavailable');
+    return this.recentStderr;
   }
 
   async connect(signal?: AbortSignal): Promise<void> {
@@ -173,11 +253,11 @@ export class DevToolsClient {
 
   private async openConnection(signal?: AbortSignal): Promise<void> {
     this.state = this.hasConnected ? 'reconnecting' : 'connecting';
-    const args = configToArgs(this.config);
+    const args = configToArgs(this.config, this.credentialMode);
     const generation = ++this.generation;
 
     let client: Client | null = null;
-    let stderr = '';
+    this.recentStderr = '';
     let transportErrorCode: string | undefined;
 
     try {
@@ -188,12 +268,15 @@ export class DevToolsClient {
       ]);
 
       const transport = new StdioClientTransport({
-        command: process.env.PI_BROWSER_USE_NODE?.trim() || process.execPath,
+        command: this.credentialMode
+          ? process.execPath
+          : process.env.PI_BROWSER_USE_NODE?.trim() || process.execPath,
         args: [resolveChromeDevToolsMcpEntrypoint(), ...args],
+        ...(this.credentialMode ? { env: credentialBrowserChildEnv() } : {}),
         stderr: 'pipe',
       });
       transport.stderr?.on('data', (chunk) => {
-        stderr = `${stderr}${String(chunk)}`.slice(-MCP_STDERR_LIMIT);
+        this.recentStderr = `${this.recentStderr}${String(chunk)}`.slice(-MCP_STDERR_LIMIT);
       });
 
       client = new Client({ name: 'pi-browser-use', version: '0.1.0' }, { capabilities: {} });
@@ -231,7 +314,11 @@ export class DevToolsClient {
         error instanceof Error
           ? safeMcpSystemErrorCode((error as Error & { code?: unknown }).code)
           : undefined;
-      const diagnostic = summarizeMcpFailure(stderr, errorName, transportErrorCode ?? errorCode);
+      const diagnostic = summarizeMcpFailure(
+        this.recentStderr,
+        errorName,
+        transportErrorCode ?? errorCode,
+      );
       console.error(`[pi-browser-use] browser connection failed: ${diagnostic}`);
       throw new Error(`Browser connection failed. ${diagnostic}`);
     }
@@ -580,6 +667,68 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
     };
 
     pi.registerTool({
+      name: 'browser_auth_list_pages',
+      label: 'browser_auth_list_pages',
+      description:
+        'List browser page identifiers and HTTPS origins for the sealed credential authentication flow. Titles, content, DOM, storage, console, network data, and raw URLs are excluded.',
+      parameters: Type.Object({}),
+      async execute(_id, _params, signal) {
+        const pages = sanitizedPageList(await client!.callTrustedTool('list_pages', {}, signal));
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify({ pages }) }],
+          details: undefined,
+        };
+      },
+    });
+
+    pi.registerTool({
+      name: 'browser_auth_navigate',
+      label: 'browser_auth_navigate',
+      description:
+        'Navigate one page to an HTTPS URL on the exact authentication origin and return metadata-only origin/page-generation proof.',
+      parameters: Type.Object({
+        pageId: Type.Number(),
+        url: Type.String(),
+        targetOrigin: Type.String(),
+      }),
+      async execute(_id, params, signal) {
+        const url = exactCredentialNavigation(params.url as string, params.targetOrigin as string);
+        await client!.callTrustedTool(
+          'navigate_page',
+          { pageId: params.pageId, type: 'url', url: url.toString() },
+          signal,
+        );
+        const proof = parseBrowserJson(
+          await client!.callTrustedTool(
+            'evaluate_script',
+            { pageId: params.pageId, function: ORIGIN_PROOF_FUNCTION, args: [] },
+            signal,
+          ),
+        );
+        if (
+          proof.origin !== url.origin ||
+          typeof proof.pageGeneration !== 'string' ||
+          proof.pageGeneration.length < 1
+        ) {
+          throw new Error('browser_credential_navigation_unproven');
+        }
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify({
+                status: 'navigated',
+                origin: proof.origin,
+                pageGeneration: proof.pageGeneration,
+              }),
+            },
+          ],
+          details: undefined,
+        };
+      },
+    });
+
+    pi.registerTool({
       name: 'browser_auth_preflight',
       label: 'browser_auth_preflight',
       description:
@@ -587,18 +736,12 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
       parameters: Type.Object({
         pageId: Type.Number(),
         targetOrigin: Type.String(),
-        usernameControlUid: Type.String(),
-        passwordControlUid: Type.String(),
-        submitControlUid: Type.String(),
       }),
       async execute(_id, params, signal) {
         const result = await transaction().preflight(
           params as {
             pageId: number;
             targetOrigin: string;
-            usernameControlUid: string;
-            passwordControlUid: string;
-            submitControlUid: string;
           },
           signal,
         );
@@ -617,9 +760,6 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
       parameters: Type.Object({
         pageId: Type.Number(),
         pageGeneration: Type.String(),
-        usernameControlUid: Type.String(),
-        passwordControlUid: Type.String(),
-        submitControlUid: Type.String(),
         usernameValue: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
         credentialRefs: Type.Array(CREDENTIAL_AUTHORITY_PARAMETERS, { minItems: 1, maxItems: 2 }),
       }),
@@ -627,9 +767,6 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
         const input = params as {
           pageId: number;
           pageGeneration: string;
-          usernameControlUid: string;
-          passwordControlUid: string;
-          submitControlUid: string;
           usernameValue?: string;
           credentialRefs: BrowserCredentialAuthority[];
         };
@@ -840,30 +977,27 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
   }
 
   pi.on('session_start', async (_event, ctx) => {
-    const configured = loadConfigFromFile({
-      cwd: ctx.cwd,
-      projectTrusted: isProjectTrusted(ctx),
-    });
     credentialMode = browserCredentialPrivateChannelAvailable();
     const trustedProfile = process.env.AMASTER_BROWSER_SESSION_USER_DATA_DIR?.trim();
-    config = resolveConfig(
-      credentialMode
-        ? {
-            ...configured,
-            sessionMode: 'persistent',
-            usageStatistics: false,
-            categoryNetwork: false,
-            ...(trustedProfile ? { userDataDir: trustedProfile } : {}),
-          }
-        : configured,
-    );
-    prepareBrowserProfile(config);
-    client = new DevToolsClient(config);
-    await registerUpstreamTools();
-    if (credentialMode && trustedProfile) {
-      registerCredentialTools();
+    if (credentialMode && !trustedProfile) {
+      throw new Error('browser_credential_trusted_profile_required');
     }
-    if (config.visionModel) {
+    if (credentialMode) attestCredentialBrowserTcb();
+    const configured = credentialMode
+      ? credentialBrowserConfig(trustedProfile!)
+      : loadConfigFromFile({
+          cwd: ctx.cwd,
+          projectTrusted: isProjectTrusted(ctx),
+        });
+    config = credentialMode ? configured : resolveConfig(configured);
+    prepareBrowserProfile(config);
+    client = new DevToolsClient(config, undefined, credentialMode);
+    if (credentialMode) {
+      registerCredentialTools();
+    } else {
+      await registerUpstreamTools();
+    }
+    if (!credentialMode && config.visionModel) {
       await registerVisionTool(config.visionModel);
     }
   });
@@ -871,14 +1005,22 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
   pi.on('tool_call', async (event) => {
     const gate = client?.getCredentialGate();
     if (!credentialMode || !gate) return undefined;
-    if (gate.isSealed()) {
-      if (event.toolName === 'browser_auth_submit_with_credential_refs') return undefined;
-      return { block: true, reason: 'browser_auth_transaction_sealed' };
+    if (CREDENTIAL_CONTROL_PLANE_TOOL.test(event.toolName)) return undefined;
+    const phase = gate.currentPhase();
+    if (phase === 'open' && CREDENTIAL_OPEN_TOOLS.has(event.toolName)) return undefined;
+    if (phase === 'sealed' && event.toolName === 'browser_auth_submit_with_credential_refs') {
+      return undefined;
     }
-    if (!CREDENTIAL_SCOPE_ALLOWED_TOOL.test(event.toolName)) {
-      return { block: true, reason: 'browser_credential_auth_scope_forbidden' };
+    if (phase === 'credential_bound' && CREDENTIAL_BOUND_TOOLS.has(event.toolName)) {
+      return undefined;
     }
-    return undefined;
+    return {
+      block: true,
+      reason:
+        phase === 'sealed'
+          ? 'browser_auth_transaction_sealed'
+          : 'browser_credential_auth_scope_forbidden',
+    };
   });
 
   pi.on('session_shutdown', async () => {

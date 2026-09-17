@@ -1,11 +1,16 @@
-import { beforeEach, describe, expect, it, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, test, vi } from 'vitest';
 
 // --- Mocks ---
 
 const mockPrepareBrowserProfile = vi.hoisted(() => vi.fn());
 const credentialFdState = vi.hoisted(() => ({ available: false }));
+const mockAttestCredentialBrowserTcb = vi.hoisted(() => vi.fn(() => ({})));
 
 vi.mock('../profile.js', () => ({ prepareBrowserProfile: mockPrepareBrowserProfile }));
+vi.mock('../credential-browser-tcb.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../credential-browser-tcb.js')>();
+  return { ...actual, attestCredentialBrowserTcb: mockAttestCredentialBrowserTcb };
+});
 
 const mockListAllTools = vi.fn(() =>
   Promise.resolve([
@@ -127,6 +132,11 @@ const mockPi = {
 
 const { default: browserUseExtension } = await import('../index.js');
 
+function enableCredentialPrivateChannel() {
+  credentialFdState.available = true;
+  process.env.AMASTER_BROWSER_CREDENTIAL_PRIVATE_CHANNEL = '1';
+}
+
 /** Register the extension and fire session_start. */
 async function startExtension(config?: Record<string, unknown>) {
   if (config) {
@@ -155,7 +165,7 @@ async function shutdownExtension() {
 // --- Tests ---
 
 describe('browserUseExtension', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     registeredTools.clear();
     sessionStartHandlers.length = 0;
     sessionShutdownHandlers.length = 0;
@@ -168,7 +178,18 @@ describe('browserUseExtension', () => {
     mockComplete.mockClear();
     mockListAllTools.mockClear();
     mockPrepareBrowserProfile.mockClear();
+    mockAttestCredentialBrowserTcb.mockClear();
     credentialFdState.available = false;
+    delete process.env.AMASTER_BROWSER_CREDENTIAL_PRIVATE_CHANNEL;
+    const fs = await import('node:fs');
+    (fs.readFileSync as ReturnType<typeof vi.fn>).mockReset();
+    (fs.readFileSync as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+  });
+
+  afterEach(() => {
+    delete process.env.AMASTER_BROWSER_CREDENTIAL_PRIVATE_CHANNEL;
   });
 
   test('registers session_start and session_shutdown handlers', () => {
@@ -223,15 +244,21 @@ describe('browserUseExtension', () => {
     });
 
     it('registers the sealed auth transaction only when private FDs and a trusted profile exist', async () => {
-      credentialFdState.available = true;
+      enableCredentialPrivateChannel();
       const originalProfile = process.env.AMASTER_BROWSER_SESSION_USER_DATA_DIR;
       process.env.AMASTER_BROWSER_SESSION_USER_DATA_DIR = '/runtime/browser-profile';
       try {
         await startExtension();
 
         expect(registeredTools.has('browser_auth_preflight')).toBe(true);
+        expect(registeredTools.has('browser_auth_list_pages')).toBe(true);
+        expect(registeredTools.has('browser_auth_navigate')).toBe(true);
         expect(registeredTools.has('browser_auth_submit_with_credential_refs')).toBe(true);
         expect(registeredTools.has('browser_credential_read')).toBe(true);
+        expect(registeredTools.has('browser_take_snapshot')).toBe(false);
+        expect(registeredTools.has('browser_evaluate_script')).toBe(false);
+        expect(registeredTools.has('browser_analyze_screenshot')).toBe(false);
+        expect(mockAttestCredentialBrowserTcb).toHaveBeenCalledOnce();
         expect(mockPrepareBrowserProfile).toHaveBeenCalledWith(
           expect.objectContaining({
             sessionMode: 'persistent',
@@ -256,8 +283,68 @@ describe('browserUseExtension', () => {
       expect(registeredTools.has('browser_auth_submit_with_credential_refs')).toBe(false);
     });
 
-    it('blocks non-browser tools for the lifetime of a credential-capable run', async () => {
+    it('does not infer the private channel from unrelated open file descriptors', async () => {
       credentialFdState.available = true;
+
+      await startExtension();
+
+      expect(registeredTools.has('browser_auth_preflight')).toBe(false);
+      expect(registeredTools.has('browser_auth_submit_with_credential_refs')).toBe(false);
+    });
+
+    it('fails before registering tools when private FDs lack the runtime-owned profile', async () => {
+      enableCredentialPrivateChannel();
+      const originalProfile = process.env.AMASTER_BROWSER_SESSION_USER_DATA_DIR;
+      delete process.env.AMASTER_BROWSER_SESSION_USER_DATA_DIR;
+      try {
+        await expect(startExtension()).rejects.toThrow(
+          'browser_credential_trusted_profile_required',
+        );
+        expect(registeredTools.size).toBe(0);
+        expect(mockPrepareBrowserProfile).not.toHaveBeenCalled();
+        expect(mockAttestCredentialBrowserTcb).not.toHaveBeenCalled();
+      } finally {
+        if (originalProfile !== undefined) {
+          process.env.AMASTER_BROWSER_SESSION_USER_DATA_DIR = originalProfile;
+        }
+      }
+    });
+
+    it('ignores every project browser setting in credential mode', async () => {
+      enableCredentialPrivateChannel();
+      const originalProfile = process.env.AMASTER_BROWSER_SESSION_USER_DATA_DIR;
+      process.env.AMASTER_BROWSER_SESSION_USER_DATA_DIR = '/runtime/browser-profile';
+      try {
+        await startExtension({
+          browserUrl: 'http://127.0.0.1:9222',
+          wsEndpoint: 'ws://attacker.invalid/devtools/browser/secret',
+          wsHeaders: '{"Authorization":"secret"}',
+          autoConnect: true,
+          executablePath: '/tmp/attacker-browser',
+          channel: 'canary',
+          isolated: true,
+          acceptInsecureCerts: true,
+          categoryExtensions: true,
+          experimentalScreencast: true,
+          slim: true,
+          extraArgs: ['--remote-debugging-port=9222'],
+        });
+
+        expect(mockPrepareBrowserProfile).toHaveBeenCalledWith({
+          sessionMode: 'persistent',
+          userDataDir: '/runtime/browser-profile',
+          usageStatistics: false,
+          categoryNetwork: false,
+          experimentalPageIdRouting: true,
+        });
+      } finally {
+        if (originalProfile === undefined) delete process.env.AMASTER_BROWSER_SESSION_USER_DATA_DIR;
+        else process.env.AMASTER_BROWSER_SESSION_USER_DATA_DIR = originalProfile;
+      }
+    });
+
+    it('blocks non-browser tools for the lifetime of a credential-capable run', async () => {
+      enableCredentialPrivateChannel();
       const originalProfile = process.env.AMASTER_BROWSER_SESSION_USER_DATA_DIR;
       process.env.AMASTER_BROWSER_SESSION_USER_DATA_DIR = '/runtime/browser-profile';
       try {
@@ -274,9 +361,45 @@ describe('browserUseExtension', () => {
         await expect(
           toolCallHandlers[0]!({ toolName: 'runtime_action_submit' }),
         ).resolves.toBeUndefined();
+        await expect(toolCallHandlers[0]!({ toolName: 'browser_take_snapshot' })).resolves.toEqual({
+          block: true,
+          reason: 'browser_credential_auth_scope_forbidden',
+        });
         await expect(
-          toolCallHandlers[0]!({ toolName: 'browser_take_snapshot' }),
+          toolCallHandlers[0]!({ toolName: 'browser_auth_preflight' }),
         ).resolves.toBeUndefined();
+      } finally {
+        if (originalProfile === undefined) delete process.env.AMASTER_BROWSER_SESSION_USER_DATA_DIR;
+        else process.env.AMASTER_BROWSER_SESSION_USER_DATA_DIR = originalProfile;
+      }
+    });
+
+    it('returns only page ids and HTTPS origins from the credential page list', async () => {
+      enableCredentialPrivateChannel();
+      const originalProfile = process.env.AMASTER_BROWSER_SESSION_USER_DATA_DIR;
+      process.env.AMASTER_BROWSER_SESSION_USER_DATA_DIR = '/runtime/browser-profile';
+      mockCallTool.mockResolvedValueOnce({
+        content: [
+          {
+            type: 'text',
+            text: '## Pages\n1: https://login.example.com/private?token=hidden [selected]\n2: about:blank',
+          },
+        ],
+      });
+      try {
+        await startExtension();
+        const tool = registeredTools.get('browser_auth_list_pages')!;
+        const result = (await tool.execute('call-1', {}, undefined, undefined, {})) as {
+          content: Array<{ type: string; text: string }>;
+        };
+        expect(JSON.parse(result.content[0]!.text)).toEqual({
+          pages: [
+            { pageId: 1, origin: 'https://login.example.com' },
+            { pageId: 2, origin: null },
+          ],
+        });
+        expect(result.content[0]!.text).not.toContain('/private');
+        expect(result.content[0]!.text).not.toContain('token');
       } finally {
         if (originalProfile === undefined) delete process.env.AMASTER_BROWSER_SESSION_USER_DATA_DIR;
         else process.env.AMASTER_BROWSER_SESSION_USER_DATA_DIR = originalProfile;

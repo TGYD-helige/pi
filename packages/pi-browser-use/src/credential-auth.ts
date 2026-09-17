@@ -19,9 +19,6 @@ export interface BrowserCredentialAuthority {
 export interface BrowserCredentialAuthInput {
   pageId: number;
   pageGeneration: string;
-  usernameControlUid: string;
-  passwordControlUid: string;
-  submitControlUid: string;
   usernameValue?: string;
   credentialRefs: BrowserCredentialAuthority[];
 }
@@ -29,9 +26,6 @@ export interface BrowserCredentialAuthInput {
 export interface BrowserCredentialPreflightInput {
   pageId: number;
   targetOrigin: string;
-  usernameControlUid: string;
-  passwordControlUid: string;
-  submitControlUid: string;
 }
 
 export type BrowserCredentialPreflight =
@@ -86,6 +80,10 @@ export class BrowserCredentialGate {
     return this.phase === 'credential_bound';
   }
 
+  currentPhase(): 'open' | 'sealed' | 'credential_bound' | 'closed' {
+    return this.phase;
+  }
+
   assertCredentialSession(pageId: number, origin?: unknown): string {
     if (
       this.phase !== 'credential_bound' ||
@@ -131,7 +129,7 @@ export class BrowserCredentialAuthTransaction {
       {
         pageId: input.pageId,
         function: PREFLIGHT_FUNCTION,
-        args: [input.usernameControlUid, input.passwordControlUid, input.submitControlUid],
+        args: [],
       },
       signal,
     );
@@ -182,9 +180,6 @@ export class BrowserCredentialAuthTransaction {
         {
           pageId: input.pageId,
           targetOrigin,
-          usernameControlUid: input.usernameControlUid,
-          passwordControlUid: input.passwordControlUid,
-          submitControlUid: input.submitControlUid,
         },
         signal,
       );
@@ -383,7 +378,7 @@ function safeReason(value: unknown): string {
     : 'semantic_mismatch';
 }
 
-const PREFLIGHT_FUNCTION = `async (username, password, submit) => {
+const PREFLIGHT_FUNCTION = `async () => {
   const handoff = (reason) => ({ status: 'handoff', reason });
   const visible = (element) => {
     const style = getComputedStyle(element);
@@ -391,20 +386,18 @@ const PREFLIGHT_FUNCTION = `async (username, password, submit) => {
     return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
   };
   if (globalThis.top !== globalThis) return handoff('cross_origin_or_iframe_authentication');
-  if (!(username instanceof HTMLInputElement)) return handoff('username_control_mismatch');
-  if (!(password instanceof HTMLInputElement)) return handoff('password_control_mismatch');
-  if (!(submit instanceof HTMLElement)) return handoff('submit_control_mismatch');
-  if (![username, password, submit].every((element) => element.isConnected && visible(element))) return handoff('control_not_visible');
-  if (username.disabled || username.readOnly || !['text', 'email'].includes(username.type)) return handoff('username_semantic_mismatch');
-  if (!['username', 'email'].includes(username.autocomplete)) return handoff('username_autocomplete_mismatch');
-  if (password.disabled || password.readOnly || password.type !== 'password') return handoff('password_semantic_mismatch');
-  if (password.autocomplete !== 'current-password') return handoff('password_autocomplete_mismatch');
-  const passwords = [...document.querySelectorAll('input[type="password"]')].filter((element) => element.isConnected && visible(element));
-  if (passwords.length !== 1 || passwords[0] !== password) return handoff('password_control_ambiguous');
+  const passwords = [...document.querySelectorAll('input[type="password"][autocomplete="current-password"]')]
+    .filter((element) => element.isConnected && visible(element) && !element.disabled && !element.readOnly);
+  if (passwords.length !== 1) return handoff('password_control_ambiguous');
+  const password = passwords[0];
   const form = password.form;
-  if (!form || username.form !== form || (submit instanceof HTMLButtonElement || submit instanceof HTMLInputElement) && submit.form !== form) return handoff('form_relation_mismatch');
-  const submitType = submit instanceof HTMLButtonElement || submit instanceof HTMLInputElement ? submit.type : '';
-  if (submitType !== 'submit') return handoff('unsafe_submit_action');
+  if (!form) return handoff('form_relation_mismatch');
+  const usernames = [...form.querySelectorAll('input[autocomplete="username"],input[autocomplete="email"]')]
+    .filter((element) => element.isConnected && visible(element) && !element.disabled && !element.readOnly && ['text', 'email'].includes(element.type));
+  if (usernames.length !== 1) return handoff('username_control_ambiguous');
+  const submits = [...form.querySelectorAll('button,input')]
+    .filter((element) => element.isConnected && visible(element) && !element.disabled && element.type === 'submit');
+  if (submits.length !== 1) return handoff('submit_control_ambiguous');
   globalThis.__mirrorxAuthPageGeneration ||= crypto.randomUUID();
   return { status: 'ready', pageGeneration: globalThis.__mirrorxAuthPageGeneration, origin: location.origin };
 }`;

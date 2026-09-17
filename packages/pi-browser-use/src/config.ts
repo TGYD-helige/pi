@@ -101,9 +101,9 @@ export function resolveConfig(config?: BrowserUseConfig): BrowserUseConfig {
 }
 
 /** Convert config into CLI flags for the chrome-devtools-mcp subprocess. */
-export function configToArgs(config: BrowserUseConfig): string[] {
+export function configToArgs(config: BrowserUseConfig, alreadyResolved = false): string[] {
   const args: string[] = [];
-  const resolved = resolveConfig(config);
+  const resolved = alreadyResolved ? config : resolveConfig(config);
 
   if (resolved.headless) args.push('--headless');
   if (resolved.channel) args.push(`--channel=${resolved.channel}`);
