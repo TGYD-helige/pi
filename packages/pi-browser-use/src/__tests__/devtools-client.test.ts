@@ -50,6 +50,7 @@ vi.mock('@modelcontextprotocol/sdk/client/stdio.js', () => ({
 }));
 
 const { DevToolsClient } = await import('../index.js');
+const { BrowserCredentialGate } = await import('../credential-auth.js');
 
 describe('DevToolsClient', () => {
   beforeEach(() => {
@@ -186,6 +187,17 @@ describe('DevToolsClient', () => {
   });
 
   describe('callTool()', () => {
+    it('enforces the credential gate before dispatching to MCP', async () => {
+      const gate = new BrowserCredentialGate();
+      const client = new DevToolsClient(undefined, gate);
+      gate.seal();
+
+      await expect(client.callTool('evaluate_script', { function: '() => 1' })).rejects.toThrow(
+        'browser_auth_transaction_sealed',
+      );
+      expect(mockCallTool).not.toHaveBeenCalled();
+    });
+
     it('reconnects before the next tool call after the transport closes', async () => {
       const client = new DevToolsClient();
       await client.connect();

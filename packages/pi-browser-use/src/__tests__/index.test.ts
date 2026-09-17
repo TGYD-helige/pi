@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, test, vi } from 'vitest';
 // --- Mocks ---
 
 const mockPrepareBrowserProfile = vi.hoisted(() => vi.fn());
+const credentialFdState = vi.hoisted(() => ({ available: false }));
 
 vi.mock('../profile.js', () => ({ prepareBrowserProfile: mockPrepareBrowserProfile }));
 
@@ -80,6 +81,10 @@ vi.mock('node:fs', async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
     ...actual,
+    fstatSync: vi.fn(() => {
+      if (!credentialFdState.available) throw new Error('EBADF');
+      return {};
+    }),
     readFileSync: vi.fn(() => {
       throw new Error('ENOENT');
     }),
@@ -107,6 +112,7 @@ interface RegisteredTool {
 const registeredTools = new Map<string, RegisteredTool>();
 const sessionStartHandlers: Array<(...args: any[]) => Promise<void>> = [];
 const sessionShutdownHandlers: Array<() => Promise<void>> = [];
+const toolCallHandlers: Array<(...args: any[]) => Promise<unknown>> = [];
 
 const mockPi = {
   registerTool: vi.fn((tool: RegisteredTool) => {
@@ -115,6 +121,7 @@ const mockPi = {
   on: vi.fn((event: string, handler: (...args: any[]) => Promise<void>) => {
     if (event === 'session_start') sessionStartHandlers.push(handler);
     if (event === 'session_shutdown') sessionShutdownHandlers.push(handler);
+    if (event === 'tool_call') toolCallHandlers.push(handler);
   }),
 };
 
@@ -152,6 +159,7 @@ describe('browserUseExtension', () => {
     registeredTools.clear();
     sessionStartHandlers.length = 0;
     sessionShutdownHandlers.length = 0;
+    toolCallHandlers.length = 0;
     mockPi.registerTool.mockClear();
     mockPi.on.mockClear();
     mockConnect.mockClear();
@@ -160,6 +168,7 @@ describe('browserUseExtension', () => {
     mockComplete.mockClear();
     mockListAllTools.mockClear();
     mockPrepareBrowserProfile.mockClear();
+    credentialFdState.available = false;
   });
 
   test('registers session_start and session_shutdown handlers', () => {
@@ -211,6 +220,67 @@ describe('browserUseExtension', () => {
       expect(names).toContain('browser_click');
       expect(names).toContain('browser_take_snapshot');
       expect(names).toContain('browser_navigate_page');
+    });
+
+    it('registers the sealed auth transaction only when private FDs and a trusted profile exist', async () => {
+      credentialFdState.available = true;
+      const originalProfile = process.env.AMASTER_BROWSER_SESSION_USER_DATA_DIR;
+      process.env.AMASTER_BROWSER_SESSION_USER_DATA_DIR = '/runtime/browser-profile';
+      try {
+        await startExtension();
+
+        expect(registeredTools.has('browser_auth_preflight')).toBe(true);
+        expect(registeredTools.has('browser_auth_submit_with_credential_refs')).toBe(true);
+        expect(registeredTools.has('browser_credential_read')).toBe(true);
+        expect(mockPrepareBrowserProfile).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sessionMode: 'persistent',
+            userDataDir: '/runtime/browser-profile',
+            usageStatistics: false,
+            categoryNetwork: false,
+          }),
+        );
+      } finally {
+        if (originalProfile === undefined) {
+          delete process.env.AMASTER_BROWSER_SESSION_USER_DATA_DIR;
+        } else {
+          process.env.AMASTER_BROWSER_SESSION_USER_DATA_DIR = originalProfile;
+        }
+      }
+    });
+
+    it('does not expose auth transaction tools when the private channel is absent', async () => {
+      await startExtension();
+
+      expect(registeredTools.has('browser_auth_preflight')).toBe(false);
+      expect(registeredTools.has('browser_auth_submit_with_credential_refs')).toBe(false);
+    });
+
+    it('blocks non-browser tools for the lifetime of a credential-capable run', async () => {
+      credentialFdState.available = true;
+      const originalProfile = process.env.AMASTER_BROWSER_SESSION_USER_DATA_DIR;
+      process.env.AMASTER_BROWSER_SESSION_USER_DATA_DIR = '/runtime/browser-profile';
+      try {
+        await startExtension();
+
+        await expect(toolCallHandlers[0]!({ toolName: 'bash' })).resolves.toEqual({
+          block: true,
+          reason: 'browser_credential_auth_scope_forbidden',
+        });
+        await expect(toolCallHandlers[0]!({ toolName: 'unknown_plugin_tool' })).resolves.toEqual({
+          block: true,
+          reason: 'browser_credential_auth_scope_forbidden',
+        });
+        await expect(
+          toolCallHandlers[0]!({ toolName: 'runtime_action_submit' }),
+        ).resolves.toBeUndefined();
+        await expect(
+          toolCallHandlers[0]!({ toolName: 'browser_take_snapshot' }),
+        ).resolves.toBeUndefined();
+      } finally {
+        if (originalProfile === undefined) delete process.env.AMASTER_BROWSER_SESSION_USER_DATA_DIR;
+        else process.env.AMASTER_BROWSER_SESSION_USER_DATA_DIR = originalProfile;
+      }
     });
 
     it('preserves required pageId parameters from page-scoped upstream tools', async () => {

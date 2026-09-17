@@ -145,6 +145,29 @@ browser_take_screenshot({ "pageId": 2 })
 
 This avoids relying on `browser_select_page` when multiple browser calls or tabs are active. A single chrome-devtools-mcp process still serializes tool execution; page ID routing provides isolation rather than parallel throughput.
 
+### MirrorX credential-bound authentication
+
+When the runtime provides private credential file descriptors 5/6 and a run-owned
+`AMASTER_BROWSER_SESSION_USER_DATA_DIR`, the extension exposes a fail-closed
+single-page authentication transaction:
+
+- `browser_auth_preflight` validates exact origin, fresh page generation, one visible
+  `autocomplete=current-password` control, username semantics, and same-form submit;
+- `browser_auth_submit_with_credential_refs` resolves opaque references only after that
+  validation, seals all generic browser calls, fills and submits inside one trusted call,
+  scrubs the controls, reloads the document while retaining the browser profile, and
+  returns metadata-only proof. When only the password is secret, `usernameValue` carries
+  the intentionally model-visible account identifier through the hard reload;
+- credential-bound sessions permanently reject generic evaluate, storage, raw HTML,
+  console, network, screenshot, and snapshot tools. Use the constrained
+  `browser_credential_read`, `browser_credential_activate`, and
+  same-origin `browser_credential_navigate` tools instead. Activate/navigation discard
+  upstream raw results and return only the same sanitized view as credential read.
+
+Identifier-first, multi-stage, cross-origin SSO/IdP, ambiguous password controls, missing
+autocomplete semantics, and unproven context rotation return a human-session handoff.
+The extension never falls back to ordinary fill/type for a credential handle.
+
 ### Vision Model (Optional)
 
 Enable `browser_analyze_screenshot` by referencing a model already configured in Pi's model registry (`models.json`):

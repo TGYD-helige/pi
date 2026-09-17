@@ -34,6 +34,9 @@
       "./dist/index.js"
     ]
   },
+  "mirrorxCapabilities": [
+    "browser_credential_auth_transaction_v1"
+  ],
   "publishConfig": {
     "access": "public"
   },

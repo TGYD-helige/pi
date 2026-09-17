@@ -22,6 +22,16 @@ import {
   resolveConfig,
   type VisionModelConfig,
 } from './config.js';
+import {
+  type BrowserCredentialAuthority,
+  BrowserCredentialAuthTransaction,
+  BrowserCredentialGate,
+  parseBrowserJson,
+} from './credential-auth.js';
+import {
+  BrowserCredentialChannelClient,
+  browserCredentialPrivateChannelAvailable,
+} from './credential-channel.js';
 import { prepareBrowserProfile } from './profile.js';
 import {
   augmentToolDescription,
@@ -31,9 +41,12 @@ import {
 
 export type { BrowserSessionMode, BrowserUseConfig, VisionModelConfig };
 export { configToArgs, resolveConfig };
+export const BROWSER_CREDENTIAL_AUTH_TRANSACTION_CAPABILITY =
+  'browser_credential_auth_transaction_v1' as const;
 
 // All upstream tools are re-exported with this prefix to avoid name collisions with other extensions.
 const TOOL_PREFIX = 'browser_';
+const CREDENTIAL_SCOPE_ALLOWED_TOOL = /^(?:browser_|mirrorx_|runtime_action_)/u;
 
 // These upstream tools are noisy or slow; skip them during registration.
 const EXCLUDED_TOOLS = new Set([
@@ -130,9 +143,15 @@ export class DevToolsClient {
   private hasConnected = false;
   private explicitlyClosed = false;
   private lastHealthCheckAt = 0;
+  private readonly credentialGate: BrowserCredentialGate;
 
-  constructor(config?: BrowserUseConfig) {
+  constructor(config?: BrowserUseConfig, credentialGate = new BrowserCredentialGate()) {
     this.config = resolveConfig(config);
+    this.credentialGate = credentialGate;
+  }
+
+  getCredentialGate(): BrowserCredentialGate {
+    return this.credentialGate;
   }
 
   getState(): ConnectionState {
@@ -297,6 +316,23 @@ export class DevToolsClient {
     }>;
     isError?: boolean;
   }> {
+    this.credentialGate.assertGenericAllowed(name, args);
+    return this.callTrustedTool(name, args, signal);
+  }
+
+  async callTrustedTool(
+    name: string,
+    args: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<{
+    content?: Array<{
+      type: string;
+      text?: string;
+      data?: string;
+      mimeType?: string;
+    }>;
+    isError?: boolean;
+  }> {
     await this.ensureReady(signal);
     const client = this.client;
     if (!client) throw new Error('Client not connected');
@@ -398,6 +434,64 @@ function toToolContent(
   return result.isError ? { content, isError: true } : { content };
 }
 
+const CREDENTIAL_AUTHORITY_PARAMETERS = Type.Object(
+  {
+    version: Type.Literal(1),
+    companyId: Type.String(),
+    issueId: Type.String(),
+    runId: Type.String(),
+    commandId: Type.String(),
+    interactionId: Type.String(),
+    credentialKey: Type.String(),
+    credentialVersion: Type.Number(),
+    credentialRole: Type.Union([Type.Literal('username'), Type.Literal('password')]),
+    targetOrigin: Type.String(),
+    authenticationOrigin: Type.String(),
+    bindingId: Type.String(),
+    browserLeaseId: Type.String(),
+  },
+  { additionalProperties: false },
+);
+
+const SAFE_READ_FUNCTION = `async () => {
+  const visible = (element) => {
+    const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
+  };
+  const controls = [...document.querySelectorAll('a,button,input,select,textarea,[role="button"],[role="link"]')]
+    .filter((element) => visible(element) && !(element instanceof HTMLInputElement && ['password', 'hidden'].includes(element.type)))
+    .slice(0, 200)
+    .map((element, controlId) => ({
+      controlId,
+      tag: element.tagName.toLowerCase(),
+      role: element.getAttribute('role') || null,
+      text: (element.innerText || element.getAttribute('aria-label') || '').trim().slice(0, 500),
+      disabled: 'disabled' in element ? Boolean(element.disabled) : false,
+    }));
+  const text = [...document.querySelectorAll('main,article,[role="main"],body')]
+    .find((element) => visible(element))?.innerText || '';
+  return { status: 'ok', origin: location.origin, title: document.title.slice(0, 500), text: text.slice(0, 20000), controls };
+}`;
+
+const SAFE_ACTIVATE_FUNCTION = `async (controlId) => {
+  if (!Number.isSafeInteger(controlId) || controlId < 0 || controlId >= 200) throw new Error('control_id_invalid');
+  const visible = (element) => {
+    const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
+  };
+  const controls = [...document.querySelectorAll('a,button,input,select,textarea,[role="button"],[role="link"]')]
+    .filter((element) => visible(element) && !(element instanceof HTMLInputElement && ['password', 'hidden'].includes(element.type)))
+    .slice(0, 200);
+  const control = controls[controlId];
+  if (!(control instanceof HTMLElement) || control.matches('input:not([type="button"]):not([type="submit"]),select,textarea')) {
+    throw new Error('control_not_activatable');
+  }
+  control.click();
+  return { status: 'activated', origin: location.origin, controlId };
+}`;
+
 /**
  * pi-coding-agent extension entry point.
  *
@@ -411,6 +505,8 @@ function toToolContent(
 export default function browserUseExtension(pi: ExtensionAPI): void {
   let config: BrowserUseConfig | undefined;
   let client: DevToolsClient | undefined;
+  let credentialChannel: BrowserCredentialChannelClient | undefined;
+  let credentialMode = false;
 
   async function ensureConnected(signal?: AbortSignal): Promise<void> {
     if (!client) throw new Error('browser-use: session not started');
@@ -451,6 +547,179 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
         },
       });
     }
+  }
+
+  function registerCredentialTools(): void {
+    if (!client) throw new Error('browser-use: session not started');
+    const gate = client.getCredentialGate();
+    const transaction = () => {
+      credentialChannel ??= BrowserCredentialChannelClient.fromProcess();
+      return new BrowserCredentialAuthTransaction({
+        gate,
+        resolveCredential: (authority, signal) => credentialChannel!.resolve(authority, signal),
+        callTrustedTool: (name, args, signal) => client!.callTrustedTool(name, args, signal),
+        destroyBrowser: () => client!.close(),
+      });
+    };
+    const safeRead = async (pageId: number, signal?: AbortSignal) => {
+      const proof = parseBrowserJson(
+        await client!.callTrustedTool(
+          'evaluate_script',
+          { pageId, function: SAFE_READ_FUNCTION, args: [] },
+          signal,
+        ),
+      );
+      try {
+        gate.assertCredentialSession(pageId, proof.origin);
+      } catch {
+        gate.close();
+        await client!.close();
+        throw new Error('browser_credential_session_origin_mismatch');
+      }
+      return proof;
+    };
+
+    pi.registerTool({
+      name: 'browser_auth_preflight',
+      label: 'browser_auth_preflight',
+      description:
+        'Validate a same-origin, single-page username/password login form before using credential references. Returns only readiness metadata or a human-session handoff reason.',
+      parameters: Type.Object({
+        pageId: Type.Number(),
+        targetOrigin: Type.String(),
+        usernameControlUid: Type.String(),
+        passwordControlUid: Type.String(),
+        submitControlUid: Type.String(),
+      }),
+      async execute(_id, params, signal) {
+        const result = await transaction().preflight(
+          params as {
+            pageId: number;
+            targetOrigin: string;
+            usernameControlUid: string;
+            passwordControlUid: string;
+            submitControlUid: string;
+          },
+          signal,
+        );
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify(result) }],
+          details: undefined,
+        };
+      },
+    });
+
+    pi.registerTool({
+      name: 'browser_auth_submit_with_credential_refs',
+      label: 'browser_auth_submit_with_credential_refs',
+      description:
+        'Atomically resolve opaque credential references, fill a validated same-origin login form, submit it, scrub the controls, rotate the document context, and return metadata-only proof.',
+      parameters: Type.Object({
+        pageId: Type.Number(),
+        pageGeneration: Type.String(),
+        usernameControlUid: Type.String(),
+        passwordControlUid: Type.String(),
+        submitControlUid: Type.String(),
+        usernameValue: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
+        credentialRefs: Type.Array(CREDENTIAL_AUTHORITY_PARAMETERS, { minItems: 1, maxItems: 2 }),
+      }),
+      async execute(_id, params, signal) {
+        const input = params as {
+          pageId: number;
+          pageGeneration: string;
+          usernameControlUid: string;
+          passwordControlUid: string;
+          submitControlUid: string;
+          usernameValue?: string;
+          credentialRefs: BrowserCredentialAuthority[];
+        };
+        const result = await transaction().authenticate(input, signal);
+        credentialChannel!.recordAuthenticated(
+          input.credentialRefs[0]!,
+          result,
+          input.credentialRefs.map((authority) => authority.credentialRole),
+        );
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify(result) }],
+          details: undefined,
+        };
+      },
+    });
+
+    pi.registerTool({
+      name: 'browser_credential_read',
+      label: 'browser_credential_read',
+      description:
+        'Read sanitized visible content from a credential-bound browser session. Password/hidden controls, attributes, storage, console, network data, and raw HTML are excluded.',
+      parameters: Type.Object({ pageId: Type.Number() }),
+      async execute(_id, params, signal) {
+        gate.assertCredentialSession(params.pageId as number);
+        const proof = await safeRead(params.pageId as number, signal);
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify(proof) }],
+          details: undefined,
+        };
+      },
+    });
+
+    pi.registerTool({
+      name: 'browser_credential_activate',
+      label: 'browser_credential_activate',
+      description:
+        'Activate a visible sanitized control by the controlId returned from browser_credential_read.',
+      parameters: Type.Object({
+        pageId: Type.Number(),
+        controlId: Type.Integer({ minimum: 0, maximum: 199 }),
+      }),
+      async execute(_id, params, signal) {
+        gate.assertCredentialSession(params.pageId as number);
+        try {
+          await client!.callTrustedTool(
+            'evaluate_script',
+            {
+              pageId: params.pageId,
+              function: SAFE_ACTIVATE_FUNCTION,
+              args: [params.controlId],
+            },
+            signal,
+          );
+        } catch {
+          // Navigation may destroy the source execution context. The sanitized read below is authoritative.
+        }
+        const proof = await safeRead(params.pageId as number, signal);
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify(proof) }],
+          details: undefined,
+        };
+      },
+    });
+
+    pi.registerTool({
+      name: 'browser_credential_navigate',
+      label: 'browser_credential_navigate',
+      description:
+        'Navigate a credential-bound browser session to an HTTPS URL without exposing storage or tokens.',
+      parameters: Type.Object({ pageId: Type.Number(), url: Type.String() }),
+      async execute(_id, params, signal) {
+        const url = new URL(params.url as string);
+        const boundOrigin = gate.assertCredentialSession(params.pageId as number);
+        if (url.protocol !== 'https:' || url.username || url.password) {
+          throw new Error('browser_credential_navigation_invalid');
+        }
+        if (url.origin !== boundOrigin)
+          throw new Error('browser_credential_navigation_origin_mismatch');
+        await client!.callTrustedTool(
+          'navigate_page',
+          { pageId: params.pageId, type: 'url', url: url.toString() },
+          signal,
+        );
+        const proof = await safeRead(params.pageId as number, signal);
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify(proof) }],
+          details: undefined,
+        };
+      },
+    });
   }
 
   /** Create a VisionCaller that uses pi-ai's complete() with the model registry. */
@@ -571,18 +840,45 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
   }
 
   pi.on('session_start', async (_event, ctx) => {
+    const configured = loadConfigFromFile({
+      cwd: ctx.cwd,
+      projectTrusted: isProjectTrusted(ctx),
+    });
+    credentialMode = browserCredentialPrivateChannelAvailable();
+    const trustedProfile = process.env.AMASTER_BROWSER_SESSION_USER_DATA_DIR?.trim();
     config = resolveConfig(
-      loadConfigFromFile({
-        cwd: ctx.cwd,
-        projectTrusted: isProjectTrusted(ctx),
-      }),
+      credentialMode
+        ? {
+            ...configured,
+            sessionMode: 'persistent',
+            usageStatistics: false,
+            categoryNetwork: false,
+            ...(trustedProfile ? { userDataDir: trustedProfile } : {}),
+          }
+        : configured,
     );
     prepareBrowserProfile(config);
     client = new DevToolsClient(config);
     await registerUpstreamTools();
+    if (credentialMode && trustedProfile) {
+      registerCredentialTools();
+    }
     if (config.visionModel) {
       await registerVisionTool(config.visionModel);
     }
+  });
+
+  pi.on('tool_call', async (event) => {
+    const gate = client?.getCredentialGate();
+    if (!credentialMode || !gate) return undefined;
+    if (gate.isSealed()) {
+      if (event.toolName === 'browser_auth_submit_with_credential_refs') return undefined;
+      return { block: true, reason: 'browser_auth_transaction_sealed' };
+    }
+    if (!CREDENTIAL_SCOPE_ALLOWED_TOOL.test(event.toolName)) {
+      return { block: true, reason: 'browser_credential_auth_scope_forbidden' };
+    }
+    return undefined;
   });
 
   pi.on('session_shutdown', async () => {
@@ -590,5 +886,8 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
       await client.close();
       client = undefined;
     }
+    credentialChannel?.close();
+    credentialChannel = undefined;
+    credentialMode = false;
   });
 }
