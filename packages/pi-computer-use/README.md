@@ -8,6 +8,7 @@ Cross-platform computer-use tools for Pi desktop automation. The extension expos
 
 - One Rust 0.28.2 driver line across macOS, Linux, and Windows
 - 56 version-pinned upstream tools, including sessions, element tokens, accessibility + screenshot state, native input, browser tools, diagnostics, recording, and permission policy support
+- Deferred tool activation: only the core toolset is active by default; extra groups are activated on demand via `computer_use_tools` or `/computer-use-tools`
 - Full MCP text, image, and `structuredContent` forwarding
 - Owned daemon + MCP proxy lifecycle with session-owned reconnect and per-call cancellation
 - A non-prompting Linux/Windows permission probe on session start
@@ -38,7 +39,8 @@ Project settings are loaded only after project trust is accepted. `${ENV_VAR}` i
   "pi-computer-use": {
     "mode": "bundled",
     "confirmAppLaunch": true,
-    "confirmDangerousActions": true
+    "confirmDangerousActions": true,
+    "toolProfile": "core"
   }
 }
 ```
@@ -50,9 +52,26 @@ Project settings are loaded only after project trust is accepted. `${ENV_VAR}` i
 | `extraArgs` | `string[]` | — | Additional arguments appended to `cua-driver mcp` |
 | `confirmAppLaunch` | `boolean` | `true` | Ask once per app target before `launch_app` |
 | `confirmDangerousActions` | `boolean` | `true` | Confirm high-risk tools such as `kill_app` and `replay_trajectory`; recording always requires confirmation |
+| `toolProfile` | `"core" \| "full"` | `"core"` | `"core"` activates only the everyday toolset at session start; `"full"` activates all 56 driver tools |
 | `visionModel` | `{ provider, model }` | — | Register `computer_use_analyze_screenshot` |
 
 In non-interactive modes, confirmation-required tools return an error unless the corresponding confirmation setting is explicitly disabled.
+
+### Tool groups
+
+With the default `core` profile, only everyday tools are visible to the model (`list_apps`, `launch_app`, `get_window_state`, `verify_state`, the click/type/scroll family, and `zoom`). The remaining driver tools stay registered but inactive, so they cost no prompt context. The model activates a group itself by calling `computer_use_tools` (without arguments it lists the groups); users can do the same with `/computer-use-tools <group>`:
+
+| Group | Tools |
+| --- | --- |
+| `browser` | CDP browser automation: `browser_prepare`, `browser_navigate`, `browser_click`, `browser_type`, `browser_dialog`, `browser_set_input_files`, `browser_download`, `browser_pointer`, `get_browser_state`, `page` |
+| `recording` | `start_recording`, `stop_recording`, `get_recording_state`, `replay_trajectory`, `install_ffmpeg` |
+| `session` | `start_session`, `escalate_session`, `get_session`, `get_session_state`, `list_sessions`, `end_session` |
+| `cursor` | `move_cursor`, `set_agent_cursor_enabled`, `set_agent_cursor_motion`, `set_agent_cursor_theme`, `get_agent_cursor_state` |
+| `window` | `list_windows`, `bring_to_front`, `set_window_frame`, `invoke_menu`, `kill_app` |
+| `clipboard` | `clipboard_read`, `clipboard_write` |
+| `diagnostics` | `check_permissions`, `health_report`, `get_config`, `set_config`, `check_for_update`, `get_desktop_state`, `get_screen_size`, `get_cursor_position`, `get_accessibility_tree` |
+
+Activated groups stay active for the rest of the session; each new session starts from the configured profile again.
 
 ### Optional vision model
 
@@ -94,13 +113,14 @@ Driver startup, reconnect, and the first macOS permission probe are session-owne
 
 ## Canonical workflow
 
-1. `computer_use_start_session`
-2. `computer_use_launch_app` or `computer_use_list_windows`
-3. `computer_use_get_window_state`
-4. Act using `element_token`/`element_index`, falling back to pixels for
+1. `computer_use_launch_app` or `computer_use_list_apps`
+2. `computer_use_get_window_state`
+3. Act using `element_token`/`element_index`, falling back to pixels for
    custom-drawn surfaces
-5. Re-run `computer_use_get_window_state` and verify the change
-6. `computer_use_end_session`
+4. Re-run `computer_use_get_window_state` and verify the change
+5. When the task needs more than the core toolset (browser automation,
+   recording, escalated sessions, ...), call `computer_use_tools` with the
+   matching group first
 
 Linux and Windows tool descriptions and schemas come from the exact live driver. macOS uses the generated manifest for the bundled driver release.
 

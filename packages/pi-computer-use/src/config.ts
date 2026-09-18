@@ -18,12 +18,19 @@ export interface ComputerUseConfig {
   confirmAppLaunch?: boolean;
   /** Confirm high-risk tools such as kill_app and replay_trajectory. Default: true */
   confirmDangerousActions?: boolean;
+  /**
+   * Which driver tools are active at session start: 'core' activates only the
+   * everyday toolset (extra groups via the computer_use_tools tool or the
+   * /computer-use-tools command), 'full' activates every tool. Default: 'core'
+   */
+  toolProfile?: 'core' | 'full';
 }
 
 const DEFAULTS: Partial<ComputerUseConfig> = {
   mode: 'bundled',
   confirmAppLaunch: true,
   confirmDangerousActions: true,
+  toolProfile: 'core',
 };
 
 export function resolveConfig(config?: ComputerUseConfig): ComputerUseConfig {

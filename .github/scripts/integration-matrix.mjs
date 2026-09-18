@@ -6,8 +6,12 @@ import { pathToFileURL } from 'node:url';
 
 const computerUseE2E = {
   extension: 'pi-computer-use',
-  tools: 'computer_use_health_report',
-  prompt: 'Use computer_use_health_report exactly once with include=[binary_version, platform_supported, session_active]. Report the schema version, platform, driver version, and overall status.',
+  // health_report lives in the deferred diagnostics group, so the run must
+  // prove the activation loop: the model activates the group via
+  // computer_use_tools, which makes health_report callable on the next turn.
+  tools: 'computer_use_tools,computer_use_health_report',
+  prompt:
+    'Step 1 — call computer_use_tools with group=diagnostics to activate the diagnostics tool group. Step 2 — call computer_use_health_report exactly once with include=[binary_version, platform_supported, session_active]. Report the schema version, platform, driver version, and overall status.',
   assert_pattern: '(schema_version|driver_version|overall)',
   assert_tool: 'computer_use_health_report',
 };
@@ -62,8 +66,9 @@ export const fullMatrix = [
   {
     ...computerUseE2E,
     scenario: 'macos',
-    tools: 'computer_use_check_permissions',
-    prompt: 'Use computer_use_check_permissions exactly once with prompt=false. Report the Accessibility and Screen Recording statuses.',
+    tools: 'computer_use_tools,computer_use_check_permissions',
+    prompt:
+      'Step 1 — call computer_use_tools with group=diagnostics to activate the diagnostics tool group. Step 2 — call computer_use_check_permissions exactly once with prompt=false. Report the Accessibility and Screen Recording statuses.',
     assert_pattern: 'permissions_pending',
     assert_tool: 'computer_use_check_permissions',
     assert_tool_count: 1,

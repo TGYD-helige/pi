@@ -1,11 +1,13 @@
 import { lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { isProjectTrusted } from '@amaster.ai/pi-shared/settings';
+import { StringEnum } from '@earendil-works/pi-ai';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
 import { type ComputerUseConfig, loadConfigFromFile, resolveConfig } from './config.js';
 import toolManifest from './generated/cua-driver-tools.js';
 import { CuaDriverClient, waitForPromise } from './mcp-client.js';
+import { CORE_TOOLS, TOOL_GROUP_NAMES, TOOL_GROUPS } from './tool-groups.js';
 import { type McpToolResult, toPiToolResult } from './tool-result.js';
 import { createPiVisionCaller } from './vision.js';
 
@@ -111,6 +113,9 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
   let sessionAbortController: AbortController | undefined;
   let macPermissionPromise: Promise<void> | undefined;
   const approvedLaunchApprovalKeys = new Set<string>();
+  const driverToolNames = new Set<string>();
+
+  const TOOLS_META_TOOL = `${TOOL_PREFIX}tools`;
 
   async function ensureConnected(
     signal?: AbortSignal,
@@ -204,12 +209,163 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
     return true;
   }
 
+  function formatGroupList(): string {
+    const active = new Set(pi.getActiveTools());
+    const lines = ['Computer-use tool groups:'];
+    for (const [name, group] of Object.entries(TOOL_GROUPS)) {
+      const registered = group.tools.filter((tool) => driverToolNames.has(`${TOOL_PREFIX}${tool}`));
+      const activeCount = registered.filter((tool) => active.has(`${TOOL_PREFIX}${tool}`)).length;
+      const suffix =
+        registered.length === 0
+          ? 'unavailable until the driver is registered'
+          : activeCount === 0
+            ? 'inactive'
+            : activeCount === registered.length
+              ? 'active'
+              : `${activeCount}/${registered.length} active`;
+      lines.push(`- ${name} (${group.tools.length} tools, ${suffix}): ${group.summary}`);
+    }
+    lines.push(
+      `Activate a group with ${TOOLS_META_TOOL} group=<name> or /computer-use-tools <name>.`,
+    );
+    return lines.join('\n');
+  }
+
+  function activateGroup(group: string): {
+    activated: string[];
+    total: number;
+    alreadyActive: boolean;
+  } {
+    const definition = TOOL_GROUPS[group];
+    const active = pi.getActiveTools();
+    const wanted = (definition?.tools ?? [])
+      .map((tool) => `${TOOL_PREFIX}${tool}`)
+      .filter((name) => driverToolNames.has(name));
+    const toAdd = wanted.filter((name) => !active.includes(name));
+    if (toAdd.length > 0) pi.setActiveTools([...active, ...toAdd]);
+    return {
+      activated: wanted,
+      total: definition?.tools.length ?? 0,
+      alreadyActive: toAdd.length === 0 && wanted.length > 0,
+    };
+  }
+
+  function applyToolProfile(): void {
+    if (config?.toolProfile !== 'core') return;
+    const core = new Set(CORE_TOOLS);
+    pi.setActiveTools(
+      pi
+        .getActiveTools()
+        .filter((name) => !driverToolNames.has(name) || core.has(name.slice(TOOL_PREFIX.length))),
+    );
+  }
+
+  function registerToolGroupSurface(): void {
+    const groupSummary = Object.entries(TOOL_GROUPS)
+      .map(([name, group]) => `${name} (${group.summary})`)
+      .join(', ');
+    pi.registerTool({
+      name: TOOLS_META_TOOL,
+      label: TOOLS_META_TOOL,
+      description: `List and activate additional computer-use tool groups: ${groupSummary}. Call without arguments to list groups and their activation status.`,
+      parameters: Type.Object({
+        group: Type.Optional(
+          StringEnum(TOOL_GROUP_NAMES, {
+            description: 'Tool group to activate. Omit to list available groups.',
+          }),
+        ),
+      }),
+      promptSnippet:
+        'List or activate extra computer-use tool groups when the core tools are insufficient',
+      promptGuidelines: [
+        `Only the core computer-use tools are active by default. When a task needs browser automation, recording, escalated sessions, cursor overlay, window management, clipboard, or diagnostics capabilities, call ${TOOLS_META_TOOL} with the matching group first — the group's tools become available on the next turn.`,
+      ],
+      async execute(_toolCallId: string, params: Record<string, unknown>) {
+        const group = typeof params.group === 'string' ? params.group : undefined;
+        if (!group) {
+          return {
+            content: [{ type: 'text' as const, text: formatGroupList() }],
+            details: undefined,
+          };
+        }
+        if (driverToolNames.size === 0) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: `Driver tools are not registered yet — connect the driver first with ${TOOL_PREFIX}connect, then activate the "${group}" group again.`,
+              },
+            ],
+            details: undefined,
+            isError: true,
+          };
+        }
+        const { activated, total, alreadyActive } = activateGroup(group);
+        if (activated.length === 0) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: `Group "${group}" has no tools registered on this platform's driver.`,
+              },
+            ],
+            details: undefined,
+            isError: true,
+          };
+        }
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `${alreadyActive ? 'Already active' : 'Activated'} group "${group}" (${activated.length}/${total} tools): ${activated.join(', ')}. These tools are available from the next turn.`,
+            },
+          ],
+          details: undefined,
+        };
+      },
+    });
+
+    pi.registerCommand('computer-use-tools', {
+      description: 'List or activate computer-use tool groups',
+      getArgumentCompletions: (argumentPrefix) => {
+        const prefix = argumentPrefix.trim().toLowerCase();
+        return Object.entries(TOOL_GROUPS)
+          .filter(([name]) => name.startsWith(prefix))
+          .map(([name, group]) => ({ value: name, label: name, description: group.summary }));
+      },
+      async handler(args, ctx) {
+        const group = String(args ?? '')
+          .trim()
+          .toLowerCase();
+        if (!group) {
+          ctx.ui.notify(formatGroupList(), 'info');
+          return;
+        }
+        if (!TOOL_GROUP_NAMES.includes(group)) {
+          ctx.ui.notify(
+            `pi-computer-use: unknown group "${group}". Available: ${TOOL_GROUP_NAMES.join(', ')}`,
+            'warning',
+          );
+          return;
+        }
+        const { activated, alreadyActive } = activateGroup(group);
+        ctx.ui.notify(
+          activated.length === 0
+            ? `pi-computer-use: group "${group}" has no registered tools (driver not connected?).`
+            : `pi-computer-use: ${alreadyActive ? 'already active' : 'activated'} "${group}" (${activated.length} tools).`,
+          'info',
+        );
+      },
+    });
+  }
+
   function registerTools(
     tools: ReadonlyArray<{ name: string; description?: string | undefined; inputSchema: unknown }>,
   ): void {
     for (const tool of tools) {
       const prefixedName = `${TOOL_PREFIX}${tool.name}`;
       const originalName = tool.name;
+      driverToolNames.add(prefixedName);
 
       pi.registerTool({
         name: prefixedName,
@@ -295,6 +451,7 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
       ) {
         try {
           const count = await discoverAndRegisterTools(signal);
+          applyToolProfile();
           return {
             content: [
               {
@@ -320,6 +477,7 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
       async handler(_args, ctx) {
         try {
           const count = await discoverAndRegisterTools(ctx.signal);
+          applyToolProfile();
           ctx.ui.notify(`pi-computer-use: registered ${count} platform tools.`, 'info');
         } catch {
           ctx.ui.notify('pi-computer-use: Cua Driver is still unavailable.', 'warning');
@@ -460,6 +618,8 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
     });
   }
 
+  registerToolGroupSurface();
+
   pi.on('session_start', async (_event, ctx) => {
     config = resolveConfig(
       loadConfigFromFile({
@@ -471,10 +631,12 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
     sessionAbortController = new AbortController();
     macPermissionPromise = undefined;
     approvedLaunchApprovalKeys.clear();
+    driverToolNames.clear();
 
     if (process.platform === 'darwin') {
       registerTools(toolManifest.tools);
       registerVisionTool();
+      applyToolProfile();
       return;
     }
 
@@ -493,6 +655,7 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
     }
 
     registerVisionTool();
+    applyToolProfile();
     if (!connectedAtStartup) return;
 
     try {

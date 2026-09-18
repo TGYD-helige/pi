@@ -56,7 +56,7 @@ test('runs model-backed computer-use E2E on Linux, macOS, and Windows', async ()
 
   assert.deepEqual(scenarios, expectedComputerUseScenarios);
   const macos = fullMatrix.find(({ extension, scenario }) => extension === 'pi-computer-use' && scenario === 'macos');
-  assert.equal(macos.tools, 'computer_use_check_permissions');
+  assert.equal(macos.tools, 'computer_use_tools,computer_use_check_permissions');
   assert.match(macos.prompt, /prompt=false/);
   assert.equal(macos.assert_tool, 'computer_use_check_permissions');
   assert.equal(macos.assert_tool_count, 1);
