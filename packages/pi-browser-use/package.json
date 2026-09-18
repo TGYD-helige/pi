@@ -42,7 +42,7 @@
     "version": "1.6.0",
     "mode": "puppeteer_pipe",
     "buildFileCount": 348,
-    "buildTreeSha256": "c75935d92332a872c15afb42b36d8488347d03e0f257cd87b107556f9adf1e5c"
+      "buildTreeSha256": "b7f34fe406693fb9abac325a2c32cbb94c2096aafbed1cac2fee63a47eb1aff0"
   },
   "publishConfig": {
     "access": "public"

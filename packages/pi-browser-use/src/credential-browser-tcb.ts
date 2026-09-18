@@ -8,7 +8,7 @@ export const CREDENTIAL_BROWSER_TCB = Object.freeze({
   version: '1.6.0',
   mode: 'puppeteer_pipe',
   buildFileCount: 348,
-  buildTreeSha256: 'c75935d92332a872c15afb42b36d8488347d03e0f257cd87b107556f9adf1e5c',
+  buildTreeSha256: 'b7f34fe406693fb9abac325a2c32cbb94c2096aafbed1cac2fee63a47eb1aff0',
 });
 
 const require = createRequire(import.meta.url);
@@ -81,7 +81,11 @@ export function hashRegularFileTree(root: string): { fileCount: number; sha256: 
     }
   };
   walk(root);
-  files.sort((left, right) => relative(root, left).localeCompare(relative(root, right)));
+  files.sort((left, right) => {
+    const leftName = relative(root, left).replaceAll('\\', '/');
+    const rightName = relative(root, right).replaceAll('\\', '/');
+    return leftName < rightName ? -1 : leftName > rightName ? 1 : 0;
+  });
   const digest = createHash('sha256');
   for (const file of files) {
     digest.update(relative(root, file).replaceAll('\\', '/'));

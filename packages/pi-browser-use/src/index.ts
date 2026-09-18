@@ -220,7 +220,13 @@ export class DevToolsClient {
     credentialGate = new BrowserCredentialGate(),
     private readonly credentialMode = false,
   ) {
-    this.config = credentialMode ? { ...config } : resolveConfig(config);
+    if (credentialMode) {
+      const userDataDir = config?.userDataDir?.trim();
+      if (!userDataDir) throw new Error('browser_credential_trusted_profile_required');
+      this.config = credentialBrowserConfig(userDataDir);
+    } else {
+      this.config = resolveConfig(config);
+    }
     this.credentialGate = credentialGate;
   }
 
@@ -1008,9 +1014,6 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
     if (CREDENTIAL_CONTROL_PLANE_TOOL.test(event.toolName)) return undefined;
     const phase = gate.currentPhase();
     if (phase === 'open' && CREDENTIAL_OPEN_TOOLS.has(event.toolName)) return undefined;
-    if (phase === 'sealed' && event.toolName === 'browser_auth_submit_with_credential_refs') {
-      return undefined;
-    }
     if (phase === 'credential_bound' && CREDENTIAL_BOUND_TOOLS.has(event.toolName)) {
       return undefined;
     }

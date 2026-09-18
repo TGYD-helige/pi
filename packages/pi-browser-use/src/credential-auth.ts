@@ -48,7 +48,7 @@ export type TrustedToolCaller = (
 ) => Promise<BrowserToolResult>;
 
 const CREDENTIAL_MARKER =
-  /(?:\[credentialKey:[^\]]+\]|browser-credential-ref:|browser_credential_ref)/iu;
+  /(?:\[credentialKey:[^\]\s]+\]|\bbrowser-credential-ref:\S+\b|\bbrowser_credential_ref:\S+\b)/iu;
 const ORDINARY_TEXT_WRITERS = new Set(['fill', 'fill_form', 'type_text']);
 
 export class BrowserCredentialGate {
@@ -70,6 +70,11 @@ export class BrowserCredentialGate {
 
   close(): void {
     this.phase = 'closed';
+  }
+
+  releasePreflight(): void {
+    if (this.phase !== 'sealed') throw new Error('browser_auth_transaction_unavailable');
+    this.phase = 'open';
   }
 
   isSealed(): boolean {
@@ -156,9 +161,10 @@ export class BrowserCredentialAuthTransaction {
     input: BrowserCredentialAuthInput,
     signal?: AbortSignal,
   ): Promise<{ status: 'authenticated'; pageGeneration: string; origin: string }> {
-    this.dependencies.gate.seal();
     const credentials: Partial<Record<BrowserCredentialRole, Buffer>> = {};
     let handoffReason: string | undefined;
+    let destructiveStarted = false;
+    this.dependencies.gate.seal();
     try {
       const origins = validateAuthorities(input.credentialRefs);
       const hasUsernameRef = input.credentialRefs.some(
@@ -192,6 +198,7 @@ export class BrowserCredentialAuthTransaction {
         throw new Error('browser_auth_preflight_handoff');
       }
 
+      destructiveStarted = true;
       try {
         await this.dependencies.callTrustedTool(
           'evaluate_script',
@@ -205,7 +212,7 @@ export class BrowserCredentialAuthTransaction {
       const privatePreflight = parseBrowserJson(
         await this.dependencies.callTrustedTool(
           'evaluate_script',
-          { pageId: input.pageId, function: PRIVATE_PREFLIGHT_FUNCTION, args: [] },
+          { pageId: input.pageId, function: PREFLIGHT_FUNCTION, args: [] },
           signal,
         ),
       );
@@ -266,8 +273,12 @@ export class BrowserCredentialAuthTransaction {
         origin: proof.origin,
       };
     } catch {
-      this.dependencies.gate.close();
-      await this.dependencies.destroyBrowser();
+      if (handoffReason && !destructiveStarted) {
+        this.dependencies.gate.releasePreflight();
+      } else {
+        this.dependencies.gate.close();
+        await this.dependencies.destroyBrowser();
+      }
       if (handoffReason) throw new Error(`human_session_handoff:${handoffReason}`);
       throw new Error('browser_auth_transaction_failed');
     } finally {
@@ -405,30 +416,6 @@ const PREFLIGHT_FUNCTION = `async () => {
 const ROTATE_BEFORE_CONSUME_FUNCTION = `async () => {
   location.reload();
   return { status: 'rotation_started' };
-}`;
-
-const PRIVATE_PREFLIGHT_FUNCTION = `async () => {
-  const handoff = (reason) => ({ status: 'handoff', reason });
-  const visible = (element) => {
-    const style = getComputedStyle(element);
-    const rect = element.getBoundingClientRect();
-    return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
-  };
-  if (globalThis.top !== globalThis) return handoff('cross_origin_or_iframe_authentication');
-  const passwords = [...document.querySelectorAll('input[type="password"][autocomplete="current-password"]')]
-    .filter((element) => element.isConnected && visible(element) && !element.disabled && !element.readOnly);
-  if (passwords.length !== 1) return handoff('password_control_ambiguous');
-  const password = passwords[0];
-  const form = password.form;
-  if (!form) return handoff('form_relation_mismatch');
-  const usernames = [...form.querySelectorAll('input[autocomplete="username"],input[autocomplete="email"]')]
-    .filter((element) => element.isConnected && visible(element) && !element.disabled && !element.readOnly && ['text', 'email'].includes(element.type));
-  if (usernames.length !== 1) return handoff('username_control_ambiguous');
-  const submits = [...form.querySelectorAll('button,input')]
-    .filter((element) => element.isConnected && visible(element) && !element.disabled && element.type === 'submit');
-  if (submits.length !== 1) return handoff('submit_control_ambiguous');
-  globalThis.__mirrorxAuthPageGeneration ||= crypto.randomUUID();
-  return { status: 'ready', pageGeneration: globalThis.__mirrorxAuthPageGeneration, origin: location.origin };
 }`;
 
 function authFunction(

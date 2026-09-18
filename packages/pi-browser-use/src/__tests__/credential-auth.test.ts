@@ -81,6 +81,9 @@ describe('BrowserCredentialGate', () => {
         }),
       ).toThrow('browser_credential_handle_requires_auth_transaction');
     }
+    expect(() =>
+      gate.assertGenericAllowed('fill', { value: 'browser_credential_ref_not_a_handle' }),
+    ).not.toThrow();
   });
 });
 
@@ -109,7 +112,7 @@ describe('BrowserCredentialAuthTransaction', () => {
       expect.objectContaining({ args: [] }),
       undefined,
     );
-    expect(destroyBrowser).toHaveBeenCalledOnce();
+    expect(destroyBrowser).not.toHaveBeenCalled();
   });
 
   it('hands cross-origin authority to a human before consume', async () => {
@@ -213,6 +216,24 @@ describe('BrowserCredentialAuthTransaction', () => {
       })),
     );
     expect(publicEvidence).not.toContain('sentinel-password');
+  });
+
+  it('rejects a duplicate submit without closing the in-flight transaction', async () => {
+    const gate = new BrowserCredentialGate();
+    gate.seal();
+    const destroyBrowser = vi.fn(async () => undefined);
+    const transaction = new BrowserCredentialAuthTransaction({
+      gate,
+      resolveCredential: vi.fn(),
+      callTrustedTool: vi.fn(),
+      destroyBrowser,
+    });
+
+    await expect(transaction.authenticate(authInput)).rejects.toThrow(
+      'browser_auth_transaction_unavailable',
+    );
+    expect(gate.currentPhase()).toBe('sealed');
+    expect(destroyBrowser).not.toHaveBeenCalled();
   });
 
   it('destroys the browser and returns a stable error when rotation proof fails', async () => {
