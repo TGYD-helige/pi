@@ -160,6 +160,7 @@ const tools = new Map<string, RegisteredTool>();
 const commands = new Map<string, RegisteredCommand>();
 const handlers: Record<string, Array<(event: unknown, ctx: typeof mockCtx) => Promise<void>>> = {};
 const notify = vi.fn();
+const activeTools: string[] = [];
 const mockCtx = {
   cwd: '/tmp',
   signal: undefined as AbortSignal | undefined,
@@ -168,11 +169,20 @@ const mockCtx = {
   modelRegistry: { find: vi.fn(), getApiKeyAndHeaders: vi.fn() },
 };
 const mockPi = {
-  registerTool: vi.fn((tool: RegisteredTool) => tools.set(tool.name, tool)),
+  registerTool: vi.fn((tool: RegisteredTool) => {
+    tools.set(tool.name, tool);
+    // Mirror the runtime: newly registered tools become active by default.
+    if (!activeTools.includes(tool.name)) activeTools.push(tool.name);
+  }),
   registerCommand: vi.fn((name: string, command: RegisteredCommand) => commands.set(name, command)),
   on: vi.fn((event: string, handler: (event: unknown, ctx: typeof mockCtx) => Promise<void>) => {
     handlers[event] ??= [];
     handlers[event].push(handler);
+  }),
+  getActiveTools: vi.fn(() => [...activeTools]),
+  setActiveTools: vi.fn((names: string[]) => {
+    activeTools.length = 0;
+    activeTools.push(...names);
   }),
 };
 
@@ -185,6 +195,8 @@ async function start(config?: Record<string, unknown>, platform = 'darwin') {
   mockConfigContent = config ? JSON.stringify({ 'pi-computer-use': config }) : null;
   tools.clear();
   commands.clear();
+  activeTools.length = 0;
+  activeTools.push('read', 'bash', 'edit');
   for (const key of Object.keys(handlers)) delete handlers[key];
   computerUseExtension(mockPi as never);
   for (const handler of handlers.session_start ?? []) await handler({}, mockCtx);
@@ -217,7 +229,8 @@ describe('computerUseExtension', () => {
   it('registers the pinned Rust tool manifest on macOS', async () => {
     await start();
 
-    expect(tools.size).toBe(toolManifest.tools.length);
+    expect(tools.size).toBe(toolManifest.tools.length + 1);
+    expect(tools.has('computer_use_tools')).toBe(true);
     expect(tools.has('computer_use_start_session')).toBe(true);
     expect(tools.has('computer_use_health_report')).toBe(true);
     expect(tools.has('computer_use_get_accessibility_tree')).toBe(true);
@@ -1043,12 +1056,175 @@ describe('computerUseExtension', () => {
     for (const handler of handlers.session_shutdown ?? []) await handler({}, mockCtx);
     expect(closeCount).toBeGreaterThan(0);
   });
+
+  describe('deferred tool groups', () => {
+    it('activates only the core profile by default', async () => {
+      await start();
+
+      const active = mockPi.getActiveTools();
+      expect(active).toContain('computer_use_click');
+      expect(active).toContain('computer_use_list_apps');
+      expect(active).toContain('computer_use_verify_state');
+      expect(active).toContain('computer_use_tools');
+      expect(active).not.toContain('computer_use_browser_click');
+      expect(active).not.toContain('computer_use_start_recording');
+      expect(active).not.toContain('computer_use_kill_app');
+      expect(active).toContain('read');
+      expect(active).toContain('bash');
+    });
+
+    it('keeps every driver tool active with toolProfile full', async () => {
+      await start({ toolProfile: 'full' });
+
+      const active = mockPi.getActiveTools();
+      expect(active).toContain('computer_use_browser_click');
+      expect(active).toContain('computer_use_start_recording');
+      expect(active).toContain('computer_use_kill_app');
+    });
+
+    it('lists groups and status without activating when no group is given', async () => {
+      await start();
+
+      const result = (await tools
+        .get('computer_use_tools')!
+        .execute('id', {}, undefined, undefined, mockCtx)) as any;
+
+      expect(result.isError).not.toBe(true);
+      expect(result.content[0].text).toContain('browser');
+      expect(result.content[0].text).toContain('recording');
+      expect(mockPi.getActiveTools()).not.toContain('computer_use_browser_click');
+    });
+
+    it('activates a group for the following turns', async () => {
+      await start();
+
+      const result = (await tools
+        .get('computer_use_tools')!
+        .execute('id', { group: 'browser' }, undefined, undefined, mockCtx)) as any;
+
+      expect(result.isError).not.toBe(true);
+      expect(result.content[0].text).toContain('computer_use_browser_click');
+      const active = mockPi.getActiveTools();
+      expect(active).toContain('computer_use_browser_click');
+      expect(active).toContain('computer_use_browser_navigate');
+      expect(active).not.toContain('computer_use_start_recording');
+    });
+
+    it('reports group activation as idempotent', async () => {
+      await start();
+      const meta = tools.get('computer_use_tools')!;
+      await meta.execute('first', { group: 'browser' }, undefined, undefined, mockCtx);
+
+      const result = (await meta.execute(
+        'second',
+        { group: 'browser' },
+        undefined,
+        undefined,
+        mockCtx,
+      )) as any;
+
+      expect(result.content[0].text).toContain('Already active');
+    });
+
+    it('activates a group via the slash command', async () => {
+      await start();
+
+      await commands.get('computer-use-tools')!.handler('recording', mockCtx);
+
+      expect(mockPi.getActiveTools()).toContain('computer_use_start_recording');
+      expect(notify).toHaveBeenCalledWith(expect.stringContaining('recording'), 'info');
+    });
+
+    it('warns on an unknown group in the slash command', async () => {
+      await start();
+
+      await commands.get('computer-use-tools')!.handler('nope', mockCtx);
+
+      expect(notify).toHaveBeenCalledWith(expect.stringContaining('unknown group'), 'warning');
+      expect(mockPi.getActiveTools()).not.toContain('computer_use_nope');
+    });
+
+    it('points to computer_use_connect when the driver is unavailable', async () => {
+      mockConnect = async () => {
+        throw new Error('connection refused');
+      };
+      await start(undefined, 'linux');
+
+      const result = (await tools
+        .get('computer_use_tools')!
+        .execute('id', { group: 'browser' }, undefined, undefined, mockCtx)) as any;
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('computer_use_connect');
+      expect(mockPi.getActiveTools()).not.toContain('computer_use_browser_click');
+    });
+
+    it('errors when a group has no tools registered on this platform', async () => {
+      mockLiveTools = [
+        { name: 'click', description: 'Click', inputSchema: { type: 'object', properties: {} } },
+        {
+          name: 'type_text',
+          description: 'Type',
+          inputSchema: { type: 'object', properties: {} },
+        },
+      ];
+      await start(undefined, 'linux');
+
+      const result = (await tools
+        .get('computer_use_tools')!
+        .execute('id', { group: 'browser' }, undefined, undefined, mockCtx)) as any;
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('no tools registered on this platform');
+    });
+
+    it('narrows the profile again after recovery via the slash command', async () => {
+      let attempts = 0;
+      mockConnect = async () => {
+        attempts++;
+        if (attempts === 1) throw new Error('connection refused');
+      };
+      await start(undefined, 'linux');
+
+      await commands.get('computer-use-connect')!.handler('', mockCtx);
+
+      const active = mockPi.getActiveTools();
+      expect(active).toContain('computer_use_click');
+      expect(active).not.toContain('computer_use_browser_click');
+    });
+
+    it('narrows the profile again after a recovery reconnect', async () => {
+      let attempts = 0;
+      mockConnect = async () => {
+        attempts++;
+        if (attempts === 1) throw new Error('connection refused');
+      };
+      await start(undefined, 'linux');
+      expect(mockPi.getActiveTools()).not.toContain('computer_use_click');
+
+      await tools.get('computer_use_connect')!.execute('retry', {}, undefined, undefined, mockCtx);
+
+      const active = mockPi.getActiveTools();
+      expect(active).toContain('computer_use_click');
+      expect(active).not.toContain('computer_use_browser_click');
+    });
+  });
 });
 
 describe('config', () => {
   it('defaults to the bundled driver', async () => {
     const { resolveConfig } = await import('../config.js');
     expect(resolveConfig().mode).toBe('bundled');
+  });
+
+  it('defaults to the core tool profile', async () => {
+    const { resolveConfig } = await import('../config.js');
+    expect(resolveConfig().toolProfile).toBe('core');
+  });
+
+  it('preserves the full tool profile', async () => {
+    const { resolveConfig } = await import('../config.js');
+    expect(resolveConfig({ toolProfile: 'full' }).toolProfile).toBe('full');
   });
 
   it('preserves a custom path and vision model', async () => {
