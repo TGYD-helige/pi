@@ -136,6 +136,8 @@ export type BridgeConfig = {
   persistSessions?: boolean;
   apiBase?: string;
   env?: Record<string, string>;
+  /** Extension sources (`-e`) the bridge child session may load. Empty/omitted keeps the child extension-free. */
+  extensions?: string[];
 };
 
 export type ChannelRouteConfig = {
