@@ -155,6 +155,55 @@ describe('ChatBridge', () => {
     );
   });
 
+  it('loads only the whitelisted extensions in the bridge child session', async () => {
+    mockSpawn.mockReturnValue(createChild('pong'));
+    const registry = {
+      getAdapter: vi.fn(() => ({ sendTyping: vi.fn(() => Promise.resolve()) })),
+      send: vi.fn(() => Promise.resolve({ ok: true })),
+    };
+    const bridge = new ChatBridge(
+      {
+        enabled: true,
+        // Blank, flag-like and duplicate entries must not reach the child argv.
+        extensions: [
+          ' npm:@example/pi-thing ',
+          '',
+          '--no-skills',
+          'npm:@example/pi-thing',
+          './local-extension.ts',
+        ],
+      },
+      '/workspace',
+      registry as never,
+    );
+    bridge.start();
+
+    await bridge.handleMessage({
+      adapter: 'feishu',
+      sender: 'oc_chat',
+      text: 'ping',
+      metadata: { messageId: 'om_1', threadId: 'omt_1' },
+    });
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      trustedRuntime,
+      [
+        trustedCli,
+        '-p',
+        '--offline',
+        '--no-extensions',
+        '--session',
+        expect.stringMatching(/^\/workspace\/\.pi\/channel-sessions\/feishu-[0-9a-f]{24}\.jsonl$/),
+        '-e',
+        'npm:@example/pi-thing',
+        '-e',
+        './local-extension.ts',
+        '来自即时通讯的用户消息：\nping',
+      ],
+      expect.objectContaining({ cwd: '/workspace' }),
+    );
+  });
+
   it('cleans Feishu temporary image attachments after the prompt finishes', async () => {
     const { directory: attachmentDir, path: imagePath } = createTemporaryImage();
     mockSpawn.mockReturnValue(createChild('pong'));

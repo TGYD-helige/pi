@@ -68,6 +68,29 @@ The `${...}` placeholders below assume this section is stored in user or agent s
 }
 ```
 
+### Bridge extensions
+
+The bridge answers each incoming message from a child Pi process started with
+`--offline --no-extensions`, so installed extensions never load implicitly (the
+channel extension itself included, which keeps a child from opening a second
+Stream connection). List the extension sources a child session may load in
+`bridge.extensions`; every entry is passed as a repeatable `-e <source>`, using
+the same path / npm / git sources `pi --extension` accepts:
+
+```json
+{
+  "pi-channels": {
+    "bridge": {
+      "enabled": true,
+      "extensions": ["npm:@example/pi-memory", "./local-extension.ts"]
+    }
+  }
+}
+```
+
+Blank, duplicate and flag-like entries are ignored. Omit the key to keep child
+sessions free of extensions.
+
 ### Feishu modes
 
 WebSocket is the default and recommended mode because it does not require a public callback URL:

@@ -38,6 +38,7 @@ const DEFAULTS: Required<BridgeConfig> = {
   persistSessions: true,
   apiBase: '',
   env: {},
+  extensions: [],
 };
 
 let idCounter = 0;
@@ -236,6 +237,7 @@ export class ChatBridge {
         piBin: this.config.piBin,
         signal: ac.signal,
         env: this.config.env,
+        extensions: this.config.extensions,
       });
     } finally {
       await cleanupBridgeAttachments(queued.message.attachments);
@@ -462,6 +464,7 @@ function runPrompt(options: {
   provider: string | null;
   piBin: string;
   env?: Record<string, string>;
+  extensions?: string[];
   signal?: AbortSignal;
 }): Promise<BridgeRunResult> {
   return new Promise((resolve) => {
@@ -475,6 +478,11 @@ function runPrompt(options: {
     const provider = options.provider ?? resolveDefaultBridgeProvider(model);
     if (shouldAttachBridgeProvider(provider)) {
       args.push('-e', resolveBridgeProviderExtensionPath());
+    }
+    // The child always runs with `--no-extensions`; the allowlist only adds back
+    // the extension sources an operator named explicitly.
+    for (const source of normalizeExtensionSources(options.extensions)) {
+      args.push('-e', source);
     }
     if (provider) args.push('--provider', provider);
     if (model) args.push('--model', model);
@@ -504,6 +512,7 @@ function runPrompt(options: {
         provider,
         model,
         sessionFile: options.sessionFile,
+        extensions: normalizeExtensionSources(options.extensions),
         hasAnthropicBaseUrl: Boolean(process.env.ANTHROPIC_BASE_URL),
         hasAnthropicApiKey: Boolean(process.env.ANTHROPIC_API_KEY),
         providerExtension: shouldAttachBridgeProvider(provider)
@@ -656,4 +665,17 @@ function resolvePiCommand(
 function trimToNull(value: string | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
+}
+
+/** Bridge extension allowlist: trimmed, de-duplicated, never a CLI flag. */
+function normalizeExtensionSources(values: readonly string[] | undefined): string[] {
+  const sources: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values ?? []) {
+    const source = trimToNull(typeof value === 'string' ? value : undefined);
+    if (!source || source.startsWith('-') || seen.has(source)) continue;
+    seen.add(source);
+    sources.push(source);
+  }
+  return sources;
 }
