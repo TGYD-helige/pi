@@ -46,6 +46,12 @@ function createPendingChild() {
   return child;
 }
 
+function createTemporaryDirectory(prefix: string): string {
+  const directory = mkdtempSync(join(tmpdir(), prefix));
+  temporaryDirectories.add(directory);
+  return directory;
+}
+
 function createTemporaryImage(): { directory: string; path: string } {
   const directory = mkdtempSync(join(tmpdir(), 'pi-channels-feishu-image-'));
   const path = join(directory, 'image');
@@ -198,6 +204,61 @@ describe('ChatBridge', () => {
         'npm:@example/pi-thing',
         '-e',
         './local-extension.ts',
+        '来自即时通讯的用户消息：\nping',
+      ],
+      expect.objectContaining({ cwd: '/workspace' }),
+    );
+  });
+
+  it('loads installed npm: and git: sources instead of letting the offline child skip them', async () => {
+    const configDir = createTemporaryDirectory('pi-channels-config-');
+    mkdirSync(join(configDir, 'npm', 'node_modules', '@example', 'pi-thing'), { recursive: true });
+    mkdirSync(join(configDir, 'git', 'github.com', 'example', 'pi-git'), { recursive: true });
+    vi.stubEnv('PI_CODING_AGENT_DIR', configDir);
+    mockSpawn.mockReturnValue(createChild('pong'));
+    const registry = {
+      getAdapter: vi.fn(() => ({ sendTyping: vi.fn(() => Promise.resolve()) })),
+      send: vi.fn(() => Promise.resolve({ ok: true })),
+    };
+    const bridge = new ChatBridge(
+      {
+        enabled: true,
+        extensions: [
+          'npm:@example/pi-thing@1.2.3',
+          'git:github.com/example/pi-git#main',
+          'npm:@example/pi-missing',
+          'git:github.com/example/pi-missing',
+        ],
+      },
+      '/workspace',
+      registry as never,
+    );
+    bridge.start();
+
+    await bridge.handleMessage({
+      adapter: 'feishu',
+      sender: 'oc_chat',
+      text: 'ping',
+      metadata: { messageId: 'om_1', threadId: 'omt_1' },
+    });
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      trustedRuntime,
+      [
+        trustedCli,
+        '-p',
+        '--offline',
+        '--no-extensions',
+        '--session',
+        expect.stringMatching(/^\/workspace\/\.pi\/channel-sessions\/feishu-[0-9a-f]{24}\.jsonl$/),
+        '-e',
+        join(configDir, 'npm', 'node_modules', '@example', 'pi-thing'),
+        '-e',
+        join(configDir, 'git', 'github.com', 'example', 'pi-git'),
+        '-e',
+        'npm:@example/pi-missing',
+        '-e',
+        'git:github.com/example/pi-missing',
         '来自即时通讯的用户消息：\nping',
       ],
       expect.objectContaining({ cwd: '/workspace' }),

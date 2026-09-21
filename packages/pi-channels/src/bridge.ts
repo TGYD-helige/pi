@@ -5,7 +5,12 @@ import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getPackageDir } from '@earendil-works/pi-coding-agent';
+import { resolveConfigDir } from '@amaster.ai/pi-shared/settings';
+import {
+  DefaultPackageManager,
+  getPackageDir,
+  SettingsManager,
+} from '@earendil-works/pi-coding-agent';
 import type { ChannelRegistry } from './registry.js';
 import type { BridgeConfig, IncomingAttachment, IncomingMessage } from './types.js';
 
@@ -482,7 +487,7 @@ function runPrompt(options: {
     // The child always runs with `--no-extensions`; the allowlist only adds back
     // the extension sources an operator named explicitly.
     for (const source of normalizeExtensionSources(options.extensions)) {
-      args.push('-e', source);
+      args.push('-e', resolveInstalledExtensionSource(source));
     }
     if (provider) args.push('--provider', provider);
     if (model) args.push('--model', model);
@@ -665,6 +670,32 @@ function resolvePiCommand(
 function trimToNull(value: string | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
+}
+
+/**
+ * Map `npm:`/`git:` sources onto the user-scope install so the offline child can load them.
+ * The child runs with `--offline`, and Pi resolves those sources into a temporary install dir;
+ * when that dir is missing, offline mode skips the source without an error.
+ * Sources that are not installed stay untouched so Pi still reports them normally.
+ * Parsing and install paths come from Pi's own package manager so they stay in sync.
+ */
+function resolveInstalledExtensionSource(source: string): string {
+  if (!source.startsWith('npm:') && !source.startsWith('git:')) return source;
+  const spec = source.slice(source.indexOf(':') + 1).trim();
+  if (!spec) return source;
+  try {
+    const packageManager = new DefaultPackageManager({
+      cwd: process.cwd(),
+      agentDir: resolveConfigDir(),
+      settingsManager: SettingsManager.inMemory(),
+    });
+    return packageManager.getInstalledPath(source, 'user') ?? source;
+  } catch (error) {
+    // Keep the raw source so Pi reports the problem instead of dropping the entry.
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[pi-channels] failed to resolve extension source ${source}: ${message}`);
+    return source;
+  }
 }
 
 /** Bridge extension allowlist: trimmed, de-duplicated, never a CLI flag. */
