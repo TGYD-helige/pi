@@ -72,6 +72,10 @@ test('runs model-backed computer-use E2E on Linux, macOS, and Windows', async ()
   assert.match(matrixJob, /RUNNER_TEMP="\$\{RUNNER_TEMP\/\/\\\\\/\/\}"/);
   assert.match(matrixJob, /matrix\.allow_tool_error.*!= "true"/);
   assert.match(matrixJob, /Run extension prompt \(Stage C\)/);
+  // --tools is conditional so entries without an allowlist get the full surface.
+  assert.match(matrixJob, /if \[ -n '\$\{\{ matrix\.tools \}\}' \]/);
+  // bash 3.2 (macOS runner) rejects empty-array expansion under set -u.
+  assert.match(matrixJob, /\$\{tools_args\[@\]\+"\$\{tools_args\[@\]\}"\}/);
 });
 
 test('runs video composition E2E on Linux, macOS, and Windows', async () => {
