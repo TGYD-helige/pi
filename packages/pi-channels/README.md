@@ -88,8 +88,10 @@ the same path / npm / git sources `pi --extension` accepts:
 }
 ```
 
-Blank, duplicate and flag-like entries are ignored. Omit the key to keep child
-sessions free of extensions.
+Blank, duplicate and flag-like entries are ignored. Because the child runs
+offline, `npm:` / `git:` entries are loaded from the user-scope install instead
+of being fetched — install the package first (`pi install npm:@example/pi-memory`),
+or the entry is skipped. Omit the key to keep child sessions free of extensions.
 
 ### Feishu modes
 
