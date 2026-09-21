@@ -6,10 +6,10 @@ import { pathToFileURL } from 'node:url';
 
 const computerUseE2E = {
   extension: 'pi-computer-use',
-  // No tools allowlist: the deferred-group narrowing itself keeps
-  // health_report/check_permissions invisible until the model activates the
-  // diagnostics group via computer_use_tools, so a passing assertion proves
-  // the activation loop under a realistic full tool surface.
+  // health_report lives in the deferred diagnostics group, so the run must
+  // prove the activation loop: the model activates the group via
+  // computer_use_tools, which makes health_report callable on the next turn.
+  tools: 'computer_use_tools,computer_use_health_report',
   prompt:
     'Step 1 — call computer_use_tools with group=diagnostics to activate the diagnostics tool group. Step 2 — call computer_use_health_report exactly once with include=[binary_version, platform_supported, session_active]. Report the schema version, platform, driver version, and overall status.',
   assert_pattern: '(schema_version|driver_version|overall)',
@@ -66,6 +66,7 @@ export const fullMatrix = [
   {
     ...computerUseE2E,
     scenario: 'macos',
+    tools: 'computer_use_tools,computer_use_check_permissions',
     prompt:
       'Step 1 — call computer_use_tools with group=diagnostics to activate the diagnostics tool group. Step 2 — call computer_use_check_permissions exactly once with prompt=false. Report the Accessibility and Screen Recording statuses.',
     assert_pattern: 'permissions_pending',
