@@ -907,13 +907,23 @@ jobs:
               -p "$EXTENSION_PROMPT" 2>&1)"
             rc=$?
           else
+            # --tools is optional: entries that omit matrix.tools run with the
+            # full tool surface. Deferred tool groups still force their
+            # activation path — a deferred tool stays invisible until the
+            # model activates its group, regardless of any allowlist.
+            # ${arr[@]+...} form: bash 3.2 (macOS runner /bin/bash) errors on
+            # expanding an empty array under set -u.
+            tools_args=()
+            if [ -n '${{ matrix.tools }}' ]; then
+              tools_args+=(--tools '${{ matrix.tools }}')
+            fi
             output="$(pi \
               --provider deepseek-integration \
               --model "$PI_INTEGRATION_MODEL" \
               --thinking high \
               --no-session \
               --no-context-files \
-              --tools '${{ matrix.tools }}' \
+              ${tools_args[@]+"${tools_args[@]}"} \
               --mode json \
               -p "$EXTENSION_PROMPT" 2>&1)"
             rc=$?

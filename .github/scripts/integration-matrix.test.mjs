@@ -74,6 +74,21 @@ test('runs model-backed computer-use E2E on Linux, macOS, and Windows', async ()
   assert.match(matrixJob, /Run extension prompt \(Stage C\)/);
 });
 
+test('runs browser-use E2E on the full surface with a deferred-group activation step', async () => {
+  const basic = fullMatrix.find(
+    ({ extension, scenario }) => extension === 'pi-browser-use' && !scenario,
+  );
+  assert.equal(basic.tools, undefined);
+  assert.match(basic.prompt, /browser_tools with group=network/);
+  assert.equal(basic.assert_tool, 'browser_list_network_requests');
+  assert.equal(basic.assert_tool_pattern, 'example\\.com');
+
+  const screenshot = fullMatrix.find(
+    ({ extension, scenario }) => extension === 'pi-browser-use' && scenario === 'screenshot',
+  );
+  assert.equal(screenshot.tools, undefined);
+});
+
 test('runs video composition E2E on Linux, macOS, and Windows', async () => {
   const workflow = await readFile(new URL('../workflows/integration.yml', import.meta.url), 'utf8');
   const setup = await readFile(new URL('../actions/setup-pi-build/action.yml', import.meta.url), 'utf8');
