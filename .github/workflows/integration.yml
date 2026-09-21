@@ -907,10 +907,9 @@ jobs:
               -p "$EXTENSION_PROMPT" 2>&1)"
             rc=$?
           else
-            # --tools is optional: entries that omit matrix.tools run with the
-            # full tool surface. Deferred tool groups still force their
-            # activation path — a deferred tool stays invisible until the
-            # model activates its group, regardless of any allowlist.
+            # --tools is optional: entries that omit matrix.tools must run with
+            # the full tool surface. Passing an empty value would parse as an
+            # empty allowlist and hide every tool, including built-ins.
             # ${arr[@]+...} form: bash 3.2 (macOS runner /bin/bash) errors on
             # expanding an empty array under set -u.
             tools_args=()
