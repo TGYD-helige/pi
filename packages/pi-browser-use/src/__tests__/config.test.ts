@@ -21,6 +21,11 @@ describe('resolveConfig', () => {
     expect(config.experimentalMemory).toBe(false);
     expect(config.usageStatistics).toBe(false);
     expect(config.performanceCrux).toBe(false);
+    expect(config.toolProfile).toBe('core');
+  });
+
+  test('preserves the full tool profile', () => {
+    expect(resolveConfig({ toolProfile: 'full' }).toolProfile).toBe('full');
   });
 
   test('returns defaults when called with empty object', () => {
