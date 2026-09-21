@@ -56,7 +56,11 @@ test('runs model-backed computer-use E2E on Linux, macOS, and Windows', async ()
 
   assert.deepEqual(scenarios, expectedComputerUseScenarios);
   const macos = fullMatrix.find(({ extension, scenario }) => extension === 'pi-computer-use' && scenario === 'macos');
-  assert.equal(macos.tools, 'computer_use_tools,computer_use_check_permissions');
+  // No tools allowlist: deferred-group narrowing keeps the target invisible
+  // until the model activates diagnostics via computer_use_tools.
+  assert.equal(macos.tools, undefined);
+  assert.equal(fullMatrix.find(({ extension, scenario }) => extension === 'pi-computer-use' && scenario === 'linux').tools, undefined);
+  assert.match(macos.prompt, /computer_use_tools with group=diagnostics/);
   assert.match(macos.prompt, /prompt=false/);
   assert.equal(macos.assert_tool, 'computer_use_check_permissions');
   assert.equal(macos.assert_tool_count, 1);
@@ -72,6 +76,10 @@ test('runs model-backed computer-use E2E on Linux, macOS, and Windows', async ()
   assert.match(matrixJob, /RUNNER_TEMP="\$\{RUNNER_TEMP\/\/\\\\\/\/\}"/);
   assert.match(matrixJob, /matrix\.allow_tool_error.*!= "true"/);
   assert.match(matrixJob, /Run extension prompt \(Stage C\)/);
+  // --tools is conditional so entries without an allowlist get the full surface.
+  assert.match(matrixJob, /if \[ -n '\$\{\{ matrix\.tools \}\}' \]/);
+  // bash 3.2 (macOS runner) rejects empty-array expansion under set -u.
+  assert.match(matrixJob, /\$\{tools_args\[@\]\+"\$\{tools_args\[@\]\}"\}/);
 });
 
 test('runs browser-use E2E on the full surface with a deferred-group activation step', async () => {
