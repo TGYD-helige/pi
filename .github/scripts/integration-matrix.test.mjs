@@ -56,7 +56,11 @@ test('runs model-backed computer-use E2E on Linux, macOS, and Windows', async ()
 
   assert.deepEqual(scenarios, expectedComputerUseScenarios);
   const macos = fullMatrix.find(({ extension, scenario }) => extension === 'pi-computer-use' && scenario === 'macos');
-  assert.equal(macos.tools, 'computer_use_tools,computer_use_check_permissions');
+  // No tools allowlist: deferred-group narrowing keeps the target invisible
+  // until the model activates diagnostics via computer_use_tools.
+  assert.equal(macos.tools, undefined);
+  assert.equal(fullMatrix.find(({ extension, scenario }) => extension === 'pi-computer-use' && scenario === 'linux').tools, undefined);
+  assert.match(macos.prompt, /computer_use_tools with group=diagnostics/);
   assert.match(macos.prompt, /prompt=false/);
   assert.equal(macos.assert_tool, 'computer_use_check_permissions');
   assert.equal(macos.assert_tool_count, 1);
@@ -76,6 +80,21 @@ test('runs model-backed computer-use E2E on Linux, macOS, and Windows', async ()
   assert.match(matrixJob, /if \[ -n '\$\{\{ matrix\.tools \}\}' \]/);
   // bash 3.2 (macOS runner) rejects empty-array expansion under set -u.
   assert.match(matrixJob, /\$\{tools_args\[@\]\+"\$\{tools_args\[@\]\}"\}/);
+});
+
+test('runs browser-use E2E on the full surface with a deferred-group activation step', async () => {
+  const basic = fullMatrix.find(
+    ({ extension, scenario }) => extension === 'pi-browser-use' && !scenario,
+  );
+  assert.equal(basic.tools, undefined);
+  assert.match(basic.prompt, /browser_tools with group=network/);
+  assert.equal(basic.assert_tool, 'browser_list_network_requests');
+  assert.equal(basic.assert_tool_pattern, 'example\\.com');
+
+  const screenshot = fullMatrix.find(
+    ({ extension, scenario }) => extension === 'pi-browser-use' && scenario === 'screenshot',
+  );
+  assert.equal(screenshot.tools, undefined);
 });
 
 test('runs video composition E2E on Linux, macOS, and Windows', async () => {

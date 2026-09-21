@@ -111,6 +111,16 @@ npx @amaster.ai/pi-browser-use --config path/to/config.json
 | `categoryEmulation` | `boolean` | `true` | Enable emulation tools |
 | `categoryExtensions` | `boolean` | `false` | Enable extension tools |
 
+### Tool Profile
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `toolProfile` | `"core" \| "full"` | `"core"` | `"core"` activates only the everyday toolset at session start; `"full"` activates every discovered tool. Ignored in `slim` mode |
+
+With the default `core` profile, only the core loop is visible to the model: `list_pages`, `new_page`, `navigate_page`, `select_page`, `close_page`, `wait_for`, `take_snapshot`, `take_screenshot`, `click`, `fill`, `fill_form`, `press_key`, `handle_dialog`, `evaluate_script`, and `list_console_messages`. Every other discovered tool stays registered but inactive, grouped by its upstream chrome-devtools-mcp category (`input`, `debugging`, `network`, `emulation`, `memory`, `performance`, ...). The model activates a group itself with the `browser_tools` tool (no argument lists the groups); users can do the same with `/browser-tools <group>`. Activated groups stay active until the end of the session.
+
+Tools that used to be filtered out (`lighthouse_audit`, performance traces, screencast, extension management) are now registered and deferred instead — enabling their categories via the flags above makes them activatable through their group.
+
 ### Experimental
 
 | Option | Type | Default | Description |
@@ -188,7 +198,7 @@ Key tools receive additional usage hints in their descriptions:
 
 ## Excluded Tools
 
-- `lighthouse_audit` — Filtered out at the proxy level
+None. Previously excluded upstream tools (`lighthouse_audit`, performance traces, screencast, extension management) are registered but inactive under the default `core` tool profile — see [Tool Profile](#tool-profile).
 
 ## License
 

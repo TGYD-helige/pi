@@ -6,10 +6,10 @@ import { pathToFileURL } from 'node:url';
 
 const computerUseE2E = {
   extension: 'pi-computer-use',
-  // health_report lives in the deferred diagnostics group, so the run must
-  // prove the activation loop: the model activates the group via
-  // computer_use_tools, which makes health_report callable on the next turn.
-  tools: 'computer_use_tools,computer_use_health_report',
+  // No tools allowlist: the deferred-group narrowing itself keeps
+  // health_report/check_permissions invisible until the model activates the
+  // diagnostics group via computer_use_tools, so a passing assertion proves
+  // the activation loop under a realistic full tool surface.
   prompt:
     'Step 1 — call computer_use_tools with group=diagnostics to activate the diagnostics tool group. Step 2 — call computer_use_health_report exactly once with include=[binary_version, platform_supported, session_active]. Report the schema version, platform, driver version, and overall status.',
   assert_pattern: '(schema_version|driver_version|overall)',
@@ -66,7 +66,6 @@ export const fullMatrix = [
   {
     ...computerUseE2E,
     scenario: 'macos',
-    tools: 'computer_use_tools,computer_use_check_permissions',
     prompt:
       'Step 1 — call computer_use_tools with group=diagnostics to activate the diagnostics tool group. Step 2 — call computer_use_check_permissions exactly once with prompt=false. Report the Accessibility and Screen Recording statuses.',
     assert_pattern: 'permissions_pending',
@@ -178,15 +177,18 @@ export const fullMatrix = [
   },
   {
     extension: 'pi-browser-use',
-    tools: 'browser_list_pages,browser_navigate_page,browser_take_snapshot',
-    prompt: 'Use browser_list_pages first to get the current pageId. Pass that pageId to browser_navigate_page to go to https://example.com, then pass it to browser_take_snapshot and tell me the page title.',
+    // No tools allowlist: the run exercises the real surface — core tools for
+    // the page loop, then a deferred-group activation (network) via
+    // browser_tools before browser_list_network_requests becomes callable.
+    prompt:
+      'Step 1 — use browser_list_pages to get the current pageId, pass it to browser_navigate_page to go to https://example.com, then pass it to browser_take_snapshot and note the page title. Step 2 — call browser_tools with group=network to activate the network tool group, then call browser_list_network_requests with the same pageId. Finally report the page title and the requested URLs.',
     assert_pattern: 'Example Domain',
-    assert_tool: 'browser_take_snapshot',
+    assert_tool: 'browser_list_network_requests',
+    assert_tool_pattern: 'example\\.com',
   },
   {
     extension: 'pi-browser-use',
     scenario: 'screenshot',
-    tools: 'browser_list_pages,browser_evaluate_script,browser_analyze_screenshot',
     prompt: 'Use browser_list_pages first to get the current pageId. Pass that pageId to browser_evaluate_script with this function parameter exactly: () => { document.title = "Screenshot fixture"; document.documentElement.style.cssText = "height:100%;margin:0"; document.body.style.cssText = "height:100%;margin:0;display:grid;place-items:center;background:#1457d9;color:white;font-family:sans-serif"; const heading = document.createElement("h1"); heading.textContent = "VISUAL CHECK 7391"; heading.style.cssText = "font-size:64px;letter-spacing:.08em"; document.body.replaceChildren(heading); return document.title; }. Then pass the same pageId to browser_analyze_screenshot exactly once and ask it to report the exact large heading plus the dominant background color. Return its visual findings.',
     assert_pattern: '(VISUAL CHECK 7391.*(blue|#1457d9)|(blue|#1457d9).*VISUAL CHECK 7391)',
     assert_visual_analysis: true,

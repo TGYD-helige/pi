@@ -28,27 +28,13 @@ import {
   extractTextContent,
   postProcessToolResult,
 } from './tool-augment.js';
+import { buildGroups, CORE_TOOLS, GROUP_SUMMARIES, loadCategoryMap } from './tool-groups.js';
 
 export type { BrowserSessionMode, BrowserUseConfig, VisionModelConfig };
 export { configToArgs, resolveConfig };
 
 // All upstream tools are re-exported with this prefix to avoid name collisions with other extensions.
 const TOOL_PREFIX = 'browser_';
-
-// These upstream tools are noisy or slow; skip them during registration.
-const EXCLUDED_TOOLS = new Set([
-  'lighthouse_audit',
-  'performance_analyze_insight',
-  'performance_start_trace',
-  'performance_stop_trace',
-  'screencast_start',
-  'screencast_stop',
-  'install_extension',
-  'list_extensions',
-  'reload_extension',
-  'trigger_extension_action',
-  'uninstall_extension',
-]);
 
 const MCP_TIMEOUT_MS = 60_000;
 const MCP_HEALTH_TIMEOUT_MS = 5_000;
@@ -411,10 +397,140 @@ function toToolContent(
 export default function browserUseExtension(pi: ExtensionAPI): void {
   let config: BrowserUseConfig | undefined;
   let client: DevToolsClient | undefined;
+  const upstreamToolNames = new Set<string>();
+  let toolGroups = new Map<string, string[]>();
+
+  const TOOLS_META_TOOL = `${TOOL_PREFIX}tools`;
 
   async function ensureConnected(signal?: AbortSignal): Promise<void> {
     if (!client) throw new Error('browser-use: session not started');
     await client.ensureReady(signal);
+  }
+
+  function formatGroupList(): string {
+    const active = new Set(pi.getActiveTools());
+    const lines = ['Browser tool groups:'];
+    for (const [name, tools] of toolGroups) {
+      const activeCount = tools.filter((tool) => active.has(`${TOOL_PREFIX}${tool}`)).length;
+      const suffix =
+        activeCount === 0
+          ? 'inactive'
+          : activeCount === tools.length
+            ? 'active'
+            : `${activeCount}/${tools.length} active`;
+      lines.push(
+        `- ${name} (${tools.length} tools, ${suffix}): ${GROUP_SUMMARIES[name] ?? GROUP_SUMMARIES.other}`,
+      );
+    }
+    lines.push(`Activate a group with ${TOOLS_META_TOOL} group=<name> or /browser-tools <name>.`);
+    return lines.join('\n');
+  }
+
+  function activateGroup(group: string): { activated: string[]; alreadyActive: boolean } {
+    const wanted = (toolGroups.get(group) ?? []).map((tool) => `${TOOL_PREFIX}${tool}`);
+    const active = pi.getActiveTools();
+    const toAdd = wanted.filter((name) => !active.includes(name));
+    if (toAdd.length > 0) pi.setActiveTools([...active, ...toAdd]);
+    return { activated: wanted, alreadyActive: toAdd.length === 0 && wanted.length > 0 };
+  }
+
+  function applyToolProfile(): void {
+    if (config?.slim || config?.toolProfile !== 'core') return;
+    const core = new Set(CORE_TOOLS);
+    pi.setActiveTools(
+      pi
+        .getActiveTools()
+        .filter((name) => !upstreamToolNames.has(name) || core.has(name.slice(TOOL_PREFIX.length))),
+    );
+  }
+
+  function registerToolGroupSurface(): void {
+    pi.registerTool({
+      name: TOOLS_META_TOOL,
+      label: TOOLS_META_TOOL,
+      description:
+        'List and activate additional browser tool groups (derived from chrome-devtools-mcp categories: input, navigation, debugging, network, emulation, memory, performance, ...). Call without arguments to list groups and their activation status.',
+      parameters: Type.Object({
+        group: Type.Optional(
+          Type.String({ description: 'Tool group to activate. Omit to list available groups.' }),
+        ),
+      }),
+      promptSnippet:
+        'List or activate extra browser tool groups when the core tools are insufficient',
+      promptGuidelines: [
+        `Only the core browser tools are active by default. When a task needs network inspection, console details, emulation, heap snapshots, or performance tracing, call ${TOOLS_META_TOOL} with the matching group first — the group's tools become available on the next turn.`,
+      ],
+      async execute(_toolCallId: string, params: Record<string, unknown>) {
+        const group = typeof params.group === 'string' ? params.group : undefined;
+        if (!group) {
+          return {
+            content: [{ type: 'text' as const, text: formatGroupList() }],
+            details: undefined,
+          };
+        }
+        if (!toolGroups.has(group)) {
+          const available = [...toolGroups.keys()];
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text:
+                  available.length === 0
+                    ? 'No browser tool groups available — the browser bridge is not connected yet.'
+                    : `Unknown group "${group}". Available: ${available.join(', ')}`,
+              },
+            ],
+            details: undefined,
+            isError: true,
+          };
+        }
+        const { activated, alreadyActive } = activateGroup(group);
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `${alreadyActive ? 'Already active' : 'Activated'} group "${group}" (${activated.length} tools): ${activated.join(', ')}. These tools are available from the next turn.`,
+            },
+          ],
+          details: undefined,
+        };
+      },
+    });
+
+    pi.registerCommand('browser-tools', {
+      description: 'List or activate browser tool groups',
+      getArgumentCompletions: (argumentPrefix) => {
+        const prefix = argumentPrefix.trim().toLowerCase();
+        return [...toolGroups.keys()]
+          .filter((name) => name.startsWith(prefix))
+          .map((name) => ({
+            value: name,
+            label: name,
+            description: GROUP_SUMMARIES[name] ?? GROUP_SUMMARIES.other ?? '',
+          }));
+      },
+      async handler(args, ctx) {
+        const group = String(args ?? '')
+          .trim()
+          .toLowerCase();
+        if (!group) {
+          ctx.ui.notify(formatGroupList(), 'info');
+          return;
+        }
+        if (!toolGroups.has(group)) {
+          ctx.ui.notify(
+            `pi-browser-use: unknown group "${group}". Available: ${[...toolGroups.keys()].join(', ') || '(none — browser not connected)'}`,
+            'warning',
+          );
+          return;
+        }
+        const { activated, alreadyActive } = activateGroup(group);
+        ctx.ui.notify(
+          `pi-browser-use: ${alreadyActive ? 'already active' : 'activated'} "${group}" (${activated.length} tools).`,
+          'info',
+        );
+      },
+    });
   }
 
   async function registerUpstreamTools(): Promise<void> {
@@ -422,10 +538,9 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
     const upstreamTools = await client!.listAllTools();
 
     for (const tool of upstreamTools) {
-      if (EXCLUDED_TOOLS.has(tool.name)) continue;
-
       const prefixedName = `${TOOL_PREFIX}${tool.name}`;
       const originalName = tool.name;
+      upstreamToolNames.add(prefixedName);
       const description = augmentToolDescription(originalName, tool.description ?? '');
       const routingGuidance = pageRoutingGuidance(
         tool.inputSchema.required?.includes('pageId') ?? false,
@@ -570,6 +685,8 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
     });
   }
 
+  registerToolGroupSurface();
+
   pi.on('session_start', async (_event, ctx) => {
     config = resolveConfig(
       loadConfigFromFile({
@@ -579,10 +696,17 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
     );
     prepareBrowserProfile(config);
     client = new DevToolsClient(config);
+    upstreamToolNames.clear();
+    toolGroups = new Map();
     await registerUpstreamTools();
+    toolGroups = buildGroups(
+      [...upstreamToolNames].map((name) => name.slice(TOOL_PREFIX.length)),
+      await loadCategoryMap(),
+    );
     if (config.visionModel) {
       await registerVisionTool(config.visionModel);
     }
+    applyToolProfile();
   });
 
   pi.on('session_shutdown', async () => {

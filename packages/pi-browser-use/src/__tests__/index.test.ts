@@ -107,14 +107,23 @@ interface RegisteredTool {
 const registeredTools = new Map<string, RegisteredTool>();
 const sessionStartHandlers: Array<(...args: any[]) => Promise<void>> = [];
 const sessionShutdownHandlers: Array<() => Promise<void>> = [];
+const activeTools: string[] = [];
 
 const mockPi = {
   registerTool: vi.fn((tool: RegisteredTool) => {
     registeredTools.set(tool.name, tool);
+    // Mirror the runtime: newly registered tools become active by default.
+    if (!activeTools.includes(tool.name)) activeTools.push(tool.name);
   }),
+  registerCommand: vi.fn(),
   on: vi.fn((event: string, handler: (...args: any[]) => Promise<void>) => {
     if (event === 'session_start') sessionStartHandlers.push(handler);
     if (event === 'session_shutdown') sessionShutdownHandlers.push(handler);
+  }),
+  getActiveTools: vi.fn(() => [...activeTools]),
+  setActiveTools: vi.fn((names: string[]) => {
+    activeTools.length = 0;
+    activeTools.push(...names);
   }),
 };
 
@@ -129,6 +138,8 @@ async function startExtension(config?: Record<string, unknown>) {
     );
   }
 
+  activeTools.length = 0;
+  activeTools.push('read', 'bash');
   browserUseExtension(mockPi as any);
 
   const fakeEvent = { type: 'session_start', reason: 'startup' };
@@ -153,6 +164,7 @@ describe('browserUseExtension', () => {
     sessionStartHandlers.length = 0;
     sessionShutdownHandlers.length = 0;
     mockPi.registerTool.mockClear();
+    mockPi.registerCommand.mockClear();
     mockPi.on.mockClear();
     mockConnect.mockClear();
     mockCallTool.mockClear();
@@ -227,11 +239,92 @@ describe('browserUseExtension', () => {
       );
     });
 
-    test('excludes lighthouse_audit', async () => {
+    test('registers lighthouse_audit but defers it into its tool group', async () => {
       await startExtension();
 
-      const names = [...registeredTools.keys()];
-      expect(names).not.toContain('browser_lighthouse_audit');
+      expect(registeredTools.has('browser_lighthouse_audit')).toBe(true);
+      expect(mockPi.getActiveTools()).not.toContain('browser_lighthouse_audit');
+    });
+
+    describe('deferred tool groups', () => {
+      it('activates only the core profile by default', async () => {
+        await startExtension();
+
+        const active = mockPi.getActiveTools();
+        expect(active).toContain('browser_click');
+        expect(active).toContain('browser_navigate_page');
+        expect(active).toContain('browser_take_snapshot');
+        expect(active).toContain('browser_tools');
+        expect(active).not.toContain('browser_lighthouse_audit');
+        expect(active).toContain('read');
+        expect(active).toContain('bash');
+      });
+
+      it('keeps every upstream tool active with toolProfile full', async () => {
+        await startExtension({ toolProfile: 'full' });
+
+        expect(mockPi.getActiveTools()).toContain('browser_lighthouse_audit');
+      });
+
+      it('keeps every slim-mode tool active regardless of the profile', async () => {
+        mockListAllTools.mockReturnValueOnce(
+          Promise.resolve([
+            { name: 'navigate', description: 'Navigate.', inputSchema: { type: 'object' } },
+            { name: 'evaluate', description: 'Evaluate.', inputSchema: { type: 'object' } },
+          ]) as any,
+        );
+        await startExtension({ slim: true });
+
+        const active = mockPi.getActiveTools();
+        expect(active).toContain('browser_navigate');
+        expect(active).toContain('browser_evaluate');
+      });
+
+      it('lists groups without activating when no group is given', async () => {
+        await startExtension();
+
+        const result = (await registeredTools
+          .get('browser_tools')!
+          .execute('id', {}, undefined, undefined, {})) as any;
+
+        expect(result.isError).not.toBe(true);
+        expect(result.content[0].text).toContain('debugging');
+        expect(mockPi.getActiveTools()).not.toContain('browser_lighthouse_audit');
+      });
+
+      it('activates a group for the following turns', async () => {
+        await startExtension();
+
+        const result = (await registeredTools
+          .get('browser_tools')!
+          .execute('id', { group: 'debugging' }, undefined, undefined, {})) as any;
+
+        expect(result.isError).not.toBe(true);
+        expect(result.content[0].text).toContain('browser_lighthouse_audit');
+        expect(mockPi.getActiveTools()).toContain('browser_lighthouse_audit');
+      });
+
+      it('errors on an unknown group', async () => {
+        await startExtension();
+
+        const result = (await registeredTools
+          .get('browser_tools')!
+          .execute('id', { group: 'nope' }, undefined, undefined, {})) as any;
+
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toContain('Unknown group');
+      });
+
+      it('activates a group via the slash command', async () => {
+        await startExtension();
+        const command = mockPi.registerCommand.mock.calls.find((c) => c[0] === 'browser-tools');
+        const notify = vi.fn();
+
+        await (command![1] as any).handler('debugging', { ui: { notify } });
+
+        expect(mockPi.getActiveTools()).toContain('browser_lighthouse_audit');
+        expect(notify).toHaveBeenCalledWith(expect.stringContaining('debugging'), 'info');
+      });
     });
 
     test('augments tool descriptions with usage hints', async () => {

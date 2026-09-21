@@ -44,6 +44,14 @@ export interface BrowserUseConfig {
 
   slim?: boolean;
   extraArgs?: string[];
+
+  /**
+   * Which upstream tools are active at session start: 'core' activates only
+   * the everyday toolset (extra groups via the browser_tools tool or the
+   * /browser-tools command), 'full' activates every discovered tool.
+   * Ignored in slim mode. Default: 'core'
+   */
+  toolProfile?: 'core' | 'full';
 }
 
 export const DEFAULT_PROFILE_DIR = join(homedir(), '.pi', 'browser-profile');
@@ -62,6 +70,7 @@ const DEFAULTS: Partial<BrowserUseConfig> = {
   performanceCrux: false,
   redactNetworkHeaders: true,
   acceptInsecureCerts: false,
+  toolProfile: 'core',
 };
 
 /** Merge user config over sane defaults. */
