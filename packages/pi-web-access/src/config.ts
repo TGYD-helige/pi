@@ -23,6 +23,7 @@ const DEFAULT_BASE_URL: Record<BuiltInProviderId, string> = {
   anthropic: 'https://api.anthropic.com/v1',
   dashscope: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
   unsplash: 'https://api.unsplash.com',
+  you: 'https://ydc-index.io',
 };
 
 const ENV_VARS: Partial<Record<BuiltInProviderId, string>> = {
@@ -41,6 +42,7 @@ const ENV_VARS: Partial<Record<BuiltInProviderId, string>> = {
   anthropic: 'ANTHROPIC_API_KEY',
   dashscope: 'DASHSCOPE_API_KEY',
   unsplash: 'UNSPLASH_ACCESS_KEY',
+  you: 'YDC_API_KEY',
 };
 
 const DEFAULT_MODEL: Partial<Record<BuiltInProviderId, string>> = {
@@ -116,6 +118,7 @@ const ALL_SEARCH_PROVIDER_IDS: BuiltInProviderId[] = [
   'perplexity',
   'deepseek',
   'dashscope',
+  'you',
 ];
 
 /**

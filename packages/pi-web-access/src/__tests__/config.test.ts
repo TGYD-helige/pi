@@ -40,6 +40,17 @@ describe('resolveProvider', () => {
     }
   });
 
+  it('resolves you with env var', () => {
+    process.env.YDC_API_KEY = 'test-you-key';
+    const result = resolveProvider('you', {});
+    expect(result).not.toHaveProperty('error');
+    if (!('error' in result)) {
+      expect(result.id).toBe('you');
+      expect(result.baseUrl).toBe('https://ydc-index.io');
+      expect(result.apiKey).toBe('test-you-key');
+    }
+  });
+
   it('resolves kimi with env var and default model', () => {
     process.env.MOONSHOT_API_KEY = 'test-kimi-key';
     const result = resolveProvider('kimi', {});

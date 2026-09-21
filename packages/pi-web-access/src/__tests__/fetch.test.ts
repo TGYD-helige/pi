@@ -216,6 +216,46 @@ describe('webFetch', () => {
     );
   });
 
+  it('fetches via you contents API when configured', async () => {
+    const settings: WebToolSettings = {
+      fetch: { provider: 'you' },
+      providers: { you: { apiKey: 'you-key' } },
+    };
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => [
+        { url: 'https://example.com', title: 'Example Page', markdown: '# Extracted content' },
+      ],
+    });
+
+    const result = await webFetch({ url: 'https://example.com' }, settings, publicLookup);
+
+    expect(result.title).toBe('Example Page');
+    expect(result.content).toBe('# Extracted content');
+
+    const [url, opts] = mockFetch.mock.calls[0]!;
+    expect(url).toBe('https://ydc-index.io/v1/contents');
+    expect(opts.headers['X-API-Key']).toBe('you-key');
+    const body = JSON.parse(opts.body);
+    expect(body.urls).toEqual(['https://example.com']);
+    expect(body.formats).toEqual(['markdown']);
+  });
+
+  it('throws when you contents returns null markdown', async () => {
+    const settings: WebToolSettings = {
+      fetch: { provider: 'you' },
+      providers: { you: { apiKey: 'you-key' } },
+    };
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => [{ url: 'https://example.com', title: 'T', markdown: null }],
+    });
+
+    await expect(webFetch({ url: 'https://example.com' }, settings, publicLookup)).rejects.toThrow(
+      'You.com failed to extract',
+    );
+  });
+
   it('uses custom baseUrl from settings', async () => {
     const settings: WebToolSettings = {
       fetch: { provider: 'zai' },
