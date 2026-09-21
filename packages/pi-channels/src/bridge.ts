@@ -6,7 +6,11 @@ import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveConfigDir } from '@amaster.ai/pi-shared/settings';
-import { getPackageDir } from '@earendil-works/pi-coding-agent';
+import {
+  DefaultPackageManager,
+  getPackageDir,
+  SettingsManager,
+} from '@earendil-works/pi-coding-agent';
 import type { ChannelRegistry } from './registry.js';
 import type { BridgeConfig, IncomingAttachment, IncomingMessage } from './types.js';
 
@@ -673,27 +677,25 @@ function trimToNull(value: string | undefined): string | null {
  * The child runs with `--offline`, and Pi resolves those sources into a temporary install dir;
  * when that dir is missing, offline mode skips the source without an error.
  * Sources that are not installed stay untouched so Pi still reports them normally.
+ * Parsing and install paths come from Pi's own package manager so they stay in sync.
  */
 function resolveInstalledExtensionSource(source: string): string {
-  const configDir = resolveConfigDir();
-  if (source.startsWith('npm:')) {
-    const spec = source.slice('npm:'.length).trim();
-    const name = spec.match(/^(@[^/]+\/[^@]+|[^@]+)(?:@.+)?$/)?.[1];
-    if (!name) return source;
-    const installed = join(configDir, 'npm', 'node_modules', name);
-    return existsSync(installed) ? installed : source;
+  if (!source.startsWith('npm:') && !source.startsWith('git:')) return source;
+  const spec = source.slice(source.indexOf(':') + 1).trim();
+  if (!spec) return source;
+  try {
+    const packageManager = new DefaultPackageManager({
+      cwd: process.cwd(),
+      agentDir: resolveConfigDir(),
+      settingsManager: SettingsManager.inMemory(),
+    });
+    return packageManager.getInstalledPath(source, 'user') ?? source;
+  } catch (error) {
+    // Keep the raw source so Pi reports the problem instead of dropping the entry.
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[pi-channels] failed to resolve extension source ${source}: ${message}`);
+    return source;
   }
-  if (source.startsWith('git:')) {
-    const spec = source
-      .slice('git:'.length)
-      .trim()
-      .replace(/[#?].*$/, '');
-    const slash = spec.indexOf('/');
-    if (slash <= 0 || slash === spec.length - 1) return source;
-    const installed = join(configDir, 'git', spec.slice(0, slash), spec.slice(slash + 1));
-    return existsSync(installed) ? installed : source;
-  }
-  return source;
 }
 
 /** Bridge extension allowlist: trimmed, de-duplicated, never a CLI flag. */
