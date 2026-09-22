@@ -156,6 +156,8 @@ export class DevToolsClient {
 
       const transport = new StdioClientTransport({
         command: process.env.PI_BROWSER_USE_NODE?.trim() || process.execPath,
+        // SDK default env strips display/proxy vars a headful Chrome needs.
+        env: process.env as Record<string, string>,
         args: [resolveChromeDevToolsMcpEntrypoint(), ...args],
         stderr: 'pipe',
       });

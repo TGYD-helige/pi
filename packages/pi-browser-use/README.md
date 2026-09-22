@@ -29,6 +29,8 @@ Requires Node.js `^20.19.0 || ^22.12.0 || >=23`, Chrome (stable or newer), and `
 
 Hosts where `process.execPath` is not a directly executable Node runtime can set `PI_BROWSER_USE_NODE` to the Node command used for the MCP subprocess.
 
+The MCP subprocess inherits the extension's full process environment rather than the MCP SDK's minimal default, so a headful Chrome can attach to the active Linux graphical session (`DISPLAY`, `XAUTHORITY`, ...) and honors settings carried by environment, such as proxy variables.
+
 ## Usage
 
 ### As pi-coding-agent Extension (Recommended)

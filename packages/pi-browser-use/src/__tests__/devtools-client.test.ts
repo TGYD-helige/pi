@@ -4,10 +4,12 @@ import { beforeEach, describe, expect, it, test, vi } from 'vitest';
 const mockClientConnect = vi.fn(() => Promise.resolve());
 const mockClientClose = vi.fn(() => Promise.resolve());
 const mockClientPing = vi.fn(() => Promise.resolve({}));
+type TransportOpts = { command?: string; args?: string[]; env?: Record<string, string> };
+
 const mockTransports: Array<{
   onclose?: () => void;
   onerror?: (error: Error) => void;
-  opts?: { command?: string; args?: string[] };
+  opts?: TransportOpts;
   stderr?: PassThrough;
 }> = [];
 let _listToolsCalls = 0;
@@ -43,7 +45,7 @@ vi.mock('@modelcontextprotocol/sdk/client/stdio.js', () => ({
     onclose?: () => void;
     onerror?: (error: Error) => void;
     stderr = new PassThrough();
-    constructor(public opts: { command?: string; args?: string[] }) {
+    constructor(public opts: TransportOpts) {
       mockTransports.push(this);
     }
   },
@@ -60,6 +62,7 @@ describe('DevToolsClient', () => {
     mockCallTool.mockClear();
     _listToolsCalls = 0;
     mockTransports.length = 0;
+    vi.unstubAllEnvs();
   });
 
   describe('connect()', () => {
@@ -130,6 +133,17 @@ describe('DevToolsClient', () => {
           process.env.PI_BROWSER_USE_NODE = originalNode;
         }
       }
+    });
+
+    it('passes the host environment through to the MCP subprocess', async () => {
+      vi.stubEnv('DISPLAY', ':0');
+
+      const client = new DevToolsClient();
+      await client.connect();
+
+      const env = mockTransports[0]!.opts!.env ?? {};
+      expect(env.DISPLAY).toBe(':0');
+      expect(env.PATH).toBe(process.env.PATH);
     });
 
     it('preserves an allowlisted MCP subprocess error code when startup fails', async () => {
