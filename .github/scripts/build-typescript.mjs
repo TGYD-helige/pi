@@ -11,4 +11,7 @@ const result = spawnSync(process.execPath, [
 ], { stdio: 'inherit' });
 
 if (result.error) throw result.error;
-process.exit(result.status ?? 1);
+if (result.status !== 0) process.exit(result.status ?? 1);
+if (!process.argv.includes('--clean')) {
+  await import('../../packages/pi-browser-use/scripts/prepare-tool-categories.mjs');
+}

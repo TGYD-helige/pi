@@ -9,6 +9,7 @@
  * tool names; the `browser_` prefix is applied where tools are registered.
  */
 
+import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -58,6 +59,23 @@ const require = createRequire(import.meta.url);
 export async function loadCategoryMap(): Promise<CategoryMap> {
   try {
     const packageJsonPath = require.resolve('chrome-devtools-mcp/package.json');
+    // Optional build output; a different installed upstream version uses live discovery.
+    try {
+      const snapshot = JSON.parse(
+        readFileSync(new URL('./tool-categories.json', import.meta.url), 'utf8'),
+      );
+      if (
+        snapshot.packageVersion === require(packageJsonPath).version &&
+        snapshot.categories &&
+        typeof snapshot.categories === 'object' &&
+        !Array.isArray(snapshot.categories) &&
+        Object.values(snapshot.categories).every((category) => typeof category === 'string')
+      ) {
+        return snapshot.categories;
+      }
+    } catch {
+      // Source checkouts and older packages have no snapshot.
+    }
     const toolsUrl = pathToFileURL(
       join(dirname(packageJsonPath), 'build', 'src', 'tools', 'tools.js'),
     );

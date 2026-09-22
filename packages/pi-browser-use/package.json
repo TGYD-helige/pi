@@ -25,6 +25,7 @@
   },
   "files": [
     "dist",
+    "scripts/prepare-tool-categories.mjs",
     "preview.png",
     "README.md"
   ],
@@ -43,7 +44,7 @@
     "directory": "packages/pi-browser-use"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && node scripts/prepare-tool-categories.mjs",
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run src"
   },
