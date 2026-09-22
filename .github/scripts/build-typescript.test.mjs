@@ -29,6 +29,7 @@ test('builds workspace projects without shell expansion and preserves compiler f
     const run = (...args) => spawnSync(process.execPath, [script, '--pretty', 'false', ...args], {
       cwd,
       encoding: 'utf8',
+      timeout: 10_000,
     });
     const success = run();
     assert.equal(success.status, 0, success.stdout + success.stderr);
@@ -56,4 +57,5 @@ test('builds workspace projects without shell expansion and preserves compiler f
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
-});
+// Five real compiler processes run sequentially; allow for shared CI CPU contention.
+}, 30_000);
