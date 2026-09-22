@@ -39,11 +39,12 @@ export class YouProvider extends BaseProvider {
       ...provider.headers,
     };
 
+    const timeout = AbortSignal.timeout(provider.timeoutMs ?? DEFAULT_TIMEOUT_MS);
     const response = await fetch(url, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
-      signal: signal ?? AbortSignal.timeout(provider.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
     });
 
     if (!response.ok) {

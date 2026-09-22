@@ -684,6 +684,26 @@ describe('search - all providers', () => {
 
     await expect(search({ query: 'test' }, settings)).rejects.toThrow('You.com API error 403');
   });
+
+  it('you: keeps the request timeout when a caller signal is provided', async () => {
+    const settings: WebToolSettings = {
+      timeoutMs: 1,
+      search: { provider: 'you' },
+      providers: { you: { apiKey: 'you-key' } },
+    };
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ results: { web: [] } }),
+    });
+
+    const caller = new AbortController();
+    await search({ query: 'test' }, settings, caller.signal);
+
+    const signal = mockFetch.mock.calls[0]![1].signal;
+    expect(signal).not.toBe(caller.signal);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(signal.aborted).toBe(true);
+  });
 });
 
 describe('XaiProvider.xsearch', () => {
