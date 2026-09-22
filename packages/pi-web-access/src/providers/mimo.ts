@@ -1,4 +1,9 @@
-import { BaseProvider, getEnvironmentContext, SEARCH_SYSTEM_PROMPT } from './base.js';
+import {
+  BaseProvider,
+  getEnvironmentContext,
+  SEARCH_SYSTEM_PROMPT,
+  timeoutSignal,
+} from './base.js';
 import type { ResolvedProvider, SearchParams, SearchResponse, SearchResult } from './index.js';
 
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -6,7 +11,11 @@ const DEFAULT_TIMEOUT_MS = 60_000;
 export class MimoProvider extends BaseProvider {
   readonly id = 'mimo' as const;
 
-  override async search(params: SearchParams, provider: ResolvedProvider): Promise<SearchResponse> {
+  override async search(
+    params: SearchParams,
+    provider: ResolvedProvider,
+    signal?: AbortSignal,
+  ): Promise<SearchResponse> {
     if (!provider.apiKey) {
       throw new Error(
         'Mimo API key not configured. Set MIMO_API_KEY env var or configure in settings.json.',
@@ -37,7 +46,7 @@ export class MimoProvider extends BaseProvider {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(provider.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+      signal: timeoutSignal(provider.timeoutMs ?? DEFAULT_TIMEOUT_MS, signal),
     });
     if (!response.ok) {
       const text = await response.text().catch(() => '');

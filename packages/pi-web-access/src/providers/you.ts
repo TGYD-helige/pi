@@ -5,7 +5,7 @@ import type {
   SearchResponse,
   SearchResult,
 } from './base.js';
-import { BaseProvider } from './base.js';
+import { BaseProvider, timeoutSignal } from './base.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -39,12 +39,11 @@ export class YouProvider extends BaseProvider {
       ...provider.headers,
     };
 
-    const timeout = AbortSignal.timeout(provider.timeoutMs ?? DEFAULT_TIMEOUT_MS);
     const response = await fetch(url, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
-      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+      signal: timeoutSignal(provider.timeoutMs ?? DEFAULT_TIMEOUT_MS, signal),
     });
 
     if (!response.ok) {

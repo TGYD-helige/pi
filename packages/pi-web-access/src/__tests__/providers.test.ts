@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { search } from '../search.js';
-import type { WebToolSettings } from '../types.js';
+import type { BuiltInProviderId, WebToolSettings } from '../types.js';
 
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
@@ -703,6 +703,40 @@ describe('search - all providers', () => {
     expect(signal).not.toBe(caller.signal);
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(signal.aborted).toBe(true);
+  });
+
+  it('all providers: forward caller cancellation to the request signal', async () => {
+    const ids: BuiltInProviderId[] = [
+      'anthropic',
+      'brave',
+      'firecrawl',
+      'gemini',
+      'kimi',
+      'mimo',
+      'openai',
+      'openrouter',
+      'perplexity',
+      'tavily',
+      'xai',
+      'you',
+      'zai',
+    ];
+    for (const id of ids) {
+      mockFetch.mockReset();
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({}) });
+      const settings: WebToolSettings = {
+        search: { provider: id },
+        providers: { [id]: { apiKey: 'key' } },
+      };
+
+      const caller = new AbortController();
+      await search({ query: 'test' }, settings, caller.signal).catch(() => {});
+      caller.abort();
+
+      const captured = mockFetch.mock.calls[0]?.[1]?.signal;
+      expect(captured, id).toBeDefined();
+      expect(captured?.aborted, id).toBe(true);
+    }
   });
 });
 

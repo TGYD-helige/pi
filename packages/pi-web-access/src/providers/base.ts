@@ -11,6 +11,12 @@ export function getEnvironmentContext(): string {
   return `[Current date: ${date}, Timezone: ${tz}]`;
 }
 
+/** Compose caller cancellation with a request timeout — either one aborts the request. */
+export function timeoutSignal(timeoutMs: number, signal?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
 // ─── Provider contract types ─────────────────────────────────────────────────
 
 export interface ResolvedProvider {
