@@ -15,7 +15,8 @@ export type BuiltInProviderId =
   | 'openai'
   | 'anthropic'
   | 'dashscope'
-  | 'unsplash';
+  | 'unsplash'
+  | 'you';
 
 // ─── Settings ────────────────────────────────────────────────────────────────
 

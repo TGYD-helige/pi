@@ -14,6 +14,7 @@ import { PerplexityProvider } from './perplexity.js';
 import { TavilyProvider } from './tavily.js';
 import { UnsplashProvider } from './unsplash.js';
 import { XaiProvider } from './xai.js';
+import { YouProvider } from './you.js';
 import { ZaiProvider } from './zai.js';
 
 export type {
@@ -46,6 +47,7 @@ const providers: WebProvider[] = [
   new AnthropicProvider(),
   new DashscopeProvider(),
   new UnsplashProvider(),
+  new YouProvider(),
 ];
 
 const registry = new Map<string, WebProvider>(providers.map((p) => [p.id, p]));

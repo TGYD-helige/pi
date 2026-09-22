@@ -68,8 +68,11 @@ Search the web for images. Only registered when an image search provider (`dashs
 | `anthropic` | ✓ | ✓ | ✗ | ✗ | `https://api.anthropic.com/v1` | `ANTHROPIC_API_KEY` | `claude-sonnet-4-6` |
 | `dashscope` | ✓ | ✓ | ✗ | ✓ | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `DASHSCOPE_API_KEY` | `qwen3.8-flash` |
 | `unsplash` | ✗ | ✗ | ✗ | ✓ | `https://api.unsplash.com` | `UNSPLASH_ACCESS_KEY` | - |
+| `you` | ✓ | ✓ | ✗ | ✗ | `https://ydc-index.io` | `YDC_API_KEY` | - |
 
 Custom Kimi base URLs must support both `/chat/completions` and `/formulas/*`.
+
+You.com search returns web and news results in one call; `topic: "news"` prefers news results and applies a one-week freshness window. The Contents API (`/v1/contents`) returns clean Markdown for `web_fetch`. Get a key at [you.com/platform/api-keys](https://you.com/platform/api-keys).
 
 Custom DashScope base URLs must point to an OpenAI-compatible Responses API root — `${baseUrl}/responses` is called for all capabilities. For the international site or a dedicated workspace endpoint, use e.g. `https://dashscope-intl.aliyuncs.com/compatible-mode/v1`. DashScope fetch uses the `web_extractor` tool and image search uses `web_search_image`; both are agent-style tools and can take minutes per call (default timeout 5 min, tune via `timeoutMs`). DashScope search supports only basic web search — `includeDomains`/`excludeDomains` filters are ignored.
 

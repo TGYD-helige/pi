@@ -561,6 +561,149 @@ describe('search - all providers', () => {
     const body = JSON.parse(mockFetch.mock.calls[0]![1].body);
     expect(body.tools[0].filters).toBeUndefined();
   });
+
+  it('you: calls search API with X-API-Key', async () => {
+    const settings: WebToolSettings = {
+      search: { provider: 'you' },
+      providers: { you: { apiKey: 'you-key' } },
+    };
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        results: {
+          web: [
+            {
+              url: 'https://example.com',
+              title: 'Example',
+              description: 'desc',
+              snippets: ['snippet text'],
+            },
+          ],
+        },
+      }),
+    });
+
+    const result = await search({ query: 'test' }, settings);
+
+    expect(result.provider).toBe('you');
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0]!.url).toBe('https://example.com');
+    expect(result.results[0]!.content).toBe('snippet text');
+
+    const [url, opts] = mockFetch.mock.calls[0]!;
+    expect(url).toBe('https://ydc-index.io/v1/search');
+    expect(opts.headers['X-API-Key']).toBe('you-key');
+    const body = JSON.parse(opts.body);
+    expect(body.query).toBe('test');
+    expect(body.count).toBe(5);
+  });
+
+  it('you: passes domain filters and freshness', async () => {
+    const settings: WebToolSettings = {
+      search: { provider: 'you' },
+      providers: { you: { apiKey: 'you-key' } },
+    };
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ results: { web: [] } }),
+    });
+
+    await search(
+      { query: 'test', timeRange: 'week', includeDomains: ['example.com'], maxResults: 8 },
+      settings,
+    );
+
+    const body = JSON.parse(mockFetch.mock.calls[0]![1].body);
+    expect(body.count).toBe(8);
+    expect(body.freshness).toBe('week');
+    expect(body.include_domains).toEqual(['example.com']);
+  });
+
+  it('you: uses news results when topic is news', async () => {
+    const settings: WebToolSettings = {
+      search: { provider: 'you' },
+      providers: { you: { apiKey: 'you-key' } },
+    };
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        results: {
+          web: [{ url: 'https://example.com/page', title: 'Web', description: 'w' }],
+          news: [{ url: 'https://news.example.com', title: 'News', description: 'n' }],
+        },
+      }),
+    });
+
+    const result = await search({ query: 'test', topic: 'news' }, settings);
+
+    expect(result.results).toHaveLength(2);
+    expect(result.results[0]!.url).toBe('https://news.example.com');
+
+    const body = JSON.parse(mockFetch.mock.calls[0]![1].body);
+    expect(body.freshness).toBe('week');
+  });
+
+  it('you: falls back to description when no snippets', async () => {
+    const settings: WebToolSettings = {
+      search: { provider: 'you' },
+      providers: { you: { apiKey: 'you-key' } },
+    };
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        results: {
+          web: [{ url: 'https://example.com', title: 'Example', description: 'only desc' }],
+        },
+      }),
+    });
+
+    const result = await search({ query: 'test' }, settings);
+
+    expect(result.results[0]!.content).toBe('only desc');
+  });
+
+  it('you: throws on missing API key', async () => {
+    const settings: WebToolSettings = {
+      search: { provider: 'you' },
+      providers: { you: {} },
+    };
+
+    await expect(search({ query: 'test' }, settings)).rejects.toThrow('You.com API key');
+  });
+
+  it('you: throws on HTTP error', async () => {
+    const settings: WebToolSettings = {
+      search: { provider: 'you' },
+      providers: { you: { apiKey: 'you-key' } },
+    };
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 403,
+      text: async () => 'Missing required scopes',
+    });
+
+    await expect(search({ query: 'test' }, settings)).rejects.toThrow('You.com API error 403');
+  });
+
+  it('you: keeps the request timeout when a caller signal is provided', async () => {
+    const settings: WebToolSettings = {
+      timeoutMs: 1,
+      search: { provider: 'you' },
+      providers: { you: { apiKey: 'you-key' } },
+    };
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ results: { web: [] } }),
+    });
+
+    const caller = new AbortController();
+    await search({ query: 'test' }, settings, caller.signal);
+
+    const signal = mockFetch.mock.calls[0]![1].signal;
+    expect(signal).not.toBe(caller.signal);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(signal.aborted).toBe(true);
+  });
 });
 
 describe('XaiProvider.xsearch', () => {
