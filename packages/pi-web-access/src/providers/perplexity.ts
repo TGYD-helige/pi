@@ -5,14 +5,23 @@ import type {
   SearchResponse,
   SearchResult,
 } from './base.js';
-import { BaseProvider, getEnvironmentContext, SEARCH_SYSTEM_PROMPT } from './base.js';
+import {
+  BaseProvider,
+  getEnvironmentContext,
+  SEARCH_SYSTEM_PROMPT,
+  timeoutSignal,
+} from './base.js';
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 
 export class PerplexityProvider extends BaseProvider {
   readonly id = 'perplexity' as const;
 
-  override async search(params: SearchParams, provider: ResolvedProvider): Promise<SearchResponse> {
+  override async search(
+    params: SearchParams,
+    provider: ResolvedProvider,
+    signal?: AbortSignal,
+  ): Promise<SearchResponse> {
     if (!provider.apiKey) {
       throw new Error(
         'Perplexity API key not configured. Set PERPLEXITY_API_KEY env var or configure in settings.json.',
@@ -44,7 +53,7 @@ export class PerplexityProvider extends BaseProvider {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(provider.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+      signal: timeoutSignal(provider.timeoutMs ?? DEFAULT_TIMEOUT_MS, signal),
     });
     if (!response.ok) {
       const text = await response.text().catch(() => '');

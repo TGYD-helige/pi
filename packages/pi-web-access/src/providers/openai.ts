@@ -1,4 +1,9 @@
-import { BaseProvider, getEnvironmentContext, SEARCH_SYSTEM_PROMPT } from './base.js';
+import {
+  BaseProvider,
+  getEnvironmentContext,
+  SEARCH_SYSTEM_PROMPT,
+  timeoutSignal,
+} from './base.js';
 import type { ResolvedProvider, SearchParams, SearchResponse, SearchResult } from './index.js';
 
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -29,6 +34,7 @@ export class OpenAIProvider extends BaseProvider {
   protected async postResponses<T extends ResponsesApiStatus>(
     provider: ResolvedProvider,
     body: unknown,
+    signal?: AbortSignal,
   ): Promise<T> {
     const variant = VARIANTS[this.id];
     const name = variant.name;
@@ -49,7 +55,7 @@ export class OpenAIProvider extends BaseProvider {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(provider.timeoutMs ?? this.defaultTimeoutMs),
+      signal: timeoutSignal(provider.timeoutMs ?? this.defaultTimeoutMs, signal),
     });
     if (!response.ok) {
       const text = await response.text().catch(() => '');
@@ -65,7 +71,11 @@ export class OpenAIProvider extends BaseProvider {
     return data;
   }
 
-  override async search(params: SearchParams, provider: ResolvedProvider): Promise<SearchResponse> {
+  override async search(
+    params: SearchParams,
+    provider: ResolvedProvider,
+    signal?: AbortSignal,
+  ): Promise<SearchResponse> {
     const name = VARIANTS[this.id].name;
 
     const tool: Record<string, unknown> = { type: 'web_search' };
@@ -94,12 +104,16 @@ export class OpenAIProvider extends BaseProvider {
         }>;
         action?: { type: string; url?: string };
       }>;
-    }>(provider, {
-      model: provider.model ?? this.defaultModel,
-      instructions: SEARCH_SYSTEM_PROMPT,
-      input: `${getEnvironmentContext()}\n\n${params.query}`,
-      tools: [tool],
-    });
+    }>(
+      provider,
+      {
+        model: provider.model ?? this.defaultModel,
+        instructions: SEARCH_SYSTEM_PROMPT,
+        input: `${getEnvironmentContext()}\n\n${params.query}`,
+        tools: [tool],
+      },
+      signal,
+    );
 
     let answer = '';
     const results: SearchResult[] = [];

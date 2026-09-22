@@ -5,7 +5,7 @@ import type {
   SearchResponse,
   SearchResult,
 } from './base.js';
-import { BaseProvider } from './base.js';
+import { BaseProvider, timeoutSignal } from './base.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -19,7 +19,11 @@ const TIME_RANGE_MAP: Record<string, string> = {
 export class ZaiProvider extends BaseProvider {
   readonly id = 'zai' as const;
 
-  override async search(params: SearchParams, provider: ResolvedProvider): Promise<SearchResponse> {
+  override async search(
+    params: SearchParams,
+    provider: ResolvedProvider,
+    signal?: AbortSignal,
+  ): Promise<SearchResponse> {
     if (!provider.apiKey) {
       throw new Error(
         'Z.AI API key not configured. Set ZAI_API_KEY env var or configure in settings.json.',
@@ -46,7 +50,7 @@ export class ZaiProvider extends BaseProvider {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(provider.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+      signal: timeoutSignal(provider.timeoutMs ?? DEFAULT_TIMEOUT_MS, signal),
     });
 
     if (!response.ok) {

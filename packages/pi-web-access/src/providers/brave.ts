@@ -1,12 +1,16 @@
 import type { ResolvedProvider, SearchParams, SearchResponse, SearchResult } from './base.js';
-import { BaseProvider } from './base.js';
+import { BaseProvider, timeoutSignal } from './base.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 export class BraveProvider extends BaseProvider {
   readonly id = 'brave' as const;
 
-  override async search(params: SearchParams, provider: ResolvedProvider): Promise<SearchResponse> {
+  override async search(
+    params: SearchParams,
+    provider: ResolvedProvider,
+    signal?: AbortSignal,
+  ): Promise<SearchResponse> {
     if (!provider.apiKey) {
       throw new Error(
         'Brave Search API key not configured. Set BRAVE_API_KEY env var or configure in settings.json.',
@@ -42,7 +46,7 @@ export class BraveProvider extends BaseProvider {
     const response = await fetch(url, {
       method: 'GET',
       headers,
-      signal: AbortSignal.timeout(provider.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+      signal: timeoutSignal(provider.timeoutMs ?? DEFAULT_TIMEOUT_MS, signal),
     });
 
     if (!response.ok) {

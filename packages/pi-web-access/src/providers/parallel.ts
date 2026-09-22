@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 import type { ResolvedProvider, SearchParams, SearchResponse } from './base.js';
-import { BaseProvider } from './base.js';
+import { BaseProvider, timeoutSignal } from './base.js';
 
 const version = (createRequire(import.meta.url)('../../package.json') as { version: string })
   .version;
@@ -29,8 +29,7 @@ export class ParallelProvider extends BaseProvider {
     provider: ResolvedProvider,
     signal?: AbortSignal,
   ): Promise<SearchResponse> {
-    const timeout = AbortSignal.timeout(provider.timeoutMs ?? 30_000);
-    const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+    const requestSignal = timeoutSignal(provider.timeoutMs ?? 30_000, signal);
     const headers = new Headers({
       Accept: 'application/json, text/event-stream',
       'Content-Type': 'application/json',
