@@ -17,11 +17,18 @@ vi.mock('../search.js', async (importOriginal) => {
   };
 });
 
+vi.mock('../fetch.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../fetch.js')>();
+  return { ...actual, webFetch: vi.fn() };
+});
+
 import { loadWebToolSettings } from '../config.js';
+import { webFetch } from '../fetch.js';
 import { search } from '../search.js';
 
 const mockLoadSettings = vi.mocked(loadWebToolSettings);
 const mockSearch = vi.mocked(search);
+const mockWebFetch = vi.mocked(webFetch);
 
 function createMockPi() {
   const tools: Array<{ name: string; description: string }> = [];
@@ -129,6 +136,33 @@ describe('piWebToolExtension - tool registration', () => {
     await pi.triggerSessionStart();
 
     expect(pi.tools.map((t) => t.name)).toContain('web_fetch');
+  });
+
+  it('returns direct-read provenance in web_fetch tool details', async () => {
+    mockLoadSettings.mockReturnValue({ fetch: { mode: 'direct' } });
+    mockWebFetch.mockResolvedValueOnce({
+      url: 'https://example.com/final',
+      title: 'Final page',
+      content: 'Direct page content',
+    });
+    const pi = createMockPi();
+    piWebToolExtension(pi as any);
+    await pi.triggerSessionStart();
+
+    const tool = pi.tools.find((entry) => entry.name === 'web_fetch') as any;
+    const result = await tool.execute(
+      'call-1',
+      { url: 'https://example.com/start', prompt: 'Quote the page title' },
+      undefined,
+      undefined,
+      {},
+    );
+    expect(result.details).toMatchObject({
+      requestedUrl: 'https://example.com/start',
+      finalUrl: 'https://example.com/final',
+      capturedAt: expect.any(String),
+      mediaType: 'text/markdown',
+    });
   });
 
   it('does not register web_fetch when fetch is empty', async () => {

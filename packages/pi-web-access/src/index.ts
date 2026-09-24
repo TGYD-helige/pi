@@ -206,6 +206,7 @@ export default function piWebToolExtension(pi: ExtensionAPI): void {
         ) {
           const fetchParams = params as unknown as { url: string; prompt: string };
           const result = await webFetch({ url: fetchParams.url }, settings, undefined, signal);
+          const capturedAt = new Date().toISOString();
 
           let content = result.content;
           if (settings.fetch?.summary) {
@@ -224,7 +225,18 @@ export default function piWebToolExtension(pi: ExtensionAPI): void {
           lines.push(content);
 
           const text = lines.join('\n');
-          return { content: [{ type: 'text' as const, text }], details: undefined };
+          return {
+            content: [{ type: 'text' as const, text }],
+            details:
+              settings.fetch?.mode === 'direct'
+                ? {
+                    requestedUrl: fetchParams.url,
+                    finalUrl: result.url,
+                    capturedAt,
+                    mediaType: 'text/markdown',
+                  }
+                : undefined,
+          };
         },
       });
     }

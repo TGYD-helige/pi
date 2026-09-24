@@ -21,7 +21,7 @@ Search the web for information. Registered when a keyed search provider is avail
 
 ### `web_fetch`
 
-Fetch a URL and return its content. When `fetch.summary` is configured, the summary model processes the content using `prompt`; otherwise the fetched content is returned directly and `prompt` is retained for compatibility but ignored. Registered when `fetch.provider`, `fetch.summary`, or `fetch.mode: "direct"` is configured.
+Fetch a URL and return its content. When `fetch.summary` is configured, the summary model processes the content using `prompt`; otherwise the fetched content is returned directly and `prompt` is retained for compatibility but ignored. Direct mode also carries the requested URL, final response URL, and capture time for runtime evidence. Registered when `fetch.provider`, `fetch.summary`, or `fetch.mode: "direct"` is configured.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
