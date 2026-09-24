@@ -39,6 +39,10 @@ export interface SearchConfig {
 export interface FetchConfig {
   provider?: BuiltInProviderId;
   summary?: SummaryModelConfig;
+  /** Read the destination itself instead of the default Jina Reader fallback. */
+  mode?: 'direct';
+  /** Use public DNS answers when the system resolver returns proxy fake IPs. */
+  dnsOverHttps?: 'google';
 }
 
 export interface ImageSearchConfig {

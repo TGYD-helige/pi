@@ -79,7 +79,10 @@ export default function piWebToolExtension(pi: ExtensionAPI): void {
       !('error' in searchResolved) &&
       (Boolean(searchResolved.apiKey) ||
         (searchResolved.id === 'parallel' && settings.search?.provider === 'parallel'));
-    const hasFetch = Boolean(settings.fetch?.provider) || Boolean(settings.fetch?.summary);
+    const hasFetch =
+      Boolean(settings.fetch?.provider) ||
+      Boolean(settings.fetch?.summary) ||
+      settings.fetch?.mode === 'direct';
 
     if (hasSearch) {
       pi.registerTool({
@@ -197,12 +200,12 @@ export default function piWebToolExtension(pi: ExtensionAPI): void {
         async execute(
           _toolCallId: string,
           params: Record<string, unknown>,
-          _signal: AbortSignal | undefined,
+          signal: AbortSignal | undefined,
           _onUpdate: unknown,
           fetchCtx: ExtensionContext,
         ) {
           const fetchParams = params as unknown as { url: string; prompt: string };
-          const result = await webFetch({ url: fetchParams.url }, settings);
+          const result = await webFetch({ url: fetchParams.url }, settings, undefined, signal);
 
           let content = result.content;
           if (settings.fetch?.summary) {

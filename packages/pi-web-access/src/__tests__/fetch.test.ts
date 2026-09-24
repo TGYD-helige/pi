@@ -153,6 +153,62 @@ describe('webFetch', () => {
     expect(mockFetch.mock.calls[1]![0]).toBe('https://example.com/');
   });
 
+  it('uses explicitly configured public DNS for a direct page read', async () => {
+    const settings = { fetch: { mode: 'direct', dnsOverHttps: 'google' } } as WebToolSettings;
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ Status: 0, Answer: [{ type: 1, data: '93.184.216.34' }] }),
+    });
+    safeFetchMock.mockResolvedValueOnce({
+      ok: true,
+      url: 'https://example.com/final-page',
+      headers: new Map([['content-type', 'text/html']]),
+      text: async () => '<html><title>Direct Page</title><body>Verified content</body></html>',
+    });
+
+    const result = await webFetch({ url: 'https://example.com/page' }, settings);
+
+    expect(result.content).toContain('Verified content');
+    expect(result.url).toBe('https://example.com/final-page');
+    expect(mockFetch.mock.calls[0]![0]).toBe('https://dns.google/resolve?name=example.com&type=A');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(safeFetchMock).toHaveBeenCalledWith(
+      'https://example.com/page',
+      expect.anything(),
+      expect.objectContaining({ lookup: expect.any(Function) }),
+    );
+  });
+
+  it('still rejects a non-public DNS answer in public DNS mode', async () => {
+    const settings = { fetch: { dnsOverHttps: 'google' } } as WebToolSettings;
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ Status: 0, Answer: [{ type: 1, data: '198.18.1.164' }] }),
+    });
+
+    await expect(webFetch({ url: 'https://example.com/private' }, settings)).rejects.toThrow(
+      /non-public address/,
+    );
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(safeFetchMock).not.toHaveBeenCalled();
+  });
+
+  it('cancels a direct public DNS read before sending a request', async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      webFetch(
+        { url: 'https://example.com/page' },
+        { fetch: { mode: 'direct', dnsOverHttps: 'google' } },
+        undefined,
+        controller.signal,
+      ),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(safeFetchMock).not.toHaveBeenCalled();
+  });
+
   it('blocks loopback URLs before either fetch path runs', async () => {
     const { safeFetch } =
       await vi.importActual<typeof import('@amaster.ai/pi-shared')>('@amaster.ai/pi-shared');

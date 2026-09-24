@@ -21,7 +21,7 @@ Search the web for information. Registered when a keyed search provider is avail
 
 ### `web_fetch`
 
-Fetch a URL and return its content. When `fetch.summary` is configured, the summary model processes the content using `prompt`; otherwise the fetched content is returned directly and `prompt` is retained for compatibility but ignored. Only registered when `fetch.provider` or `fetch.summary` is configured.
+Fetch a URL and return its content. When `fetch.summary` is configured, the summary model processes the content using `prompt`; otherwise the fetched content is returned directly and `prompt` is retained for compatibility but ignored. Registered when `fetch.provider`, `fetch.summary`, or `fetch.mode: "direct"` is configured.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -124,11 +124,13 @@ Project `.pi/settings.json` values are loaded only after project trust is accept
 | Field | Description |
 |-------|-------------|
 | `provider` | Which provider to use for URL fetching. Not set = Jina Reader → local fallback. |
+| `mode` | Set to `"direct"` to read the destination with a local HTTP GET instead of Jina Reader or a configured fetch provider. |
+| `dnsOverHttps` | Set to `"google"` to validate and pin public DNS answers from Google Public DNS when the system resolver returns proxy fake IPs. Only applies to `web_fetch`; private, reserved, loopback and unsafe redirect destinations remain blocked. The queried hostname is sent to Google. |
 | `summary` | Model config for summarizing fetched content. |
 | `summary.provider` | Model provider name (resolved via pi model registry). |
 | `summary.model` | Model id. |
 
-If neither `fetch.provider` nor `fetch.summary` is configured, `web_fetch` is not registered.
+If none of `fetch.provider`, `fetch.summary`, or `fetch.mode: "direct"` is configured, `web_fetch` is not registered. For direct reads behind fake-IP DNS, use `"fetch": { "mode": "direct", "dnsOverHttps": "google" }` in trusted user or agent settings. DNS lookup fails closed if Google Public DNS is unavailable; it never falls back to a non-public system answer.
 
 ### `imageSearch`
 
@@ -178,7 +180,7 @@ Providers only override methods they support. Provider-specific capabilities (li
 ## Tool Registration Rules
 
 - `web_search` — registered when a search provider has an API key, or when keyless `parallel` is explicitly selected.
-- `web_fetch` — registered when `fetch.provider` or `fetch.summary` is configured.
+- `web_fetch` — registered when `fetch.provider`, `fetch.summary`, or `fetch.mode: "direct"` is configured.
 - `x_search` — registered when xai provider has an API key.
 - `image_search` — registered when an image search provider (dashscope, unsplash) has an API key; `/image-search` command is registered alongside it. An `imageSearch.provider` that doesn't support image search (e.g. `"openai"`) is treated as unconfigured.
 - If none are configured, the extension loads silently with no tools registered.

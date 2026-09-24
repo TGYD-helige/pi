@@ -121,6 +121,16 @@ describe('piWebToolExtension - tool registration', () => {
     );
   });
 
+  it('registers web_fetch for direct page reads without a provider or summary', async () => {
+    mockLoadSettings.mockReturnValue({ fetch: { mode: 'direct', dnsOverHttps: 'google' } });
+
+    const pi = createMockPi();
+    piWebToolExtension(pi as any);
+    await pi.triggerSessionStart();
+
+    expect(pi.tools.map((t) => t.name)).toContain('web_fetch');
+  });
+
   it('does not register web_fetch when fetch is empty', async () => {
     mockLoadSettings.mockReturnValue({
       search: { provider: 'kimi' },
