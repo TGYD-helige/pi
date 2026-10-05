@@ -439,7 +439,9 @@ describe('memoryMode gating', () => {
     resolveA(providerA);
     await startA;
 
-    expect(tools).toHaveLength(0);
+    // A declared the tool before its init; B's passive session withdrew it.
+    expect(tools.map((t) => t.name)).toEqual(['mem0_memory']);
+    expect(pi.getActiveTools()).toEqual([]);
     expect(ctx.ui.setStatus).toHaveBeenLastCalledWith('mem0', 'mem0: platform/passive');
 
     // Capture still works — against B's provider, never A's.
@@ -448,6 +450,182 @@ describe('memoryMode gating', () => {
     await handlers.session_shutdown![0]!({}, ctx);
     expect(providerB.add).toHaveBeenCalledTimes(1);
     expect(providerA.add).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// session_start — tool declared before slow backend init
+// ---------------------------------------------------------------------------
+
+describe('session_start — delayed backend init', () => {
+  type ToolDef = {
+    name: string;
+    promptGuidelines?: string[];
+    execute: (
+      ...args: unknown[]
+    ) => Promise<{ isError?: boolean; content: Array<{ text: string }> }>;
+  };
+
+  function deferredInit(settings: Record<string, unknown> = {}) {
+    let resolve: (p: unknown) => void = () => {};
+    let reject: (e: unknown) => void = () => {};
+    mockCreateMem0Provider.mockReturnValueOnce(
+      new Promise((res, rej) => {
+        resolve = res;
+        reject = rej;
+      }),
+    );
+    vi.mocked(loadPiSettings).mockReturnValue({
+      mode: 'platform',
+      apiKey: 'm0-test',
+      ...settings,
+    });
+    return { resolve, reject };
+  }
+
+  function providerStub() {
+    return {
+      add: vi.fn().mockResolvedValue({ results: [] }),
+      search: vi.fn().mockResolvedValue([{ id: 'm1', memory: 'likes cats' }]),
+      getAll: vi.fn().mockResolvedValue([]),
+      delete: vi.fn().mockResolvedValue(undefined),
+    };
+  }
+
+  it('declares the tool and its guidelines before init resolves and keeps them stable', async () => {
+    const init = deferredInit({ agentId: 'agent-a' });
+    const { pi, handlers, tools } = createMockPi(['read']);
+    const registerTool = vi.spyOn(pi, 'registerTool');
+    mem0Extension(pi as never);
+
+    const started = handlers.session_start![0]!({}, createMockCtx());
+
+    // A model request issued now must already see the final tool set.
+    expect(pi.getActiveTools()).toEqual(['read', 'mem0_memory']);
+    const guidelines = (tools[0] as ToolDef).promptGuidelines;
+    expect(guidelines?.length).toBeGreaterThan(0);
+    const setActiveCalls = pi.setActiveTools.mock.calls.length;
+
+    init.resolve(providerStub());
+    await started;
+
+    expect(registerTool).toHaveBeenCalledTimes(1);
+    expect(pi.setActiveTools.mock.calls.length).toBe(setActiveCalls);
+    expect(pi.getActiveTools()).toEqual(['read', 'mem0_memory']);
+    expect((tools[0] as ToolDef).promptGuidelines).toEqual(guidelines);
+  });
+
+  it('makes a call issued during init wait for the session provider and scope', async () => {
+    const init = deferredInit({ agentId: 'agent-a' });
+    const provider = providerStub();
+    const { pi, handlers, tools } = createMockPi();
+    mem0Extension(pi as never);
+
+    const started = handlers.session_start![0]!({}, createMockCtx());
+    const pending = (tools[0] as ToolDef).execute(
+      'call-1',
+      { action: 'search', query: 'pets' },
+      undefined,
+      undefined,
+      {},
+    );
+    await Promise.resolve();
+    expect(provider.search).not.toHaveBeenCalled();
+
+    init.resolve(provider);
+    await started;
+    const result = await pending;
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0]!.text).toContain('likes cats');
+    expect(provider.search).toHaveBeenCalledWith(
+      'pets',
+      expect.objectContaining({ agentId: 'agent-a', userId: expect.any(String) }),
+    );
+  });
+
+  it('stops waiting when the pending call is cancelled', async () => {
+    deferredInit();
+    const { pi, handlers, tools } = createMockPi();
+    mem0Extension(pi as never);
+
+    void handlers.session_start![0]!({}, createMockCtx());
+    const controller = new AbortController();
+    const pending = (tools[0] as ToolDef).execute(
+      'call-1',
+      { action: 'search', query: 'pets' },
+      controller.signal,
+      undefined,
+      {},
+    );
+    controller.abort();
+
+    expect((await pending).isError).toBe(true);
+  });
+
+  it('reports not active and withdraws the tool when init fails', async () => {
+    const init = deferredInit();
+    const { pi, handlers, tools } = createMockPi(['read']);
+    mem0Extension(pi as never);
+    const ctx = createMockCtx();
+
+    const started = handlers.session_start![0]!({}, ctx);
+    const pending = (tools[0] as ToolDef).execute(
+      'call-1',
+      { action: 'search', query: 'pets' },
+      undefined,
+      undefined,
+      {},
+    );
+    init.reject(new Error('backend unavailable'));
+    await started;
+    const result = await pending;
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toBe('Mem0 is not active.');
+    expect(pi.getActiveTools()).toEqual(['read']);
+    expect(ctx.ui.setStatus).toHaveBeenLastCalledWith('mem0', 'mem0: init failed');
+  });
+
+  it('never resolves a pending call to a superseded session provider', async () => {
+    const initA = deferredInit({ memoryMode: 'hybrid' });
+    const providerA = providerStub();
+    const providerB = providerStub();
+    const { pi, handlers, tools } = createMockPi();
+    mem0Extension(pi as never);
+    const ctx = createMockCtx();
+
+    const startA = handlers.session_start![0]!({}, ctx);
+    const pendingA = (tools[0] as ToolDef).execute(
+      'call-1',
+      { action: 'search', query: 'pets' },
+      undefined,
+      undefined,
+      {},
+    );
+    mockCreateMem0Provider.mockResolvedValueOnce(providerB);
+    await handlers.session_start![0]!({}, ctx);
+    initA.resolve(providerA);
+    await startA;
+
+    expect((await pendingA).isError).toBe(true);
+    expect(providerA.search).not.toHaveBeenCalled();
+    expect(providerB.search).not.toHaveBeenCalled();
+  });
+
+  it('keeps passive mode tool-free while init is pending', async () => {
+    const init = deferredInit({ memoryMode: 'passive' });
+    const { pi, handlers, tools } = createMockPi(['read']);
+    mem0Extension(pi as never);
+
+    const started = handlers.session_start![0]!({}, createMockCtx());
+    expect(tools).toHaveLength(0);
+    expect(pi.getActiveTools()).toEqual(['read']);
+
+    init.resolve(providerStub());
+    await started;
+    expect(tools).toHaveLength(0);
+    expect(pi.getActiveTools()).toEqual(['read']);
   });
 });
 

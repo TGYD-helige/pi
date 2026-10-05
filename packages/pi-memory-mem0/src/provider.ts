@@ -131,7 +131,7 @@ function cancellationReason(signal: AbortSignal): Error {
  * and direct REST requests also propagate the signal to fetch; the embedded
  * SDK has no AbortSignal hook, so only the caller's wait can be cancelled.
  */
-function waitWithCancellation<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+export function waitWithCancellation<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) return promise;
   if (signal.aborted) return Promise.reject(cancellationReason(signal));
   return new Promise<T>((resolve, reject) => {
