@@ -67,6 +67,27 @@ describe('piWebToolExtension - tool registration', () => {
     expect(pi.tools.map((t) => t.name)).toContain('web_search');
   });
 
+  it('enables Cloudflare search and a matching slash command', async () => {
+    mockLoadSettings.mockReturnValue({
+      search: { provider: 'cloudflare' },
+      providers: { cloudflare: { apiKey: 'cf-token', accountId: 'account-123' } },
+    });
+    mockSearch.mockResolvedValue({ provider: 'cloudflare', query: 'Workers', results: [] });
+    const pi = createMockPi();
+    piWebToolExtension(pi as any);
+    await pi.triggerSessionStart();
+    expect(pi.tools.map((tool) => tool.name)).toContain('web_search');
+    const command = pi.commands.get('web-search') as {
+      handler: (args: string, ctx: any) => Promise<void>;
+    };
+    expect(command).toBeDefined();
+    const notify = vi.fn();
+    const signal = new AbortController().signal;
+    await command.handler('Workers', { ui: { notify }, signal });
+    expect(mockSearch).toHaveBeenCalledWith({ query: 'Workers' }, expect.any(Object), signal);
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining('cloudflare'), 'info');
+  });
+
   it('does not register web_search when no provider configured', async () => {
     mockLoadSettings.mockReturnValue({});
 

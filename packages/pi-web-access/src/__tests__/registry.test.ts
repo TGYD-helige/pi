@@ -31,6 +31,7 @@ describe('BaseProvider', () => {
 
 describe('getProvider registry', () => {
   const allIds: BuiltInProviderId[] = [
+    'cloudflare',
     'tavily',
     'kimi',
     'mimo',
@@ -61,6 +62,7 @@ describe('getProvider registry', () => {
 
   it('providers without fetch support throw on fetch', async () => {
     const fetchUnsupported: BuiltInProviderId[] = [
+      'cloudflare',
       'kimi',
       'mimo',
       'gemini',

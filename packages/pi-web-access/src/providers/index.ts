@@ -2,6 +2,7 @@ import type { BuiltInProviderId } from '../types.js';
 import { AnthropicProvider } from './anthropic.js';
 import type { WebProvider } from './base.js';
 import { BraveProvider } from './brave.js';
+import { CloudflareProvider } from './cloudflare.js';
 import { DashscopeProvider } from './dashscope.js';
 import { FirecrawlProvider } from './firecrawl.js';
 import { GeminiProvider } from './gemini.js';
@@ -31,6 +32,7 @@ export { BaseProvider, getEnvironmentContext, SEARCH_SYSTEM_PROMPT } from './bas
 // ─── Registry ────────────────────────────────────────────────────────────────
 
 const providers: WebProvider[] = [
+  new CloudflareProvider(),
   new ParallelProvider(),
   new TavilyProvider(),
   new BraveProvider(),

@@ -1,5 +1,9 @@
 import { isProjectTrusted } from '@amaster.ai/pi-shared/settings';
-import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
+import {
+  type ExtensionAPI,
+  type ExtensionContext,
+  truncateHead,
+} from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
 import {
   loadWebToolSettings,
@@ -82,14 +86,76 @@ export default function piWebToolExtension(pi: ExtensionAPI): void {
     const hasFetch = Boolean(settings.fetch?.provider) || Boolean(settings.fetch?.summary);
 
     if (hasSearch) {
+      const runSearch = async (searchParams: SearchParams, signal?: AbortSignal) => {
+        let response: SearchResponse;
+        try {
+          response = await search(searchParams, settings, signal);
+        } catch (err) {
+          if (searchResolved.id !== 'cloudflare') throw err;
+          return {
+            isError: true,
+            content: [
+              {
+                type: 'text' as const,
+                text: err instanceof Error ? err.message : 'Cloudflare search failed.',
+              },
+            ],
+            details: undefined,
+          };
+        }
+
+        const lines: string[] = [];
+        lines.push(`## Web Search Results (${response.provider})`);
+        lines.push(`**Query:** ${response.query}`);
+        lines.push('');
+
+        if (response.answer) {
+          lines.push('### Answer');
+          lines.push(response.answer);
+          lines.push('');
+        } else if (response.results.length > 0) {
+          lines.push(
+            '_The provider did not generate an answer. Sources gathered during the search are listed below._',
+          );
+          lines.push('');
+        }
+
+        if (response.results.length > 0) {
+          lines.push('### Sources');
+          for (const r of response.results) {
+            lines.push(`- [${r.title}](${r.url})`);
+            if (r.score !== undefined) lines.push(`  *Relevance: ${r.score.toFixed(2)}*`);
+            if (r.content) lines.push(`  ${r.content}`);
+          }
+          lines.push('');
+        }
+
+        if (!response.answer && response.results.length === 0) {
+          lines.push('No results returned by the provider. Consider rephrasing the query.');
+          lines.push('');
+        }
+
+        const text = truncateHead(lines.join('\n')).content;
+        return { content: [{ type: 'text' as const, text }], details: undefined };
+      };
+
       pi.registerTool({
         name: 'web_search',
         label: 'WebSearch',
+        promptSnippet: 'Search the web for current information and source URLs.',
+        promptGuidelines: [
+          'Use web_search for current information; cite relevant source URLs in the answer.',
+        ],
         description: [
           '- Searches the web and returns results to inform responses',
           '- Provides up-to-date information for current events and recent data',
           '- Returns search results with titles, URLs, and content snippets, or a synthesized answer',
           '- Use this tool for accessing information beyond your knowledge cutoff',
+          ...(searchResolved.id === 'cloudflare'
+            ? [
+                '- Cloudflare returns at most 10 results and ignores topic, timeRange, includeDomains, and excludeDomains.',
+              ]
+            : []),
           '',
           'After answering, include a "Sources:" section listing relevant URLs as markdown hyperlinks.',
         ].join('\n'),
@@ -135,42 +201,27 @@ export default function piWebToolExtension(pi: ExtensionAPI): void {
           _onUpdate: unknown,
           _ctx: ExtensionContext,
         ) {
-          const searchParams = params as unknown as SearchParams;
-          const response = await search(searchParams, settings, signal);
-
-          const lines: string[] = [];
-          lines.push(`## Web Search Results (${response.provider})`);
-          lines.push(`**Query:** ${response.query}`);
-          lines.push('');
-
-          if (response.answer) {
-            lines.push('### Answer');
-            lines.push(response.answer);
-            lines.push('');
-          } else if (response.results.length > 0) {
-            lines.push(
-              '_The provider did not generate an answer. Sources gathered during the search are listed below._',
+          return runSearch(params as unknown as SearchParams, signal);
+        },
+      });
+      pi.registerCommand('web-search', {
+        description: 'Search the web. Usage: /web-search <query>',
+        async handler(args, cmdCtx) {
+          const query = args.trim();
+          if (!query) {
+            cmdCtx.ui.notify('Usage: /web-search <query>', 'warning');
+            return;
+          }
+          try {
+            const result = await runSearch({ query }, cmdCtx.signal);
+            cmdCtx.ui.notify(result.content[0]!.text, result.isError ? 'error' : 'info');
+          } catch {
+            console.error('[pi-web-access] web-search command failed');
+            cmdCtx.ui.notify(
+              'Web search failed. Check the provider configuration and try again.',
+              'error',
             );
-            lines.push('');
           }
-
-          if (response.results.length > 0) {
-            lines.push('### Sources');
-            for (const r of response.results) {
-              lines.push(`- [${r.title}](${r.url})`);
-              if (r.score !== undefined) lines.push(`  *Relevance: ${r.score.toFixed(2)}*`);
-              if (r.content) lines.push(`  ${r.content}`);
-            }
-            lines.push('');
-          }
-
-          if (!response.answer && response.results.length === 0) {
-            lines.push('No results returned by the provider. Consider rephrasing the query.');
-            lines.push('');
-          }
-
-          const text = lines.join('\n');
-          return { content: [{ type: 'text' as const, text }], details: undefined };
         },
       });
     }

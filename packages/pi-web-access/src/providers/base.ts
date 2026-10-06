@@ -1,4 +1,4 @@
-import type { BuiltInProviderId } from '../types.js';
+import type { BuiltInProviderId, ProviderConfig } from '../types.js';
 
 // ─── Shared constants for LLM-based providers ────────────────────────────────
 
@@ -19,12 +19,9 @@ export function timeoutSignal(timeoutMs: number, signal?: AbortSignal): AbortSig
 
 // ─── Provider contract types ─────────────────────────────────────────────────
 
-export interface ResolvedProvider {
+export interface ResolvedProvider extends ProviderConfig {
   id: BuiltInProviderId;
   baseUrl: string;
-  apiKey?: string;
-  model?: string;
-  headers?: Record<string, string>;
   timeoutMs?: number;
 }
 

@@ -7,6 +7,7 @@ const SETTINGS_KEY = 'pi-web-access';
 // ─── Built-in defaults ───────────────────────────────────────────────────────
 
 const DEFAULT_BASE_URL: Record<BuiltInProviderId, string> = {
+  cloudflare: 'https://api.cloudflare.com/client/v4',
   parallel: 'https://search.parallel.ai/mcp',
   tavily: 'https://api.tavily.com',
   brave: 'https://api.search.brave.com',
@@ -27,6 +28,7 @@ const DEFAULT_BASE_URL: Record<BuiltInProviderId, string> = {
 };
 
 const ENV_VARS: Partial<Record<BuiltInProviderId, string>> = {
+  cloudflare: 'CLOUDFLARE_API_TOKEN',
   tavily: 'TAVILY_API_KEY',
   brave: 'BRAVE_API_KEY',
   firecrawl: 'FIRECRAWL_API_KEY',
@@ -99,6 +101,12 @@ export function resolveProvider(
     id: requested,
     baseUrl,
   };
+  if (requested === 'cloudflare') {
+    provider.accountId = config.accountId || process.env.CLOUDFLARE_ACCOUNT_ID || '';
+    provider.gatewayId = config.gatewayId ?? 'default';
+    provider.searchProvider = config.searchProvider ?? 'ceramic';
+    if (config.byokAlias !== undefined) provider.byokAlias = config.byokAlias;
+  }
   if (apiKey) provider.apiKey = apiKey;
   if (config.headers) provider.headers = config.headers;
   const model = config.model ?? DEFAULT_MODEL[requested];
@@ -119,6 +127,7 @@ const ALL_SEARCH_PROVIDER_IDS: BuiltInProviderId[] = [
   'deepseek',
   'dashscope',
   'you',
+  'cloudflare',
 ];
 
 /**
@@ -133,7 +142,8 @@ export function resolveSearchProvider(
   }
   for (const id of ALL_SEARCH_PROVIDER_IDS) {
     const resolved = resolveProvider(id, settings);
-    if (!('error' in resolved) && resolved.apiKey) return resolved;
+    if (!('error' in resolved) && resolved.apiKey && (id !== 'cloudflare' || resolved.accountId))
+      return resolved;
   }
   return {
     error:

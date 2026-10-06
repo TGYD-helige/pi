@@ -1,5 +1,6 @@
 /** Built-in provider identifiers. */
 export type BuiltInProviderId =
+  | 'cloudflare'
   | 'parallel'
   | 'tavily'
   | 'brave'
@@ -21,6 +22,10 @@ export type BuiltInProviderId =
 // ─── Settings ────────────────────────────────────────────────────────────────
 
 export interface ProviderConfig {
+  accountId?: string;
+  gatewayId?: string;
+  searchProvider?: 'ceramic' | 'exa' | 'linkup';
+  byokAlias?: string;
   apiKey?: string;
   baseUrl?: string;
   model?: string;

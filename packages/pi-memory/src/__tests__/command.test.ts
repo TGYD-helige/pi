@@ -70,7 +70,8 @@ async function setupCommand(
     },
   };
 
-  memoryExtension(pi as never, { store, dataDir: dir });
+  // Command/snapshot tests must not leave background dream I/O racing with directory cleanup.
+  memoryExtension(pi as never, { store, dataDir: dir, dreaming: { enabled: false } });
 
   // Trigger session_start to initialize the store and register commands
   for (const handler of eventHandlers.session_start ?? []) {
