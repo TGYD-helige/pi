@@ -68,9 +68,9 @@ function resolveUserId(configUserId?: string, scope: MemoryUserIdScope = 'projec
 
 export default function mem0Extension(pi: ExtensionAPI): void {
   let provider: Mem0Provider | undefined;
-  // Settles once the current session's backend init finishes; mem0_memory
-  // calls made while init is still running wait on it.
   let providerReady: Promise<Mem0Provider | undefined> = Promise.resolve(undefined);
+  // End pending tool waits when their session is replaced or shut down.
+  let settleProviderReady: (ready: Mem0Provider | undefined) => void = () => {};
   let prefetch: Prefetch | undefined;
   let userId = '';
   let agentId: string | undefined;
@@ -90,10 +90,12 @@ export default function mem0Extension(pi: ExtensionAPI): void {
     // after the await keeps the superseded handler from clobbering the live
     // session's provider, prefetch, and tool-enablement state.
     const epoch = ++sessionEpoch;
+    settleProviderReady(undefined);
     let settleReady: (ready: Mem0Provider | undefined) => void = () => {};
     providerReady = new Promise((resolve) => {
       settleReady = resolve;
     });
+    settleProviderReady = settleReady;
     provider = undefined;
     prefetch = undefined;
     agentId = undefined;
@@ -139,6 +141,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
             getUserId: () => userId,
             getAgentId: () => agentId,
             isEnabled: () => activeToolEnabled,
+            getSessionEpoch: () => sessionEpoch,
             topK,
           }),
         );
@@ -295,12 +298,13 @@ export default function mem0Extension(pi: ExtensionAPI): void {
 
   pi.on('session_shutdown', async () => {
     sessionEpoch++;
+    settleProviderReady(undefined);
+    activeToolEnabled = false;
     await pendingWrite;
     provider = undefined;
     prefetch = undefined;
     agentId = undefined;
     activeAutoCapture = false;
-    activeToolEnabled = false;
     activeRecallFrequency = 'user-input';
     recallQueuedThisSession = false;
     lastUserText = '';

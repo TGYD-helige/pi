@@ -45,6 +45,8 @@ export interface Mem0MemoryToolOptions {
    * protects against already queued or direct calls to the stale registration.
    */
   isEnabled: () => boolean;
+  /** Identify session changes while a call awaits backend initialization. */
+  getSessionEpoch?: () => number;
   topK?: number;
 }
 
@@ -126,9 +128,12 @@ export function createMem0MemoryTool(opts: Mem0MemoryToolOptions): ToolDefinitio
         return errorResult('mem0_memory is disabled in this session.');
       }
 
+      const epoch = opts.getSessionEpoch?.();
       try {
         const provider = await waitWithCancellation(Promise.resolve(opts.getProvider()), signal);
-        if (!provider) return errorResult('Mem0 is not active.');
+        if (!provider || !opts.isEnabled() || epoch !== opts.getSessionEpoch?.()) {
+          return errorResult('Mem0 is not active.');
+        }
         const userId = opts.getUserId();
         const agentId = opts.getAgentId();
         const scope = { userId, ...(agentId ? { agentId } : {}) };

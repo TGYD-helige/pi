@@ -613,6 +613,81 @@ describe('session_start — delayed backend init', () => {
     expect(providerB.search).not.toHaveBeenCalled();
   });
 
+  it.each([
+    'hybrid',
+    'passive',
+  ])('rejects a ready call if replaced by a %s session before it resumes', async (memoryMode) => {
+    const initA = deferredInit({ agentId: 'agent-a' });
+    const providerA = providerStub();
+    const { pi, handlers, tools } = createMockPi();
+    mem0Extension(pi as never);
+    const ctx = createMockCtx();
+    const startA = handlers.session_start![0]!({}, ctx);
+    initA.resolve(providerA);
+    await startA;
+
+    const pendingA = (tools[0] as ToolDef).execute(
+      'call-1',
+      { action: 'search', query: 'pets' },
+      undefined,
+      undefined,
+      {},
+    );
+    const initB = deferredInit({ memoryMode, agentId: 'agent-b' });
+    const providerB = providerStub();
+    const startB = handlers.session_start![0]!({}, ctx);
+    const result = await pendingA;
+    initB.resolve(providerB);
+    await startB;
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toBe('Mem0 is not active.');
+    expect(providerA.search).not.toHaveBeenCalled();
+    expect(providerB.search).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'replacement',
+    'shutdown',
+  ])('ends pending init calls on session %s before the old backend resolves', async (transition) => {
+    const initA = deferredInit({ agentId: 'agent-a' });
+    const providerA = providerStub();
+    const { pi, handlers, tools } = createMockPi();
+    mem0Extension(pi as never);
+    const ctx = createMockCtx();
+    const startA = handlers.session_start![0]!({}, ctx);
+    let result: Awaited<ReturnType<ToolDef['execute']>> | undefined;
+    const pendingA = (tools[0] as ToolDef)
+      .execute('call-1', { action: 'search', query: 'pets' }, undefined, undefined, {})
+      .then((value) => {
+        result = value;
+      });
+
+    if (transition === 'replacement') {
+      vi.mocked(loadPiSettings).mockReturnValue({
+        mode: 'platform',
+        apiKey: 'm0-test',
+        memoryMode: 'passive',
+      });
+      mockCreateMem0Provider.mockResolvedValueOnce(providerStub());
+      await handlers.session_start![0]!({}, ctx);
+    } else {
+      await handlers.session_shutdown![0]!({}, ctx);
+    }
+    try {
+      await vi.waitFor(() => expect(result?.content[0]?.text).toBe('Mem0 is not active.'), {
+        timeout: 100,
+        interval: 1,
+      });
+      expect(result?.isError).toBe(true);
+      expect(providerA.search).not.toHaveBeenCalled();
+    } finally {
+      initA.resolve(providerA);
+      await startA;
+      await pendingA;
+    }
+  });
+
   it('keeps passive mode tool-free while init is pending', async () => {
     const init = deferredInit({ memoryMode: 'passive' });
     const { pi, handlers, tools } = createMockPi(['read']);
