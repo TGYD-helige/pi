@@ -68,6 +68,9 @@ function resolveUserId(configUserId?: string, scope: MemoryUserIdScope = 'projec
 
 export default function mem0Extension(pi: ExtensionAPI): void {
   let provider: Mem0Provider | undefined;
+  let providerReady: Promise<Mem0Provider | undefined> = Promise.resolve(undefined);
+  // End pending tool waits when their session is replaced or shut down.
+  let settleProviderReady: (ready: Mem0Provider | undefined) => void = () => {};
   let prefetch: Prefetch | undefined;
   let userId = '';
   let agentId: string | undefined;
@@ -87,6 +90,12 @@ export default function mem0Extension(pi: ExtensionAPI): void {
     // after the await keeps the superseded handler from clobbering the live
     // session's provider, prefetch, and tool-enablement state.
     const epoch = ++sessionEpoch;
+    settleProviderReady(undefined);
+    let settleReady: (ready: Mem0Provider | undefined) => void = () => {};
+    providerReady = new Promise((resolve) => {
+      settleReady = resolve;
+    });
+    settleProviderReady = settleReady;
     provider = undefined;
     prefetch = undefined;
     agentId = undefined;
@@ -121,6 +130,26 @@ export default function mem0Extension(pi: ExtensionAPI): void {
       }
       const resolvedUserId = resolveUserId(config.userId, config.userIdScope);
       const resolvedAgentId = config.agentId?.trim() || undefined;
+      // Declare the tool before the slow backend init: its promptGuidelines are
+      // part of the system prompt, so activating it only after init would
+      // rewrite the prompt for any request already sent in this session.
+      activeToolEnabled = config.toolEnabled ?? memoryMode !== 'passive';
+      if (activeToolEnabled) {
+        pi.registerTool(
+          createMem0MemoryTool({
+            getProvider: () => providerReady,
+            getUserId: () => userId,
+            getAgentId: () => agentId,
+            isEnabled: () => activeToolEnabled,
+            getSessionEpoch: () => sessionEpoch,
+            topK,
+          }),
+        );
+        pi.setActiveTools([
+          ...pi.getActiveTools().filter((name) => name !== MEMORY_TOOL_NAME),
+          MEMORY_TOOL_NAME,
+        ]);
+      }
       const newProvider = await createMem0Provider({
         config,
         resolveProvider: async (providerName: string) => {
@@ -156,7 +185,6 @@ export default function mem0Extension(pi: ExtensionAPI): void {
       activeMemoryMode = memoryMode;
       activeAutoCapture = config.autoCapture ?? memoryMode !== 'active';
       const autoRecall = config.autoRecall ?? memoryMode !== 'active';
-      activeToolEnabled = config.toolEnabled ?? memoryMode !== 'passive';
       activeRecallFrequency = recallFrequency;
       const sessionId = ctx.sessionManager.getSessionId();
       recallQueuedThisSession = ctx.sessionManager
@@ -173,32 +201,20 @@ export default function mem0Extension(pi: ExtensionAPI): void {
           topK,
         });
       }
-      if (activeToolEnabled) {
-        pi.registerTool(
-          createMem0MemoryTool({
-            getProvider: () => provider,
-            getUserId: () => userId,
-            getAgentId: () => agentId,
-            isEnabled: () => activeToolEnabled,
-            topK,
-          }),
-        );
-        pi.setActiveTools([
-          ...pi.getActiveTools().filter((name) => name !== MEMORY_TOOL_NAME),
-          MEMORY_TOOL_NAME,
-        ]);
-      }
     } catch (err) {
       if (epoch !== sessionEpoch) return;
       provider = undefined;
       prefetch = undefined;
       activeToolEnabled = false;
+      pi.setActiveTools(pi.getActiveTools().filter((name) => name !== MEMORY_TOOL_NAME));
       ctx.ui.setStatus(STATUS_KEY, 'mem0: init failed');
       ctx.ui.notify(
         `Mem0 init failed: ${err instanceof Error ? err.message : String(err)}`,
         'error',
       );
       return;
+    } finally {
+      settleReady(epoch === sessionEpoch ? provider : undefined);
     }
 
     ctx.ui.setStatus(STATUS_KEY, `mem0: ${activeMode}/${activeMemoryMode}`);
@@ -282,12 +298,13 @@ export default function mem0Extension(pi: ExtensionAPI): void {
 
   pi.on('session_shutdown', async () => {
     sessionEpoch++;
+    settleProviderReady(undefined);
+    activeToolEnabled = false;
     await pendingWrite;
     provider = undefined;
     prefetch = undefined;
     agentId = undefined;
     activeAutoCapture = false;
-    activeToolEnabled = false;
     activeRecallFrequency = 'user-input';
     recallQueuedThisSession = false;
     lastUserText = '';

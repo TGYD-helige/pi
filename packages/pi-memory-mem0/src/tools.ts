@@ -18,7 +18,7 @@ import type {
 import { truncateHead, truncateLine } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
 import { formatRecalledMemory, redactMemoryText } from './privacy.js';
-import type { Mem0Provider } from './provider.js';
+import { type Mem0Provider, waitWithCancellation } from './provider.js';
 import type { MemoryItem } from './types.js';
 
 /** Tool results land in model context — keep the block small. */
@@ -31,9 +31,12 @@ export interface Mem0MemoryToolOptions {
    * Resolved at execute time, not registration time: the tool is registered
    * once per session_start, and a later session may switch memoryMode or tear
    * the provider down. Reading through the accessor keeps the lingering tool
-   * registration from acting on a stale session's provider.
+   * registration from acting on a stale session's provider. The tool is
+   * declared before the backend finishes initializing, so this may return a
+   * promise that settles once the session's provider is ready (or undefined
+   * if init failed or the session was replaced).
    */
-  getProvider: () => Mem0Provider | undefined;
+  getProvider: () => Mem0Provider | undefined | Promise<Mem0Provider | undefined>;
   getUserId: () => string;
   getAgentId: () => string | undefined;
   /**
@@ -42,6 +45,8 @@ export interface Mem0MemoryToolOptions {
    * protects against already queued or direct calls to the stale registration.
    */
   isEnabled: () => boolean;
+  /** Identify session changes while a call awaits backend initialization. */
+  getSessionEpoch?: () => number;
   topK?: number;
 }
 
@@ -122,13 +127,17 @@ export function createMem0MemoryTool(opts: Mem0MemoryToolOptions): ToolDefinitio
       if (!opts.isEnabled()) {
         return errorResult('mem0_memory is disabled in this session.');
       }
-      const provider = opts.getProvider();
-      if (!provider) return errorResult('Mem0 is not active.');
-      const userId = opts.getUserId();
-      const agentId = opts.getAgentId();
-      const scope = { userId, ...(agentId ? { agentId } : {}) };
 
+      const epoch = opts.getSessionEpoch?.();
       try {
+        const provider = await waitWithCancellation(Promise.resolve(opts.getProvider()), signal);
+        if (!provider || !opts.isEnabled() || epoch !== opts.getSessionEpoch?.()) {
+          return errorResult('Mem0 is not active.');
+        }
+        const userId = opts.getUserId();
+        const agentId = opts.getAgentId();
+        const scope = { userId, ...(agentId ? { agentId } : {}) };
+
         switch (action) {
           case 'search': {
             const query = redactMemoryText(String(params.query ?? '').trim());
