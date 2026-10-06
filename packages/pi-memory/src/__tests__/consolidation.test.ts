@@ -1,11 +1,79 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import {
+  fauxAssistantMessage,
+  fauxToolCall,
+  getCurrentSystemPrompt,
+  getCurrentTools,
+  registerFauxProvider,
+} from '@earendil-works/pi-ai/compat';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   buildConsolidationUserPrompt,
   CONSOLIDATION_SYSTEM_PROMPT,
   type DreamTurn,
+  runConsolidation,
 } from '../consolidation.js';
 
 describe('consolidation', () => {
+  describe('runConsolidation', () => {
+    let memoryDir: string;
+
+    beforeEach(async () => {
+      memoryDir = await mkdtemp(path.join(tmpdir(), 'pi-memory-consolidation-'));
+    });
+
+    afterEach(async () => {
+      await rm(memoryDir, { recursive: true, force: true });
+    });
+
+    it('executes memory tools and preserves their results through the real Agent loop', async () => {
+      const provider = registerFauxProvider({ provider: 'pi-memory-test' });
+      const model = provider.getModel();
+      provider.setResponses([
+        (context, options) => {
+          expect(getCurrentSystemPrompt(context.messages)).toBe(CONSOLIDATION_SYSTEM_PROMPT);
+          expect(getCurrentTools(context.messages).map((tool) => tool.name)).toContain(
+            'memory_add',
+          );
+          expect(options).toMatchObject({ apiKey: 'test-key' });
+          return fauxAssistantMessage(
+            fauxToolCall('memory_add', { target: 'memory', content: 'The project uses Node 24.' }),
+            { stopReason: 'toolUse' },
+          );
+        },
+        (context) => {
+          expect(context.messages.at(-1)).toMatchObject({
+            role: 'toolResult',
+            toolName: 'memory_add',
+            isError: false,
+          });
+          return fauxAssistantMessage('Saved.');
+        },
+      ]);
+      try {
+        expect(
+          await runConsolidation({
+            memoryDir,
+            turns: [],
+            modelConfig: { provider: model.provider, model: model.id },
+            modelRegistry: {
+              find: () => model,
+              getApiKeyAndHeaders: async () => ({ ok: true, apiKey: 'test-key' }),
+            },
+          }),
+        ).toBe(true);
+        expect(await readFile(path.join(memoryDir, 'MEMORY.md'), 'utf8')).toContain(
+          'The project uses Node 24.',
+        );
+        expect(provider.state.callCount).toBe(2);
+      } finally {
+        provider.unregister();
+      }
+    });
+  });
+
   describe('CONSOLIDATION_SYSTEM_PROMPT', () => {
     it('contains all four phases', () => {
       expect(CONSOLIDATION_SYSTEM_PROMPT).toContain('Phase 1');
