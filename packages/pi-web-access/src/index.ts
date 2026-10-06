@@ -213,7 +213,7 @@ export default function piWebToolExtension(pi: ExtensionAPI): void {
             return;
           }
           try {
-            const result = await runSearch({ query });
+            const result = await runSearch({ query }, cmdCtx.signal);
             cmdCtx.ui.notify(result.content[0]!.text, result.isError ? 'error' : 'info');
           } catch {
             console.error('[pi-web-access] web-search command failed');

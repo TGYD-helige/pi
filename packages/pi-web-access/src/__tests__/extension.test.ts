@@ -82,8 +82,9 @@ describe('piWebToolExtension - tool registration', () => {
     };
     expect(command).toBeDefined();
     const notify = vi.fn();
-    await command.handler('Workers', { ui: { notify } });
-    expect(mockSearch).toHaveBeenCalledWith({ query: 'Workers' }, expect.any(Object), undefined);
+    const signal = new AbortController().signal;
+    await command.handler('Workers', { ui: { notify }, signal });
+    expect(mockSearch).toHaveBeenCalledWith({ query: 'Workers' }, expect.any(Object), signal);
     expect(notify).toHaveBeenCalledWith(expect.stringContaining('cloudflare'), 'info');
   });
 

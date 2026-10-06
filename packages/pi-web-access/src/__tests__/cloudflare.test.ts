@@ -13,7 +13,11 @@ describe('Cloudflare search', () => {
     vi.stubGlobal('fetch', mockFetch);
     mockFetch.mockReset();
   });
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
 
   it('routes search through the default gateway and returns normalized results', async () => {
     mockFetch.mockResolvedValue(
@@ -109,10 +113,12 @@ describe('Cloudflare search', () => {
   });
 
   it('sanitizes HTTP and network errors', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     mockFetch.mockResolvedValueOnce(new Response('secret-token upstream-body', { status: 403 }));
     await expect(search({ query: 'test' }, settings)).rejects.toThrow(
       'Cloudflare Web Search API error (HTTP 403).',
     );
+    expect(log).toHaveBeenCalledWith('[pi-web-access] Cloudflare Web Search API error (HTTP 403)');
     mockFetch.mockRejectedValueOnce(new Error('secret-token network details'));
     await expect(search({ query: 'test' }, settings)).rejects.toThrow(
       'Cloudflare search request failed or was cancelled.',
@@ -120,6 +126,10 @@ describe('Cloudflare search', () => {
   });
 
   it.each([
+    { apiKey: 123 },
+    { accountId: 123 },
+    { gatewayId: { secret: 'invalid-value' } },
+    { byokAlias: 123 },
     { accountId: '' },
     { accountId: '../bad' },
     { searchProvider: 'unknown' },
@@ -176,5 +186,57 @@ describe('Cloudflare search', () => {
     ).rejects.toThrow('Cloudflare API token not configured');
     expect(mockFetch).not.toHaveBeenCalled();
     vi.unstubAllEnvs();
+  });
+
+  it.each([
+    {},
+    { metadata: { requestId: 'request-123' } },
+  ])('accepts an omitted results array', async (data) => {
+    mockFetch.mockResolvedValue(new Response(JSON.stringify(data)));
+    await expect(search({ query: 'test' }, settings)).resolves.toMatchObject({ results: [] });
+  });
+
+  it('preserves useful prefixes when single-line titles and descriptions exceed the byte budget', async () => {
+    mockFetch.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          items: [
+            {
+              title: `标题前缀${'长'.repeat(5000)}`,
+              url: 'https://example.com',
+              description: `摘要前缀${'长'.repeat(5000)}`,
+            },
+          ],
+        }),
+      ),
+    );
+    const result = await search({ query: 'test' }, settings);
+    expect(result.results[0]!.title).toMatch(/^标题前缀/);
+    expect(result.results[0]!.content).toMatch(/^摘要前缀/);
+    expect(Buffer.byteLength(result.results[0]!.title)).toBeLessThanOrEqual(256);
+    expect(Buffer.byteLength(result.results[0]!.content)).toBeLessThanOrEqual(2000);
+  });
+
+  it('counts Unicode query characters rather than UTF-16 units', async () => {
+    mockFetch.mockResolvedValue(new Response(JSON.stringify({ items: [] })));
+    await expect(search({ query: '😀'.repeat(1024) }, settings)).resolves.toMatchObject({
+      results: [],
+    });
+    await expect(search({ query: '😀'.repeat(1025) }, settings)).rejects.toThrow('1–1024');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { success: false },
+    { errors: [{ message: 'secret upstream error' }] },
+    { items: null },
+    { items: {} },
+  ])('logs malformed or failed response diagnostics without exposing response contents', async (data) => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockFetch.mockResolvedValue(new Response(JSON.stringify(data)));
+    await expect(search({ query: 'test' }, settings)).rejects.toThrow('invalid search response');
+    expect(log).toHaveBeenCalledWith(
+      '[pi-web-access] Cloudflare returned an invalid search response',
+    );
   });
 });

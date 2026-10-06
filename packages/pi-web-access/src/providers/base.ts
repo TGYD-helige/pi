@@ -22,9 +22,6 @@ export function timeoutSignal(timeoutMs: number, signal?: AbortSignal): AbortSig
 export interface ResolvedProvider extends ProviderConfig {
   id: BuiltInProviderId;
   baseUrl: string;
-  apiKey?: string;
-  model?: string;
-  headers?: Record<string, string>;
   timeoutMs?: number;
 }
 
