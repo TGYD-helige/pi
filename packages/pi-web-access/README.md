@@ -8,7 +8,7 @@ Pi extension for web search and URL content extraction.
 
 ### `web_search`
 
-Search the web for information. Registered when a keyed search provider is available, or when the keyless `parallel` provider is explicitly selected.
+Search the web for information. Also available via `/web-search <query>`. Registered when a keyed search provider is available, or when the keyless `parallel` provider is explicitly selected.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -52,6 +52,7 @@ Search the web for images. Only registered when an image search provider (`dashs
 
 | Provider | Search | Fetch | X Search | Image Search | Default Base URL | Env Var | Default Model |
 |----------|:------:|:-----:|:--------:|:------------:|------------------|---------|---------------|
+| `cloudflare` | ✓ | ✗ | ✗ | ✗ | `https://api.cloudflare.com/client/v4` | `CLOUDFLARE_API_TOKEN` | - |
 | `parallel` | ✓ | ✗ | ✗ | ✗ | `https://search.parallel.ai/mcp` | no key | - |
 | `tavily` | ✓ | ✓ | ✗ | ✗ | `https://api.tavily.com` | `TAVILY_API_KEY` | - |
 | `brave` | ✓ | ✗ | ✗ | ✗ | `https://api.search.brave.com` | `BRAVE_API_KEY` | - |
@@ -69,6 +70,39 @@ Search the web for images. Only registered when an image search provider (`dashs
 | `dashscope` | ✓ | ✓ | ✗ | ✓ | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `DASHSCOPE_API_KEY` | `qwen3.8-flash` |
 | `unsplash` | ✗ | ✗ | ✗ | ✓ | `https://api.unsplash.com` | `UNSPLASH_ACCESS_KEY` | - |
 | `you` | ✓ | ✓ | ✗ | ✗ | `https://ydc-index.io` | `YDC_API_KEY` | - |
+
+### Cloudflare Web Search
+
+Set `search.provider` to `"cloudflare"`. The [Cloudflare Web Search REST API](https://developers.cloudflare.com/web-search/how-to-use/) requires an account ID, an API token with **Workers AI: Read** and **AI Gateway: Read** permissions, and an AI Gateway with credits or a stored provider key. The default gateway is `default`; the default search provider is `ceramic`.
+
+```json
+{
+  "pi-web-access": {
+    "search": { "provider": "cloudflare" },
+    "providers": {
+      "cloudflare": {
+        "apiKey": "${CLOUDFLARE_API_TOKEN}",
+        "accountId": "${CLOUDFLARE_ACCOUNT_ID}",
+        "gatewayId": "default",
+        "searchProvider": "ceramic"
+      }
+    }
+  }
+}
+```
+
+`apiKey` and `accountId` fall back to `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. Cloudflare is also eligible for automatic selection when both are available, after the existing search providers. Configure interpolated values in user or agent settings; trusted project settings do not expand environment variables.
+
+Cloudflare-only provider settings:
+
+| Field | Description |
+|-------|-------------|
+| `accountId` | Cloudflare account ID (required; environment fallback supported). |
+| `gatewayId` | AI Gateway ID (default `default`). |
+| `searchProvider` | `ceramic`, `exa`, or `linkup` (default `ceramic`). |
+| `byokAlias` | Optional alias of a provider key stored in AI Gateway. If it is missing on the gateway, the API fails rather than falling back to credits. |
+
+Requests use `POST {baseUrl}/accounts/{accountId}/ai/websearch/`. Queries must contain 1–1024 characters. `maxResults` defaults to 5 and is capped at 10; `topic`, `timeRange`, `includeDomains`, and `excludeDomains` are ignored because this API does not support them. Results contain titles, URLs, and description snippets, without a synthesized answer; large snippets are truncated. Cloudflare supports search only.
 
 Custom Kimi base URLs must support both `/chat/completions` and `/formulas/*`.
 
@@ -177,7 +211,7 @@ Providers only override methods they support. Provider-specific capabilities (li
 
 ## Tool Registration Rules
 
-- `web_search` — registered when a search provider has an API key, or when keyless `parallel` is explicitly selected.
+- `web_search` and `/web-search <query>` — registered when a search provider has an API key, or when keyless `parallel` is explicitly selected.
 - `web_fetch` — registered when `fetch.provider` or `fetch.summary` is configured.
 - `x_search` — registered when xai provider has an API key.
 - `image_search` — registered when an image search provider (dashscope, unsplash) has an API key; `/image-search` command is registered alongside it. An `imageSearch.provider` that doesn't support image search (e.g. `"openai"`) is treated as unconfigured.

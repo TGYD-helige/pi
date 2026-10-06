@@ -1,7 +1,7 @@
 {
   "name": "@amaster.ai/pi-web-access",
   "version": "0.1.2-beta.15",
-  "description": "Pi extension for web search, URL content extraction, and image search (Tavily, Kimi, DeepSeek, Mimo, Z.AI, DashScope, Unsplash, and more)",
+  "description": "Pi extension for web search, URL content extraction, and image search (Cloudflare, Tavily, Kimi, DeepSeek, Mimo, Z.AI, DashScope, Unsplash, and more)",
   "keywords": [
     "pi-package",
     "pi",
@@ -9,6 +9,7 @@
     "web-search",
     "web-access",
     "image-search",
+    "cloudflare",
     "tavily",
     "kimi",
     "deepseek",

@@ -18,6 +18,38 @@ describe('resolveProvider', () => {
     process.env = originalEnv;
   });
 
+  it('resolves Cloudflare credentials from environment with default gateway and provider', () => {
+    process.env.CLOUDFLARE_API_TOKEN = 'cf-token';
+    process.env.CLOUDFLARE_ACCOUNT_ID = 'env-account';
+    expect(resolveProvider('cloudflare', {})).toEqual({
+      id: 'cloudflare',
+      baseUrl: 'https://api.cloudflare.com/client/v4',
+      apiKey: 'cf-token',
+      accountId: 'env-account',
+      gatewayId: 'default',
+      searchProvider: 'ceramic',
+    });
+    expect(
+      resolveProvider('cloudflare', {
+        providers: {
+          cloudflare: {
+            apiKey: 'configured-token',
+            accountId: 'configured-account',
+            gatewayId: 'configured-gateway',
+            searchProvider: 'linkup',
+            byokAlias: 'my-key',
+          },
+        },
+      }),
+    ).toMatchObject({
+      apiKey: 'configured-token',
+      accountId: 'configured-account',
+      gatewayId: 'configured-gateway',
+      searchProvider: 'linkup',
+      byokAlias: 'my-key',
+    });
+  });
+
   it('resolves tavily with env var', () => {
     process.env.TAVILY_API_KEY = 'test-tavily-key';
     const result = resolveProvider('tavily', {});
@@ -267,6 +299,20 @@ describe('resolveSearchProvider', () => {
 
   afterEach(() => {
     process.env = originalEnv;
+  });
+
+  it('auto-selects Cloudflare only with both credentials and preserves existing provider priority', () => {
+    process.env = {};
+    const cloudflare = { apiKey: 'cf-token', accountId: 'account-123' };
+    expect(resolveSearchProvider({ providers: { cloudflare } })).toMatchObject({
+      id: 'cloudflare',
+    });
+    expect(
+      resolveSearchProvider({ providers: { cloudflare: { apiKey: 'cf-token' } } }),
+    ).toHaveProperty('error');
+    expect(
+      resolveSearchProvider({ providers: { cloudflare, tavily: { apiKey: 'tavily-key' } } }),
+    ).toMatchObject({ id: 'tavily' });
   });
 
   it('uses search.provider when set', () => {
