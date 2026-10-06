@@ -100,6 +100,14 @@ export function toPiToolResult(
 } {
   const content: PiToolContent[] = [];
   const details = boundStructuredContent(result.structuredContent);
+  const elementTokens = new Map<number, string>();
+  if (toolName === 'get_window_state') {
+    for (const element of asRecordArray(result.structuredContent?.elements)) {
+      if (typeof element.element_index === 'number' && typeof element.element_token === 'string') {
+        elementTokens.set(element.element_index, element.element_token);
+      }
+    }
+  }
   const enrichment = fitSerializedString(
     toolName ? (buildEnrichment(toolName, result) ?? '') : '',
     ENRICHMENT_MAX_BYTES,
@@ -121,7 +129,16 @@ export function toPiToolResult(
     }
     if (item.type !== 'text' || !item.text || remainingBytes <= 0 || remainingLines <= 0) continue;
 
-    const initial = truncateHead(item.text, {
+    const sourceText = item.text.replace(
+      /^([ \t]*- \[(\d+)\])(.*)$/gm,
+      (row, prefix, index, rest) => {
+        const token = elementTokens.get(Number(index));
+        return token && !rest.includes(`element_token=${token}`)
+          ? `${prefix} element_token=${token}${rest}`
+          : row;
+      },
+    );
+    const initial = truncateHead(sourceText, {
       maxBytes: remainingBytes,
       maxLines: remainingLines,
     });
@@ -132,7 +149,7 @@ export function toPiToolResult(
     const notice = byteLength(noticeCandidate) <= remainingBytes ? noticeCandidate : '';
     const textBudget = Math.max(0, remainingBytes - byteLength(notice));
     const text = `${fitSerializedString(
-      item.text,
+      sourceText,
       textBudget,
       Math.max(1, remainingLines - (notice ? 2 : 0)),
     )}${notice}`;
@@ -225,10 +242,21 @@ function buildEnrichment(toolName: string, result: McpToolResult): string | unde
     .join('\n');
   const parts: string[] = [];
 
+  if (toolName === 'get_window_state' || toolName === 'get_desktop_state') {
+    if (
+      typeof sc.capture_id === 'string' &&
+      !existingText.includes(`capture_id=${sc.capture_id}`)
+    ) {
+      parts.push(
+        `capture_id=${sc.capture_id} (source screenshot for pixel actions and visual parsing)`,
+      );
+    }
+  }
+
   if (toolName === 'get_window_state') {
     const snapshotId = typeof sc.snapshot_id === 'string' ? sc.snapshot_id : undefined;
     if (snapshotId && !existingText.includes(`snapshot_id=${snapshotId}`)) {
-      parts.push(`snapshot_id=${snapshotId} (pair with element_index for element addressing)`);
+      parts.push(`snapshot_id=${snapshotId} (use element_token for element addressing)`);
     }
     if (sc.degraded === true || typeof sc.degraded_reason === 'string') {
       const reason = typeof sc.degraded_reason === 'string' ? sc.degraded_reason : 'unknown';

@@ -2,12 +2,12 @@
 
 ![pi-computer-use preview](https://raw.githubusercontent.com/TGYD-helige/pi/master/packages/pi-computer-use/preview.png)
 
-Cross-platform computer-use tools for Pi desktop automation. The extension exposes a native MCP tool surface with a `computer_use_` prefix. The bundled runtime comes from the official [Cua Driver Rust 0.28.2 release](https://github.com/trycua/cua/releases/tag/cua-driver-rs-v0.28.2).
+Cross-platform computer-use tools for Pi desktop automation. The extension exposes a native MCP tool surface with a `computer_use_` prefix. The bundled runtime comes from the official [Cua Driver Rust 0.34.0 release](https://github.com/trycua/cua/releases/tag/cua-driver-rs-v0.34.0).
 
 ## What it provides
 
-- One Rust 0.28.2 driver line across macOS, Linux, and Windows
-- 56 version-pinned upstream tools, including sessions, element tokens, accessibility + screenshot state, native input, browser tools, diagnostics, recording, and permission policy support
+- One Rust 0.34.0 driver line across macOS, Linux, and Windows
+- 58 version-pinned upstream tools, including sessions, element tokens, accessibility + screenshot state, native input, browser tools, diagnostics, recording, and permission policy support
 - Deferred tool activation: only the core toolset is active by default; extra groups are activated on demand via `computer_use_tools` or `/computer-use-tools`
 - Full MCP text, image, and `structuredContent` forwarding
 - Owned daemon + MCP proxy lifecycle with session-owned reconnect and per-call cancellation
@@ -16,7 +16,9 @@ Cross-platform computer-use tools for Pi desktop automation. The extension expos
 - Bounded text and structured results before they enter Pi's context
 - Optional secondary vision analysis through a configured Pi model
 
-`get_window_state` is the primary perception tool. Cua Driver 0.28 returns the accessibility tree, structured elements with `element_token`, and a screenshot in one response. The standalone `screenshot` tool no longer exists.
+`get_window_state` is the primary perception tool. Cua Driver 0.34 returns the accessibility tree, structured elements with `element_token`, and a screenshot in one response. The standalone `screenshot` tool no longer exists.
+
+The `cursor` group exposes six motion styles through `set_agent_cursor_motion`: `signature_arc`, `spring_settle`, `magnetic`, `comet_swoop`, `adaptive`, and `classic`. Set initial motion with `start_session.cursor_motion`, or save defaults through `set_config` using `cursor.motion.*` keys. The `diagnostics` group includes `parse_visual_regions` for registered captures and `install_extension` for optional Driver-managed extensions; preview the plan first, then request installation with `confirm:true`. With the default `confirmDangerousActions:true`, Pi also requires interactive user approval before installation.
 
 ## Install
 
@@ -27,6 +29,8 @@ bun add @amaster.ai/pi-computer-use
 The package selects one signed/precompiled platform runtime through npm `optionalDependencies`. Installation does not download from GitHub, and no separate Cua Driver installation is required. Offline mirrors must include `@amaster.ai/pi-computer-use` and the matching `@amaster.ai/pi-computer-use-cua-driver-*` package.
 
 Upgrading from Cua Driver 0.9 is a deliberate public-tool migration: upstream removed `set_agent_cursor_style` and replaced it with `set_agent_cursor_theme`. The new tool selects an installed `theme_id`; the old custom color/image parameters have no 0.28 equivalent.
+
+Upgrading to Cua Driver 0.34 removes `element_index` and `snapshot_id` from action parameters. Use the current snapshot's `element_token` for accessibility actions; `element_index` remains display metadata. For pixel actions, pass `capture_id` from the source screenshot when available. A fresh snapshot invalidates previous element tokens, so refresh state before acting again.
 
 ## Configuration
 
@@ -47,12 +51,12 @@ Project settings are loaded only after project trust is accepted. `${ENV_VAR}` i
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `mode` | `"bundled" \| "path"` | `"bundled"` | Use the packaged 0.28.2 driver or a compatible custom binary |
+| `mode` | `"bundled" \| "path"` | `"bundled"` | Use the packaged 0.34.0 driver or a compatible custom binary |
 | `binaryPath` | `string` | — | Custom driver path when `mode` is `"path"` |
 | `extraArgs` | `string[]` | — | Additional arguments appended to `cua-driver mcp` |
 | `confirmAppLaunch` | `boolean` | `true` | Ask once per app target before `launch_app` |
-| `confirmDangerousActions` | `boolean` | `true` | Confirm high-risk tools such as `kill_app` and `replay_trajectory`; recording always requires confirmation |
-| `toolProfile` | `"core" \| "full"` | `"core"` | `"core"` activates only the everyday toolset at session start; `"full"` activates all 56 driver tools |
+| `confirmDangerousActions` | `boolean` | `true` | Confirm high-risk tools such as `kill_app`, `replay_trajectory`, and `install_extension` with `confirm:true`; recording always requires confirmation |
+| `toolProfile` | `"core" \| "full"` | `"core"` | `"core"` activates only the everyday toolset at session start; `"full"` activates all 58 driver tools |
 | `visionModel` | `{ provider, model }` | — | Register `computer_use_analyze_screenshot` |
 
 In non-interactive modes, confirmation-required tools return an error unless the corresponding confirmation setting is explicitly disabled.
@@ -69,7 +73,7 @@ With the default `core` profile, only everyday tools are visible to the model (`
 | `cursor` | `move_cursor`, `set_agent_cursor_enabled`, `set_agent_cursor_motion`, `set_agent_cursor_theme`, `get_agent_cursor_state` |
 | `window` | `list_windows`, `bring_to_front`, `set_window_frame`, `invoke_menu`, `kill_app` |
 | `clipboard` | `clipboard_read`, `clipboard_write` |
-| `diagnostics` | `check_permissions`, `health_report`, `get_config`, `set_config`, `check_for_update`, `get_desktop_state`, `get_screen_size`, `get_cursor_position`, `get_accessibility_tree` |
+| `diagnostics` | `check_permissions`, `health_report`, `get_config`, `set_config`, `check_for_update`, `get_desktop_state`, `get_screen_size`, `get_cursor_position`, `get_accessibility_tree`, `parse_visual_regions`, `install_extension` |
 
 Activated groups stay active for the rest of the session; each new session starts from the configured profile again.
 
@@ -90,7 +94,7 @@ Activated groups stay active for the rest of the session; each new session start
 
 ## Runtime and permissions
 
-On macOS, `session_start` registers the generated 0.28.2 manifest without starting the driver. The signed app and MCP proxy start lazily on the first computer-use tool call, which requests any missing permissions through `check_permissions({ prompt: true })`. Existing grants do not raise another system dialog. The requested tool still runs and reports its own capability or permission error. Linux and Windows keep eager startup: they discover the exact live `tools/list` surface and call `check_permissions({ prompt: false })`. If discovery fails, the extension registers `computer_use_connect` (and `/computer-use-connect`) so a later retry can install the exact live platform contract without advertising another OS's schemas.
+On macOS, `session_start` registers the generated 0.34.0 manifest without starting the driver. The signed app and MCP proxy start lazily on the first computer-use tool call, which requests any missing permissions through `check_permissions({ prompt: true })`. Existing grants do not raise another system dialog. The requested tool still runs and reports its own capability or permission error. Linux and Windows keep eager startup: they discover the exact live `tools/list` surface and call `check_permissions({ prompt: false })`. If discovery fails, the extension registers `computer_use_connect` (and `/computer-use-connect`) so a later retry can install the exact live platform contract without advertising another OS's schemas.
 
 Driver startup, reconnect, and the first macOS permission probe are session-owned. Cancelling a tool stops only that caller's wait or MCP request; session shutdown aborts the shared work. macOS and Linux also use a transient pipe-backed lease to stop the owned daemon after an abrupt host exit; no persistent service or system scheduler is installed.
 
@@ -115,8 +119,7 @@ Driver startup, reconnect, and the first macOS permission probe are session-owne
 
 1. `computer_use_launch_app` or `computer_use_list_apps`
 2. `computer_use_get_window_state`
-3. Act using `element_token`/`element_index`, falling back to pixels for
-   custom-drawn surfaces
+3. Act using `element_token`, falling back to pixels for custom-drawn surfaces
 4. Re-run `computer_use_get_window_state` and verify the change
 5. When the task needs more than the core toolset (browser automation,
    recording, escalated sessions, ...), call `computer_use_tools` with the

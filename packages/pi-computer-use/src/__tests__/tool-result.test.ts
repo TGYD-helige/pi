@@ -44,6 +44,39 @@ describe('toPiToolResult', () => {
   });
 
   describe('model-visible enrichment', () => {
+    it('exposes actual element tokens on their matching tree rows', () => {
+      const result = toPiToolResult(
+        {
+          content: [{ type: 'text', text: '- [0] AXWindow "App"\n  - [7] AXButton "Save"' }],
+          structuredContent: {
+            elements: [
+              { element_index: 0, element_token: 's00000001:0' },
+              { element_index: 7, element_token: 's00000001:7' },
+            ],
+          },
+        },
+        'get_window_state',
+      );
+      const text = result.content.map((c) => ('text' in c ? c.text : '')).join('\n');
+      expect(text).toContain('- [0] element_token=s00000001:0 AXWindow "App"');
+      expect(text).toContain('  - [7] element_token=s00000001:7 AXButton "Save"');
+    });
+
+    it.each([
+      'get_window_state',
+      'get_desktop_state',
+    ])('exposes the source capture ID from %s', (toolName) => {
+      const result = toPiToolResult(
+        {
+          content: [{ type: 'text', text: 'Screenshot captured.' }],
+          structuredContent: { capture_id: 'capture-123' },
+        },
+        toolName,
+      );
+      const text = result.content.map((c) => ('text' in c ? c.text : '')).join('\n');
+      expect(text).toContain('capture_id=capture-123');
+    });
+
     it('preserves snapshot addressing within the total line budget', () => {
       const result = toPiToolResult(
         {
@@ -58,7 +91,7 @@ describe('toPiToolResult', () => {
       expect(text).toContain('truncated output');
     });
 
-    it('appends snapshot_id for get_window_state when the driver text lacks it', () => {
+    it('appends snapshot_id with current token guidance when the driver text lacks it', () => {
       const result = toPiToolResult(
         {
           content: [{ type: 'text', text: 'window_id=8419 pid=47184 elements=2\n' }],
@@ -68,6 +101,8 @@ describe('toPiToolResult', () => {
       );
       const text = result.content.map((c) => ('text' in c ? c.text : '')).join('\n');
       expect(text).toContain('snapshot_id=s0000000d');
+      expect(text).toContain('use element_token');
+      expect(text).not.toContain('pair with element_index');
     });
 
     it('does not duplicate snapshot_id when the driver text already carries it', () => {

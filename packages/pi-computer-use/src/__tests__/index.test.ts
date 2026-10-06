@@ -788,6 +788,51 @@ describe('computerUseExtension', () => {
     expect(mockCtx.ui.confirm).toHaveBeenCalledTimes(2);
   });
 
+  it('previews optional extensions freely but gates installation on user confirmation', async () => {
+    await start();
+    const invoked: string[] = [];
+    mockCallTool = (name) => {
+      invoked.push(name);
+      return { content: [{ type: 'text', text: 'plan' }] };
+    };
+    const install = tools.get('computer_use_install_extension')!;
+    await install.execute('preview', { name: 'perception' }, undefined, undefined, mockCtx);
+    expect(mockCtx.ui.confirm).not.toHaveBeenCalled();
+    expect(invoked).toContain('install_extension');
+    invoked.length = 0;
+    mockCtx.ui.confirm.mockResolvedValueOnce(false);
+
+    const denied = await install.execute(
+      'install',
+      { name: 'perception', confirm: true },
+      undefined,
+      undefined,
+      mockCtx,
+    );
+    expect(denied).toMatchObject({ isError: true });
+    expect(mockCtx.ui.confirm).toHaveBeenCalledOnce();
+    expect(invoked).not.toContain('install_extension');
+
+    const nonInteractive = await install.execute(
+      'headless',
+      { name: 'perception', confirm: true },
+      undefined,
+      undefined,
+      { ...mockCtx, hasUI: false },
+    );
+    expect(nonInteractive).toMatchObject({ isError: true });
+    expect(invoked).not.toContain('install_extension');
+    const approved = await install.execute(
+      'approved',
+      { name: 'perception', confirm: true },
+      undefined,
+      undefined,
+      mockCtx,
+    );
+    expect(approved).not.toMatchObject({ isError: true });
+    expect(invoked).toContain('install_extension');
+  });
+
   it('requires confirmation and a cwd-contained output for trajectory recording', async () => {
     let invoked = false;
     let recordingArgs: Record<string, unknown> | undefined;
@@ -1111,6 +1156,17 @@ describe('computerUseExtension', () => {
       expect(active).toContain('computer_use_browser_click');
       expect(active).toContain('computer_use_browser_navigate');
       expect(active).not.toContain('computer_use_start_recording');
+    });
+
+    it('activates optional extensions and visual parsing through diagnostics', async () => {
+      await start();
+      expect(mockPi.getActiveTools()).not.toContain('computer_use_parse_visual_regions');
+      expect(mockPi.getActiveTools()).not.toContain('computer_use_install_extension');
+
+      await commands.get('computer-use-tools')!.handler('diagnostics', mockCtx);
+
+      expect(mockPi.getActiveTools()).toContain('computer_use_parse_visual_regions');
+      expect(mockPi.getActiveTools()).toContain('computer_use_install_extension');
     });
 
     it('reports group activation as idempotent', async () => {

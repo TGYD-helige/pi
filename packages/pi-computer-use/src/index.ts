@@ -190,7 +190,9 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
 
     if (
       toolName === 'start_recording' ||
-      (HIGH_RISK_TOOLS.has(toolName) && config?.confirmDangerousActions !== false)
+      ((HIGH_RISK_TOOLS.has(toolName) ||
+        (toolName === 'install_extension' && params.confirm === true)) &&
+        config?.confirmDangerousActions !== false)
     ) {
       if (!ctx.hasUI) return false;
       const approved = await ctx.ui.confirm(
