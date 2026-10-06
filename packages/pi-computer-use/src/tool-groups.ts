@@ -85,7 +85,7 @@ export const TOOL_GROUPS: Readonly<Record<string, ToolGroup>> = {
     tools: ['clipboard_read', 'clipboard_write'],
   },
   diagnostics: {
-    summary: 'Permissions, health report, driver config, display and desktop info',
+    summary: 'Permissions, health, driver config, display info, visual parsing and extensions',
     tools: [
       'check_permissions',
       'health_report',
@@ -96,6 +96,8 @@ export const TOOL_GROUPS: Readonly<Record<string, ToolGroup>> = {
       'get_screen_size',
       'get_cursor_position',
       'get_accessibility_tree',
+      'parse_visual_regions',
+      'install_extension',
     ],
   },
 };

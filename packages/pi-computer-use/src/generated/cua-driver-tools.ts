@@ -1,14 +1,19 @@
-// biome-ignore-all format: Generated from Cua Driver Rust 0.28.2 tools/list. Do not edit manually.
+// biome-ignore-all format: Generated from Cua Driver Rust 0.34.0 tools/list. Do not edit manually.
 export default {
-  "driverVersion": "0.28.2",
+  "driverVersion": "0.34.0",
   "generatedFrom": "darwin-universal",
   "tools": [
     {
       "name": "list_apps",
-      "description": "List macOS apps — both currently running and installed-but-not-running — with per-app state flags:\n\n- running: is a process for this app live? (pid is 0 when false)\n- active: is it the system-frontmost app? (implies running)\n- launch_path: filesystem path to the `.app` bundle, when known. Pass this to `launch_app` to start the app cold.\n- kind: `\"desktop\"` for `.app` bundles on macOS.\n- last_used: RFC3339 timestamp from the bundle's filesystem mtime, when readable; otherwise null.\n\nOnly apps with NSApplicationActivationPolicyRegular are included — background helpers and system UI agents are filtered out. Installed apps come from scanning /Applications, /Applications/Utilities, ~/Applications, /System/Applications, and /System/Applications/Utilities.\n\nUse this for \"is X installed?\" as well as \"is X running?\". For per-window state — on-screen, on-current-Space, minimized, window titles — call list_windows instead. For just opening an app — running or not — call launch_app({bundle_id: ...}) directly; list_apps is not a prerequisite.",
+      "description": "List macOS apps — both currently running and installed-but-not-running — with per-app state flags:\n\n- running: is a process for this app live? (pid is 0 when false)\n- active: is it the system-frontmost app? (implies running)\n- launch_path: filesystem path to the `.app` bundle, when known. Pass this to `launch_app` to start the app cold.\n- kind: `\"desktop\"` for `.app` bundles on macOS.\n- last_used: RFC3339 timestamp from the bundle's filesystem mtime, when readable; otherwise null.\n\nStandalone running entries include only apps with NSApplicationActivationPolicyRegular — background helpers and system UI agents are filtered out. Installed apps resolve their running/pid state against all live processes by bundle identifier, so an installed app whose process runs as an accessory (LSUIElement / menu-bar apps, e.g. Cua Driver itself) still reports its live pid. Installed apps come from scanning /Applications, /Applications/Utilities, ~/Applications, /System/Applications, and /System/Applications/Utilities.\n\nUse this for \"is X installed?\" as well as \"is X running?\". For per-window state — on-screen, on-current-Space, minimized, window titles — call list_windows instead. For just opening an app — running or not — call launch_app({bundle_id: ...}) directly; list_apps is not a prerequisite.",
       "inputSchema": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "session": {
+            "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
+            "type": "string"
+          }
+        },
         "additionalProperties": false
       },
       "outputSchema": {
@@ -51,7 +56,6 @@ export default {
                       "type": "string"
                     },
                     "pid": {
-                      "format": "uint32",
                       "minimum": 0,
                       "type": "integer"
                     },
@@ -107,7 +111,7 @@ export default {
     },
     {
       "name": "list_windows",
-      "description": "List all layer-0 top-level windows currently known to WindowServer. Includes off-screen windows (minimized, on another Space, hidden-launched). Use this to find a window_id before calling get_window_state.\n\nPer-record fields: window_id, pid, app_name, title, bounds (x/y/width/height, top-left origin), z_index (integer or null; higher values are closer to the front; null means stacking order is unavailable and callers must not infer one), is_on_screen, space_ids, current_space_id (the active Space on that window's display), and on_current_space. The top-level current_space_id is WindowServer's main/global active Space and can differ from a record's current_space_id when displays use independent Spaces. To select a frontmost candidate, take the maximum integer z_index; if every value is null, use an explicit fallback instead of relying on array order.",
+      "description": "List all layer-0 top-level windows currently known to WindowServer. Includes off-screen windows (minimized, on another Space, hidden-launched). Use this to find a window_id before calling get_window_state. AppKit-internal helper windows (off screen, untitled, in no Space, and absent from the app's AXWindows) are omitted: no tool can read, move, or focus them.\n\nPer-record fields: window_id, pid, app_name, title, bounds (x/y/width/height, top-left origin), z_index (integer or null; higher values are closer to the front; null means stacking order is unavailable and callers must not infer one), is_on_screen, space_ids, current_space_id (the active Space on that window's display), and on_current_space. The top-level current_space_id is WindowServer's main/global active Space and can differ from a record's current_space_id when displays use independent Spaces. To select a frontmost candidate, take the maximum integer z_index; if every value is null, use an explicit fallback instead of relying on array order.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -118,6 +122,10 @@ export default {
           "pid": {
             "description": "Optional pid filter. When set, only this pid's windows are returned.",
             "type": "integer"
+          },
+          "session": {
+            "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
+            "type": "string"
           }
         },
         "additionalProperties": false
@@ -129,7 +137,6 @@ export default {
             "additionalProperties": true,
             "properties": {
               "current_space_id": {
-                "format": "uint64",
                 "minimum": 0,
                 "type": [
                   "integer",
@@ -145,19 +152,15 @@ export default {
                     "bounds": {
                       "properties": {
                         "height": {
-                          "format": "double",
                           "type": "number"
                         },
                         "width": {
-                          "format": "double",
                           "type": "number"
                         },
                         "x": {
-                          "format": "double",
                           "type": "number"
                         },
                         "y": {
-                          "format": "double",
                           "type": "number"
                         }
                       },
@@ -170,7 +173,6 @@ export default {
                       "type": "object"
                     },
                     "current_space_id": {
-                      "format": "uint64",
                       "minimum": 0,
                       "type": [
                         "integer",
@@ -209,7 +211,6 @@ export default {
                     },
                     "space_ids": {
                       "items": {
-                        "format": "uint64",
                         "minimum": 0,
                         "type": "integer"
                       },
@@ -218,8 +219,10 @@ export default {
                         "null"
                       ]
                     },
+                    "title": {
+                      "type": "string"
+                    },
                     "window_id": {
-                      "format": "uint64",
                       "minimum": 0,
                       "type": "integer"
                     },
@@ -282,12 +285,12 @@ export default {
     },
     {
       "name": "get_window_state",
-      "description": "Walk a running app's AX tree and return BOTH a structured `elements` array (preferred) AND a Markdown rendering of the same tree (back-compat). Every actionable element is tagged with [element_index N] in the markdown and as `element_index` in the structured array — pass those indices to click, type_text, press_key, etc.\n\nINVARIANT: call get_window_state once per turn per (pid, window_id) before any element-indexed action. The index map is replaced by the next snapshot.\n\nPREFERRED CONSUMERS read `structuredContent.elements` (one entry per indexed row with `element_index`, `role`, `label`, `value` (the element's text/AXValue when present — use it to verify what a field holds), `actions` (names of AX actions exposed by the element, omitted when empty), `frame: {x,y,w,h}`, `parent_index`, `depth`). The markdown `tree_markdown` stays available and unchanged in shape for existing text-parsing callers — but new fields will only be added to the structured side.\n\nAlways returns BOTH the element tree AND a screenshot — ground on both and cross-check (the tree lies on some surfaces: Electron echo-confirms, Catalyst null values, virtualized off-viewport rows with `h:1` frames). You choose the modality at ACTION time, not here: an element ax action (pass `element_index`/`element_token` → the accessibility rung) or an element px action (pass `x`,`y` → the pixel rung, read straight off this screenshot). `capture_mode` is deprecated and ignored. Pass `include_screenshot:false` to skip the grab and get the tree only — the cheap path when you're just re-indexing before an element ax action.\n\nThe mirror image: pass `include_accessibility_tree:false` to SKIP the AX walk entirely (the expensive part, up to 20 s) and return just the screenshot plus window metadata — `window_bounds`, `screenshot_scale`, `screenshot_width`/`screenshot_height`, `app_name`, and `window_title` — the capture-only path for rendering a live window preview / picture-in-picture without paying for perception. Setting BOTH `include_accessibility_tree:false` and `include_screenshot:false` is an error (nothing to return). Optional `max_dimension` caps the returned screenshot's long edge in pixels (aspect preserved) for a cheap thumbnail.\n\nThe snapshot is SCOPED to `window_id`: a window_id that no longer exists is refused with `window_id_not_found`, and one owned by another process is refused with `window_owner_pid_mismatch` naming the real `owner_pid` to retry with (macOS hosts a sandboxed app's Open/Save panel out-of-process, so its window belongs to the panel service, not the app). If the window is live under this pid but its accessibility surface can't be resolved, the tree comes back EMPTY with `degraded_reason: ax_window_unresolved` and the screenshot of the requested window — act by pixel there. This tool never returns another surface's elements under your window_id. Before exposing a screenshot, its raw dimensions are validated as a coherent 1x/2x representation of the requested WindowServer bounds. `px_frame_mismatch` or `px_capture_unavailable` omits an unprovable screenshot/pixel frame instead of guessing a transform; the truthful AX payload remains available.\n\nOptional `query` projects both tree_markdown and structured `elements` to matching lines plus their ancestor chain (case-insensitive substring). The element_index values are unchanged, the complete snapshot remains actionable, and `element_count` continues to report its total size; `filtered_element_count` reports the projected response size.\n\nOptional `max_elements` / `max_depth` bound the AX walk to mitigate context-window blow-up on Electron / Obsidian / large web apps that produce 10k+ element trees. When applied, BOTH the markdown and the structured elements are truncated identically. Omit both for current default behaviour (≤2 000 elements, depth ≤25).",
+      "description": "Walk a running app's AX tree and return BOTH a structured `elements` array (preferred) AND a Markdown rendering of the same tree (back-compat). Every actionable element is tagged with [element_index N] in the markdown and as `element_index` in the structured array; pass each element's `element_token` to click, type_text, press_key, etc.\n\nINVARIANT: call get_window_state once per turn per (pid, window_id) before any element action. The next snapshot of the window replaces this one, stales its element tokens, and lists the replaced ids in `invalidated_snapshot_ids`.\n\nPREFERRED CONSUMERS read `structuredContent.elements` (one entry per indexed row with `element_index`, `role`, `label`, `value` (the element's text/AXValue when present — use it to verify what a field holds), `actions` (names of AX actions exposed by the element, omitted when empty), `frame: {x,y,w,h}`, `parent_index`, `depth`). The markdown `tree_markdown` stays available and unchanged in shape for existing text-parsing callers — but new fields will only be added to the structured side.\n\nAlways returns BOTH the element tree AND a screenshot — ground on both and cross-check (the tree lies on some surfaces: Electron echo-confirms, Catalyst null values, virtualized off-viewport rows with `h:1` frames). You choose the modality at ACTION time, not here: an element ax action (pass `element_token` → the accessibility rung) or an element px action (pass `x`,`y` → the pixel rung, read straight off this screenshot). `capture_mode` is deprecated and ignored. Pass `include_screenshot:false` to skip the grab and get the tree only — the cheap path when you're just re-indexing before an element ax action.\n\nThe mirror image: pass `include_accessibility_tree:false` to SKIP the AX walk entirely (the expensive part, bounded by timeout_ms) and return just the screenshot plus window metadata — `window_bounds`, `screenshot_scale`, `screenshot_width`/`screenshot_height`, `app_name`, and `window_title` — the capture-only path for rendering a live window preview / picture-in-picture without paying for perception. Setting BOTH `include_accessibility_tree:false` and `include_screenshot:false` is an error (nothing to return). Optional `max_image_dimension` overrides the configured screenshot long-edge limit for this call; use 0 for native resolution. The legacy `max_dimension` remains a tighter cap for compatibility.\n\nThe snapshot is SCOPED to `window_id`: a window_id that no longer exists is refused with `window_id_not_found`, and one owned by another process is refused with `window_owner_pid_mismatch` naming the real `owner_pid` to retry with (macOS hosts a sandboxed app's Open/Save panel out-of-process, so its window belongs to the panel service, not the app). If the window is live under this pid but its accessibility surface can't be resolved, the tree comes back EMPTY with `degraded_reason: ax_window_unresolved` and the screenshot of the requested window; background input is refused until it resolves, so re-snapshot or act with `delivery_mode:\"foreground\"`. When that pid is an app still launching (its window exists before it answers accessibility), the walk first waits up to `timeout_ms` for it; if it never answers, the tree comes back EMPTY with `degraded_reason: ax_app_launching`, `truncated: true` and `truncation_reason: app_lookup_timeout`. A window on another Space still resolves by its exact CGWindowID. This tool never returns another surface's elements under your window_id. Before exposing a screenshot, its raw dimensions are validated as a coherent 1x/2x representation of the requested WindowServer bounds. `px_frame_mismatch` or `px_capture_unavailable` omits an unprovable screenshot/pixel frame instead of guessing a transform; the truthful AX payload remains available.\n\nOptional `query` projects both tree_markdown and structured `elements` to matching lines plus their ancestor chain (case-insensitive substring). The element_index values are unchanged, the complete snapshot remains actionable, and `element_count` continues to report its total size; `filtered_element_count` reports the projected response size.\n\nOptional `max_elements` / `max_depth` bound the AX walk to mitigate context-window blow-up on Electron / Obsidian / large web apps that produce 10k+ element trees. When applied, BOTH the markdown and the structured elements are truncated identically. Omit both for current default behaviour (≤2 000 elements, depth ≤25).",
       "inputSchema": {
         "type": "object",
         "properties": {
           "capture_mode": {
-            "description": "DEPRECATED and ignored. get_window_state always returns BOTH the element tree and a screenshot — ground on both. The modality is chosen at action time by how you address the target: an element ax action (element_index/element_token) or an element px action (x,y). Any value (including the old \"som\"/\"screenshot\" aliases) is accepted but has no effect.",
+            "description": "DEPRECATED and ignored. get_window_state always returns BOTH the element tree and a screenshot — ground on both. The modality is chosen at action time by how you address the target: an element ax action (element_token) or an element px action (x,y). Any value (including the old \"som\"/\"screenshot\" aliases) is accepted but has no effect.",
             "enum": [
               "ax",
               "vision"
@@ -295,7 +298,7 @@ export default {
             "type": "string"
           },
           "include_accessibility_tree": {
-            "description": "Default true — walk the AX tree and return `elements` + `tree_markdown` alongside the screenshot. Set false to SKIP the AX walk entirely (the expensive part, up to 20 s) and return just the screenshot plus window metadata (bounds, scale, app_name, window_title) — the capture-only path for rendering a live window preview / picture-in-picture. Mirrors include_screenshot. Setting BOTH include_accessibility_tree:false AND include_screenshot:false is an error (nothing to return).",
+            "description": "Default true — walk the AX tree and return `elements` + `tree_markdown` alongside the screenshot. Set false to SKIP the AX walk entirely (the expensive part, bounded by timeout_ms) and return just the screenshot plus window metadata (bounds, scale, app_name, window_title) — the capture-only path for rendering a live window preview / picture-in-picture. Mirrors include_screenshot. Setting BOTH include_accessibility_tree:false AND include_screenshot:false is an error (nothing to return).",
             "type": "boolean"
           },
           "include_screenshot": {
@@ -317,6 +320,11 @@ export default {
             "minimum": 1,
             "type": "integer"
           },
+          "max_image_dimension": {
+            "description": "Per-call override for the returned screenshot's long edge in pixels. An explicit value wins over the session/global setting; 0 returns native resolution. Omit to preserve configured behavior.",
+            "minimum": 0,
+            "type": "integer"
+          },
           "pid": {
             "description": "Target process ID.",
             "type": "integer"
@@ -332,6 +340,13 @@ export default {
           "session": {
             "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
             "type": "string"
+          },
+          "timeout_ms": {
+            "default": 1000,
+            "description": "Wall-clock budget in milliseconds for the accessibility-tree walk (default 1000, min 100, max 120000). Bounds the WHOLE walk. When the budget runs out the tool returns the PARTIAL tree it has, flagged with `truncated: true`, `truncation_reason`, `nodes_visited`, `nodes_pending` and `elements_complete: false`; retry with a larger value (e.g. 5000) or narrow with `query` / `max_depth`.",
+            "maximum": 120000,
+            "minimum": 100,
+            "type": "integer"
           },
           "window_id": {
             "description": "Target window ID from list_windows.",
@@ -369,7 +384,6 @@ export default {
                 ]
               },
               "element_count": {
-                "format": "uint64",
                 "minimum": 0,
                 "type": [
                   "integer",
@@ -389,12 +403,10 @@ export default {
                       ]
                     },
                     "depth": {
-                      "format": "uint32",
                       "minimum": 0,
                       "type": "integer"
                     },
                     "element_index": {
-                      "format": "uint64",
                       "minimum": 0,
                       "type": "integer"
                     },
@@ -413,19 +425,15 @@ export default {
                     "frame": {
                       "properties": {
                         "h": {
-                          "format": "double",
                           "type": "number"
                         },
                         "w": {
-                          "format": "double",
                           "type": "number"
                         },
                         "x": {
-                          "format": "double",
                           "type": "number"
                         },
                         "y": {
-                          "format": "double",
                           "type": "number"
                         }
                       },
@@ -453,21 +461,18 @@ export default {
                       ]
                     },
                     "max": {
-                      "format": "double",
                       "type": [
                         "number",
                         "null"
                       ]
                     },
                     "min": {
-                      "format": "double",
                       "type": [
                         "number",
                         "null"
                       ]
                     },
                     "parent_index": {
-                      "format": "uint64",
                       "minimum": 0,
                       "type": [
                         "integer",
@@ -515,7 +520,6 @@ export default {
                 ]
               },
               "filtered_element_count": {
-                "format": "uint64",
                 "minimum": 0,
                 "type": [
                   "integer",
@@ -523,12 +527,10 @@ export default {
                 ]
               },
               "pid": {
-                "format": "uint32",
                 "minimum": 0,
                 "type": "integer"
               },
               "returned_element_count": {
-                "format": "uint64",
                 "minimum": 0,
                 "type": [
                   "integer",
@@ -548,7 +550,6 @@ export default {
                 ]
               },
               "screenshot_height": {
-                "format": "uint32",
                 "minimum": 0,
                 "type": [
                   "integer",
@@ -562,14 +563,12 @@ export default {
                 ]
               },
               "screenshot_scale": {
-                "format": "double",
                 "type": [
                   "number",
                   "null"
                 ]
               },
               "screenshot_width": {
-                "format": "uint32",
                 "minimum": 0,
                 "type": [
                   "integer",
@@ -583,7 +582,6 @@ export default {
                 ]
               },
               "total_element_count": {
-                "format": "uint64",
                 "minimum": 0,
                 "type": [
                   "integer",
@@ -611,19 +609,15 @@ export default {
               "window_bounds": {
                 "properties": {
                   "height": {
-                    "format": "double",
                     "type": "number"
                   },
                   "width": {
-                    "format": "double",
                     "type": "number"
                   },
                   "x": {
-                    "format": "double",
                     "type": "number"
                   },
                   "y": {
-                    "format": "double",
                     "type": "number"
                   }
                 },
@@ -639,7 +633,6 @@ export default {
                 ]
               },
               "window_id": {
-                "format": "uint64",
                 "minimum": 0,
                 "type": "integer"
               },
@@ -708,9 +701,6 @@ export default {
                     },
                     "exists": {
                       "description": "Assert that at least one trusted element matches the selector.\n\nElement walks are not yet exhaustive on every platform, so absence\ncannot be proven. `false` is rejected instead of returning an\nindefinitely-unknown predicate.",
-                      "enum": [
-                        true
-                      ],
                       "type": "boolean"
                     },
                     "selected": {
@@ -853,7 +843,6 @@ export default {
             "additionalProperties": true,
             "properties": {
               "elapsed_ms": {
-                "format": "uint64",
                 "minimum": 0,
                 "type": "integer"
               },
@@ -861,7 +850,6 @@ export default {
                 "items": {
                   "properties": {
                     "index": {
-                      "format": "uint64",
                       "minimum": 0,
                       "type": "integer"
                     },
@@ -914,7 +902,6 @@ export default {
                 "type": "array"
               },
               "samples": {
-                "format": "uint64",
                 "minimum": 0,
                 "type": "integer"
               },
@@ -994,6 +981,10 @@ export default {
             "description": "App display name. Used only when bundle_id is absent.",
             "type": "string"
           },
+          "session": {
+            "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
+            "type": "string"
+          },
           "urls": {
             "description": "Optional file paths or URLs to open with the app (e.g. a folder path for Finder).",
             "items": {
@@ -1024,6 +1015,10 @@ export default {
           "pid": {
             "description": "PID of the process to terminate.",
             "type": "integer"
+          },
+          "session": {
+            "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
+            "type": "string"
           }
         },
         "required": [
@@ -1040,14 +1035,20 @@ export default {
     },
     {
       "name": "bring_to_front",
-      "description": "Persistently activate an app and leave it in the foreground. Most input does not need this; use it only for a focus-proxy surface that must remain foreground across interactions. With window_id, success means the exact ordinary macOS window was independently verified as the focused window and first in WindowServer layer-0 order. Request acceptance alone is reported as a partial result, never as activation. This DOES steal foreground.",
+      "description": "Persistently activate an app and leave it in the foreground. Most input does not need this; use it only for a focus-proxy surface that must remain foreground across interactions. With window_id, success means the exact ordinary macOS window was independently verified as the frontmost process's focused window and the front window of that process on the display it sits on. `exact_window_effect.frontmost_ordinary` additionally reports whether it is first in the global WindowServer layer-0 order; another application (an always-raised utility window, another display's front window) can hold that spot without the requested window losing keyboard focus, so it is reported and not required. Request acceptance alone is reported as a partial result, never as activation. This DOES steal foreground and does NOT restore the previously frontmost application.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "pid": {
+            "description": "Process ID of the app to activate.",
             "type": "integer"
           },
+          "session": {
+            "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
+            "type": "string"
+          },
           "window_id": {
+            "description": "CGWindowID to verify as the focused, frontmost window. Omit to activate the app only.",
             "type": "integer"
           }
         },
@@ -1070,10 +1071,12 @@ export default {
         "type": "object",
         "properties": {
           "height": {
+            "description": "New height, in the same units as list_windows bounds.",
             "minimum": 1,
             "type": "number"
           },
           "pid": {
+            "description": "Process ID that owns the window.",
             "minimum": 1,
             "type": "integer"
           },
@@ -1082,17 +1085,21 @@ export default {
             "type": "string"
           },
           "width": {
+            "description": "New width, in the same units as list_windows bounds.",
             "minimum": 1,
             "type": "number"
           },
           "window_id": {
+            "description": "Window ID from list_windows.",
             "minimum": 1,
             "type": "integer"
           },
           "x": {
+            "description": "New left edge in the desktop coordinate space reported by list_windows.",
             "type": "number"
           },
           "y": {
+            "description": "New top edge in the desktop coordinate space reported by list_windows.",
             "type": "number"
           }
         },
@@ -1116,7 +1123,6 @@ export default {
                 "additionalProperties": false,
                 "properties": {
                   "delivered_count": {
-                    "format": "uint32",
                     "minimum": 0,
                     "type": [
                       "integer",
@@ -1150,6 +1156,27 @@ export default {
                   "refused"
                 ],
                 "type": "string"
+              },
+              "error": {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "hint": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "code"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
               },
               "escalation": {
                 "additionalProperties": false,
@@ -1187,6 +1214,12 @@ export default {
                 "items": {
                   "additionalProperties": false,
                   "properties": {
+                    "detail": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
                     "kind": {
                       "enum": [
                         "value_readback",
@@ -1215,6 +1248,12 @@ export default {
                   "trusted_input"
                 ],
                 "type": "string"
+              },
+              "summary": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -1260,6 +1299,7 @@ export default {
         "type": "object",
         "properties": {
           "path": {
+            "description": "Menu labels from the top-level menu to the item, e.g. `[\"File\", \"Save As...\"]`\n(1 to 16 labels).",
             "items": {
               "maxLength": 200,
               "minLength": 1,
@@ -1270,6 +1310,7 @@ export default {
             "type": "array"
           },
           "pid": {
+            "description": "Process ID of the application that owns the menu.",
             "minimum": 1,
             "type": "integer"
           },
@@ -1278,6 +1319,7 @@ export default {
             "type": "string"
           },
           "window_id": {
+            "description": "Window ID from list_windows whose menu is invoked.",
             "minimum": 1,
             "type": "integer"
           }
@@ -1288,7 +1330,7 @@ export default {
           "path"
         ],
         "additionalProperties": false,
-        "description": "Exact, immediate-child application menu path to resolve and invoke through\nthe operating system's accessibility API. Path labels are matched after\ntrimming surrounding whitespace and otherwise remain case-sensitive."
+        "description": "Exact, immediate-child application menu path to resolve and invoke through\nthe operating system's accessibility API. Path labels are matched after\ntrimming surrounding whitespace and otherwise remain case-sensitive. On\nmacOS, three periods in a label also match the ellipsis character that\nnative menu titles use (`Save As...` finds `Save As…`)."
       },
       "outputSchema": {
         "type": "object",
@@ -1300,7 +1342,6 @@ export default {
                 "additionalProperties": false,
                 "properties": {
                   "delivered_count": {
-                    "format": "uint32",
                     "minimum": 0,
                     "type": [
                       "integer",
@@ -1334,6 +1375,27 @@ export default {
                   "refused"
                 ],
                 "type": "string"
+              },
+              "error": {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "hint": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "code"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
               },
               "escalation": {
                 "additionalProperties": false,
@@ -1371,6 +1433,12 @@ export default {
                 "items": {
                   "additionalProperties": false,
                   "properties": {
+                    "detail": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
                     "kind": {
                       "enum": [
                         "value_readback",
@@ -1399,6 +1467,12 @@ export default {
                   "trusted_input"
                 ],
                 "type": "string"
+              },
+              "summary": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -1439,7 +1513,7 @@ export default {
     },
     {
       "name": "click",
-      "description": "Click against a target pid. **Prefer `element_token` over pixel coordinates** — the token works on backgrounded / minimized / hidden / off-Space windows, identifies one exact snapshot element, and tells you what you're clicking via the cached element's role + label. Reach for `x, y` only when the target is a canvas / video / WebGL / custom-drawn surface that doesn't appear in the AX tree.\n\nTwo addressing modes:\n\n- element_token, or element_index + snapshot_id (from get_window_state): AX action path. Works on backgrounded/hidden windows. No cursor move, no focus steal. The snapshot cache is scoped per (pid, window_id) and is replaced by the next snapshot of the same window — re-snapshot every turn before clicking.\n\n- x, y (window-local screenshot pixels, top-left origin of the PNG returned by get_window_state): CGEvent path. Synthesizes mouse events and posts to pid. Use modifier for cmd/shift/option/ctrl. Needs a visible on-screen window to anchor the conversion.\n\nbutton: \"left\" (default), \"right\", or \"middle\". Defaults to left so the field is fully back-compat — omit it and you get the legacy left-click behaviour. Pixel path: routes through the CGEvent left/right/middle mouse-button primitives. AX path: \"right\" maps to AXShowMenu (same surface as the dedicated `right_click` tool); \"middle\" has no AX equivalent and falls back to a pixel middle-click at the element's center.\naction: press (default), show_menu, pick, confirm, cancel, open.\nfrom_zoom: set true after a zoom call to auto-translate zoom-image pixel coordinates to full-window space.",
+      "description": "Click against a target pid. **Prefer `element_token` over pixel coordinates** — the token works on backgrounded / minimized / hidden / off-Space windows, identifies one exact snapshot element, and tells you what you're clicking via the cached element's role + label. Reach for `x, y` only when the target is a canvas / video / WebGL / custom-drawn surface that doesn't appear in the AX tree.\n\nTwo addressing modes:\n\n- element_token (from get_window_state): AX action path. Works on backgrounded/hidden windows. No cursor move, no focus steal. The snapshot cache is scoped per (pid, window_id) and is replaced by the next snapshot of the same window — re-snapshot every turn before clicking.\n\n- x, y (window-local screenshot pixels, top-left origin of the PNG returned by get_window_state): CGEvent path. Synthesizes mouse events and posts to pid. Use modifier for cmd/shift/option/ctrl. Needs a visible on-screen window to anchor the conversion.\n\nbutton: \"left\" (default), \"right\", or \"middle\". Defaults to left so the field is fully back-compat — omit it and you get the legacy left-click behaviour. Pixel path: routes through the CGEvent left/right/middle mouse-button primitives. AX path: \"right\" maps to AXShowMenu (same surface as the dedicated `right_click` tool); \"middle\" has no AX equivalent and falls back to a pixel middle-click at the element's center.\naction: press (default), show_menu, pick, confirm, cancel, open.\nfrom_zoom: set true after a zoom call to auto-translate zoom-image pixel coordinates to full-window space.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1456,6 +1530,10 @@ export default {
             ],
             "type": "string"
           },
+          "capture_id": {
+            "description": "Optional immutable source capture ID returned by get_window_state or get_desktop_state. With x,y, Driver atomically admits and consumes that exact capture before dispatch; stale, mismatched, or out-of-bounds captures are refused without fallback.",
+            "type": "string"
+          },
           "count": {
             "description": "Click count (pixel path only). Default 1.",
             "type": "integer"
@@ -1465,19 +1543,16 @@ export default {
             "type": "string"
           },
           "delivery_mode": {
-            "description": "Best-effort-background ladder rung (default \"background\"). \"background\": perform the AX action or post the CGEvent without fronting. \"foreground\": briefly front the window, act, let transient UI settle, then restore the prior frontmost app. Requires window_id. Modified clicks require \"foreground\" so macOS observes physical modifier-key state. A generic click has no independent postcondition read-back, except selection of list-like AX rows whose AXSelected state can be confirmed; otherwise confirm the effect from a fresh state snapshot. Use the agent loop: background AX (element_index) → snapshot → background pixel (x/y) → snapshot → delivery_mode:\"foreground\".",
+            "description": "Best-effort-background ladder rung (default \"background\"). \"background\": perform the AX action or post the CGEvent without fronting. \"foreground\": briefly front the window, act, let transient UI settle, then restore the prior frontmost app. Requires window_id. Modified clicks require \"foreground\" so macOS observes physical modifier-key state. A generic click has no independent postcondition read-back, except selection of list-like AX rows whose AXSelected state can be confirmed; otherwise confirm the effect from a fresh state snapshot. Use the agent loop: background AX (element_token) → snapshot → background pixel (x/y) → snapshot → delivery_mode:\"foreground\".",
             "enum": [
               "background",
               "foreground"
             ],
             "type": "string"
           },
-          "element_index": {
-            "description": "Element index from get_window_state. Requires the matching `snapshot_id` alongside it. Prefer `element_token`, which carries both values.",
-            "type": "integer"
-          },
           "element_token": {
-            "description": "Opaque per-snapshot element handle from `structuredContent.elements[].element_token`. If element_index, snapshot_id, or window_id are also supplied they must agree. Returns an explicit stale error once a newer snapshot supersedes it.",
+            "description": "Opaque per-snapshot element handle from `structuredContent.elements[].element_token`. Returns an explicit stale error naming the current snapshots once a newer read supersedes it.",
+            "pattern": "^s[0-9a-f]{8}:[0-9]+$",
             "type": "string"
           },
           "from_zoom": {
@@ -1507,11 +1582,6 @@ export default {
             "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
             "type": "string"
           },
-          "snapshot_id": {
-            "description": "Snapshot handle from get_window_state. Required when targeting by element_index; stale snapshots fail closed.",
-            "pattern": "^s[0-9a-f]{8}$",
-            "type": "string"
-          },
           "target": {
             "description": "Exact capture/input target selected independently for each action.\n\n`display_id=\"primary\"` is the portable desktop target in this release.\nPlatforms that cannot address another display reject it explicitly rather\nthan silently changing coordinate spaces.",
             "oneOf": [
@@ -1523,12 +1593,10 @@ export default {
                     "type": "string"
                   },
                   "pid": {
-                    "format": "uint32",
                     "minimum": 0,
                     "type": "integer"
                   },
                   "window_id": {
-                    "format": "uint64",
                     "minimum": 0,
                     "type": "integer"
                   }
@@ -1560,7 +1628,7 @@ export default {
             ]
           },
           "window_id": {
-            "description": "Target window ID. Required for element_index. Optional when element_token is supplied (the token carries it).",
+            "description": "Target window ID. Omit when element_token is supplied (the token carries it).",
             "type": "integer"
           },
           "x": {
@@ -1585,7 +1653,6 @@ export default {
                 "additionalProperties": false,
                 "properties": {
                   "delivered_count": {
-                    "format": "uint32",
                     "minimum": 0,
                     "type": [
                       "integer",
@@ -1619,6 +1686,27 @@ export default {
                   "refused"
                 ],
                 "type": "string"
+              },
+              "error": {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "hint": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "code"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
               },
               "escalation": {
                 "additionalProperties": false,
@@ -1656,6 +1744,12 @@ export default {
                 "items": {
                   "additionalProperties": false,
                   "properties": {
+                    "detail": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
                     "kind": {
                       "enum": [
                         "value_readback",
@@ -1684,6 +1778,12 @@ export default {
                   "trusted_input"
                 ],
                 "type": "string"
+              },
+              "summary": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -1724,7 +1824,7 @@ export default {
     },
     {
       "name": "double_click",
-      "description": "Double-click at (x, y) or on an AX element identified by element_index + window_id.\n\nAX path (element_index provided): performs `AXOpen` when the element advertises it (Finder items, openable list rows/cells); otherwise resolves the element's on-screen center and falls back to a pixel double-click there.\n\nPixel path (x, y provided): two down/up pairs ~80 ms apart at the given coordinates.",
+      "description": "Double-click at (x, y) or on an AX element identified by element_token.\n\nAX path (element_token provided): performs `AXOpen` when the element advertises it (Finder items, openable list rows/cells); otherwise resolves the element's on-screen center and falls back to a pixel double-click there.\n\nPixel path (x, y provided): two down/up pairs ~80 ms apart at the given coordinates.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1736,28 +1836,21 @@ export default {
             ],
             "type": "string"
           },
-          "element_index": {
-            "description": "Element index from get_window_state. Requires the matching `snapshot_id` alongside it. Prefer `element_token`, which carries both values.",
-            "type": "integer"
-          },
           "element_token": {
-            "description": "Opaque per-snapshot element handle from `structuredContent.elements[].element_token`. If element_index, snapshot_id, or window_id are also supplied they must agree. Returns an explicit stale error once a newer snapshot supersedes it.",
+            "description": "Opaque per-snapshot element handle from `structuredContent.elements[].element_token`. Returns an explicit stale error naming the current snapshots once a newer read supersedes it.",
+            "pattern": "^s[0-9a-f]{8}:[0-9]+$",
             "type": "string"
           },
           "pid": {
+            "description": "Target process ID.",
             "type": "integer"
           },
           "session": {
             "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
             "type": "string"
           },
-          "snapshot_id": {
-            "description": "Snapshot handle from get_window_state. Required when targeting by element_index; stale snapshots fail closed.",
-            "pattern": "^s[0-9a-f]{8}$",
-            "type": "string"
-          },
           "window_id": {
-            "description": "CGWindowID. Required when element_index is used. Optional when element_token is supplied (the token carries it).",
+            "description": "CGWindowID. Omit when element_token is supplied (the token carries it).",
             "type": "integer"
           },
           "x": {
@@ -1784,7 +1877,6 @@ export default {
                 "additionalProperties": false,
                 "properties": {
                   "delivered_count": {
-                    "format": "uint32",
                     "minimum": 0,
                     "type": [
                       "integer",
@@ -1818,6 +1910,27 @@ export default {
                   "refused"
                 ],
                 "type": "string"
+              },
+              "error": {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "hint": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "code"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
               },
               "escalation": {
                 "additionalProperties": false,
@@ -1855,6 +1968,12 @@ export default {
                 "items": {
                   "additionalProperties": false,
                   "properties": {
+                    "detail": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
                     "kind": {
                       "enum": [
                         "value_readback",
@@ -1883,6 +2002,12 @@ export default {
                   "trusted_input"
                 ],
                 "type": "string"
+              },
+              "summary": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -1923,7 +2048,7 @@ export default {
     },
     {
       "name": "right_click",
-      "description": "Right-click against a target pid. Two addressing modes:\n\n- `element_index` + `window_id` (from the last `get_window_state` snapshot) — performs `AXShowMenu` on the cached element. Pure AX RPC, works on backgrounded / hidden windows, no cursor move or focus steal. Requires a prior `get_window_state(pid, window_id)` in this turn.\n\n- `x`, `y` — synthesizes `rightMouseDown` / `rightMouseUp` CGEvent pair posted to the pid. Driver converts image-pixel → screen-point internally. `modifier` forces the CGEvent path (AX actions don't propagate modifier keys).\n\nExactly one of `element_index` or (`x` AND `y`) must be provided. `pid` always required. `window_id` required when `element_index` is used.",
+      "description": "Right-click against a target pid. Two addressing modes:\n\n- `element_token` (from the last `get_window_state` snapshot) — performs `AXShowMenu` on the cached element. Pure AX RPC, works on backgrounded / hidden windows, no cursor move or focus steal. Requires a prior `get_window_state(pid, window_id)` in this turn.\n\n- `x`, `y` — synthesizes `rightMouseDown` / `rightMouseUp` CGEvent pair posted to the pid. Driver converts image-pixel → screen-point internally. `modifier` forces the CGEvent path (AX actions don't propagate modifier keys).\n\nExactly one of `element_token` or (`x` AND `y`) must be provided. `pid` always required.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1935,12 +2060,9 @@ export default {
             ],
             "type": "string"
           },
-          "element_index": {
-            "description": "Element index from get_window_state. Requires the matching `snapshot_id` alongside it. Prefer `element_token`, which carries both values.",
-            "type": "integer"
-          },
           "element_token": {
-            "description": "Opaque per-snapshot element handle from `structuredContent.elements[].element_token`. If element_index, snapshot_id, or window_id are also supplied they must agree. Returns an explicit stale error once a newer snapshot supersedes it.",
+            "description": "Opaque per-snapshot element handle from `structuredContent.elements[].element_token`. Returns an explicit stale error naming the current snapshots once a newer read supersedes it.",
+            "pattern": "^s[0-9a-f]{8}:[0-9]+$",
             "type": "string"
           },
           "modifier": {
@@ -1958,13 +2080,8 @@ export default {
             "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
             "type": "string"
           },
-          "snapshot_id": {
-            "description": "Snapshot handle from get_window_state. Required when targeting by element_index; stale snapshots fail closed.",
-            "pattern": "^s[0-9a-f]{8}$",
-            "type": "string"
-          },
           "window_id": {
-            "description": "CGWindowID. Required when element_index is used. Optional when element_token is supplied (the token carries it).",
+            "description": "CGWindowID. Omit when element_token is supplied (the token carries it).",
             "type": "integer"
           },
           "x": {
@@ -1991,7 +2108,6 @@ export default {
                 "additionalProperties": false,
                 "properties": {
                   "delivered_count": {
-                    "format": "uint32",
                     "minimum": 0,
                     "type": [
                       "integer",
@@ -2025,6 +2141,27 @@ export default {
                   "refused"
                 ],
                 "type": "string"
+              },
+              "error": {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "hint": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "code"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
               },
               "escalation": {
                 "additionalProperties": false,
@@ -2062,6 +2199,12 @@ export default {
                 "items": {
                   "additionalProperties": false,
                   "properties": {
+                    "detail": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
                     "kind": {
                       "enum": [
                         "value_readback",
@@ -2090,6 +2233,12 @@ export default {
                   "trusted_input"
                 ],
                 "type": "string"
+              },
+              "summary": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -2130,7 +2279,7 @@ export default {
     },
     {
       "name": "drag",
-      "description": "Press-drag-release gesture from (from_x, from_y) to (to_x, to_y) in window-local screenshot pixels — the same space get_window_state returns. Top-left origin of the target's window.\n\nUse for: marquee/lasso selection, drag-and-drop, resizing via a handle, scrubbing a slider, repositioning a panel.\n\n`duration_ms` (default 500) is the wall-clock budget for the path between mouse-down and mouse-up; `steps` (default 20) is the number of intermediate mouseDragged events linearly interpolated along the path. Increase both for slower, more human drags; decrease for snap gestures.\n\n`modifier` keys (cmd/shift/option/ctrl) are held across the entire gesture.\n\nWhen `from_zoom` is true, coordinates are in the last zoom image for this pid; the driver maps them back to window coordinates before dispatching.",
+      "description": "Press-drag-release gesture from (from_x, from_y) to (to_x, to_y) in window-local screenshot pixels — the same space get_window_state returns. Top-left origin of the target's window.\n\nUse for: marquee/lasso selection, drag-and-drop, resizing via a handle, scrubbing a slider, repositioning a panel.\n\n`duration_ms` (default 500) is the wall-clock budget for the path between mouse-down and mouse-up; `steps` (default 20) is the number of intermediate mouseDragged events linearly interpolated along the path. Increase both for slower, more human drags; decrease for snap gestures.\n\n`modifier` keys (cmd/shift/option/ctrl) are held across the entire gesture.\n\nWhen `from_zoom` is true, coordinates are in the last zoom image for this pid; the driver maps them back to window coordinates before dispatching.\n\nmacOS has no background drag: a window-scoped drag needs delivery_mode:\"foreground\" and window_id. It briefly fronts the exact window, moves the physical pointer along the path, then restores the prior frontmost app. Without delivery_mode:\"foreground\" the call is refused with background_unavailable and nothing is sent.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2144,7 +2293,7 @@ export default {
             "type": "string"
           },
           "delivery_mode": {
-            "description": "Best-effort-background ladder rung (default \"background\"). \"background\": inject without fronting or raising the target — no focus steal. \"foreground\": briefly front the target, act, then restore the prior frontmost — the explicit last resort when a background attempt didn't land. Re-call with \"foreground\" only for the action that needs it.",
+            "description": "Window-scoped drag on macOS supports only \"foreground\": briefly front the exact window (window_id required), drive the physical pointer through the gesture, then restore the prior frontmost app. The default \"background\" is refused with background_unavailable because macOS has no background drag route. Desktop scope ignores this field.",
             "enum": [
               "background",
               "foreground"
@@ -2212,12 +2361,10 @@ export default {
                         "type": "string"
                       },
                       "pid": {
-                        "format": "uint32",
                         "minimum": 0,
                         "type": "integer"
                       },
                       "window_id": {
-                        "format": "uint64",
                         "minimum": 0,
                         "type": "integer"
                       }
@@ -2251,7 +2398,8 @@ export default {
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "Preferred per-call target: an exact window (`kind=\"window\"`, `pid`, `window_id`) or the\nprimary desktop (`kind=\"desktop\"`, `display_id=\"primary\"`)."
           },
           "to_x": {
             "description": "Drag-end X in window-local screenshot pixels.",
@@ -2284,7 +2432,6 @@ export default {
                 "additionalProperties": false,
                 "properties": {
                   "delivered_count": {
-                    "format": "uint32",
                     "minimum": 0,
                     "type": [
                       "integer",
@@ -2318,6 +2465,27 @@ export default {
                   "refused"
                 ],
                 "type": "string"
+              },
+              "error": {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "hint": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "code"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
               },
               "escalation": {
                 "additionalProperties": false,
@@ -2355,6 +2523,12 @@ export default {
                 "items": {
                   "additionalProperties": false,
                   "properties": {
+                    "detail": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
                     "kind": {
                       "enum": [
                         "value_readback",
@@ -2383,6 +2557,12 @@ export default {
                   "trusted_input"
                 ],
                 "type": "string"
+              },
+              "summary": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -2423,7 +2603,7 @@ export default {
     },
     {
       "name": "type_text",
-      "description": "Insert text into the target pid via `AXSetAttribute(kAXSelectedText)`. Works for standard Cocoa text fields and text views. No keystrokes are synthesized — special keys (Return / Escape / arrows) go through `press_key` / `hotkey`. For Chromium / Electron inputs that don't implement `kAXSelectedText`, the tool falls back to CGEvent character synthesis automatically when the estimated route stays within the daemon transport budget. Longer synthesized routes are refused before character events and return a safe chunk size; one-call AX insertion remains uncapped.\n\nOptional `element_index` + `window_id` (from the last `get_window_state` snapshot) directs the write to a specific field. Without `element_index`, the write goes to the pid's currently focused element.\n\nWEB CONTENT (Chromium/WebKit/Electron — browser tabs, Slack, VS Code, X's compose box): AXValue is not independent proof that the renderer/DOM observed an AX write or synthesized keystrokes. The driver detects this at the element level (an AXWebArea ancestor) and refuses to trust AXValue-only read-back there — type_text returns effect:\"unverifiable\" + escalation, never a false \"confirmed\" (a browser's own native address bar/toolbar stays trusted). For a browser TAB the reliable path is the `page` tool (drives the DOM via CDP); for an embedded web view use this tool's px form: pass x,y (no element_index) to pixel-click the field then type, in one call. NOTE: a px focus-click won't reliably open+focus a CLOSED control; AX-press to open/activate it first (works in the background), then px-type. Always confirm via the screenshot; if px-background still drops, escalate to delivery_mode:\"foreground\".",
+      "description": "Insert text into the target pid via `AXSetAttribute(kAXSelectedText)`. Works for standard Cocoa text fields and text views. No keystrokes are synthesized — special keys (Return / Escape / arrows) go through `press_key` / `hotkey`. For Chromium / Electron inputs that don't implement `kAXSelectedText`, the tool falls back to CGEvent character synthesis automatically when the estimated route stays within the daemon transport budget. Longer synthesized routes are refused before character events and return a safe chunk size; one-call AX insertion remains uncapped.\n\nOptional `element_token` (from the last `get_window_state` snapshot) directs the write to a specific field. Without `element_token`, the write goes to the pid's currently focused element.\n\nWEB CONTENT (Chromium/WebKit/Electron — browser tabs, Slack, VS Code, X's compose box): AXValue is not independent proof that the renderer/DOM observed an AX write or synthesized keystrokes. The driver detects this at the element level (an AXWebArea ancestor) and refuses to trust AXValue-only read-back there. Electron AX targets that are web content or cannot be proven native refuse background delivery before mutation because the AX route cannot establish exact renderer focus; use the px form or explicit foreground delivery. Other web-content paths return effect:\"unverifiable\" + escalation, never a false \"confirmed\" (a browser's own native address bar/toolbar stays trusted). For a browser TAB the reliable path is the `page` tool (drives the DOM via CDP); for an embedded web view use this tool's px form: pass x,y (no element_token) to pixel-click the field then type, in one call. NOTE: a px focus-click won't reliably open+focus a CLOSED control; AX-press to open/activate it first (works in the background), then px-type. Always confirm via the screenshot; if px-background still drops, escalate to delivery_mode:\"foreground\".",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2441,12 +2621,9 @@ export default {
             ],
             "type": "string"
           },
-          "element_index": {
-            "description": "Element index from get_window_state. Requires the matching `snapshot_id` alongside it. Prefer `element_token`, which carries both values.",
-            "type": "integer"
-          },
           "element_token": {
-            "description": "Opaque per-snapshot element handle from `structuredContent.elements[].element_token`. If element_index, snapshot_id, or window_id are also supplied they must agree. Returns an explicit stale error once a newer snapshot supersedes it.",
+            "description": "Opaque per-snapshot element handle from `structuredContent.elements[].element_token`. Returns an explicit stale error naming the current snapshots once a newer read supersedes it.",
+            "pattern": "^s[0-9a-f]{8}:[0-9]+$",
             "type": "string"
           },
           "pid": {
@@ -2466,11 +2643,6 @@ export default {
             "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
             "type": "string"
           },
-          "snapshot_id": {
-            "description": "Snapshot handle from get_window_state. Required when targeting by element_index; stale snapshots fail closed.",
-            "pattern": "^s[0-9a-f]{8}$",
-            "type": "string"
-          },
           "target": {
             "anyOf": [
               {
@@ -2484,12 +2656,10 @@ export default {
                         "type": "string"
                       },
                       "pid": {
-                        "format": "uint32",
                         "minimum": 0,
                         "type": "integer"
                       },
                       "window_id": {
-                        "format": "uint64",
                         "minimum": 0,
                         "type": "integer"
                       }
@@ -2523,18 +2693,19 @@ export default {
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "Preferred per-call target: an exact window (`kind=\"window\"`, `pid`, `window_id`) or the\nprimary desktop (`kind=\"desktop\"`, `display_id=\"primary\"`)."
           },
           "text": {
             "description": "Text to insert at the target's cursor.",
             "type": "string"
           },
           "window_id": {
-            "description": "CGWindowID. Required when element_index is used. Optional when element_token is supplied (the token carries it).",
+            "description": "CGWindowID. Omit when element_token is supplied (the token carries it).",
             "type": "integer"
           },
           "x": {
-            "description": "Screenshot-pixel X of the field to type into — the element px action form. Pass x,y (no element_index) and the tool pixel-clicks there to establish real renderer focus, then types. Use for Chromium/Electron inputs the AX path can't reach. Read straight off the get_window_state PNG, same convention as click.",
+            "description": "Screenshot-pixel X of the field to type into — the element px action form. Pass x,y (no element_token) and the tool pixel-clicks there to establish real renderer focus, then types. Use for Chromium/Electron inputs the AX path can't reach. Read straight off the get_window_state PNG, same convention as click.",
             "type": "number"
           },
           "y": {
@@ -2557,7 +2728,6 @@ export default {
                 "additionalProperties": false,
                 "properties": {
                   "delivered_count": {
-                    "format": "uint32",
                     "minimum": 0,
                     "type": [
                       "integer",
@@ -2591,6 +2761,27 @@ export default {
                   "refused"
                 ],
                 "type": "string"
+              },
+              "error": {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "hint": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "code"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
               },
               "escalation": {
                 "additionalProperties": false,
@@ -2628,6 +2819,12 @@ export default {
                 "items": {
                   "additionalProperties": false,
                   "properties": {
+                    "detail": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
                     "kind": {
                       "enum": [
                         "value_readback",
@@ -2656,6 +2853,12 @@ export default {
                   "trusted_input"
                 ],
                 "type": "string"
+              },
+              "summary": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -2696,7 +2899,7 @@ export default {
     },
     {
       "name": "press_key",
-      "description": "Press and release a single key. Follows the same `delivery_mode` ladder as click/type_text — it does NOT raise the window by default:\n• `background` (default): post to the pid WITHOUT fronting/raising — the auth-message path (Chromium-safe). With element_index it focuses that AX element first. `window_id` only targets; it does not raise.\n• `foreground`: guard and briefly front the exact window, focus an addressed AX element when supplied, send a genuine HID key transition so Chromium content, inline editors, and native menu equivalents receive it, then restore prior frontmost. Requires window_id.\n\nA key press is confirmed only when a bounded native AX value/selection read-back changes on the same control. Otherwise a successfully attempted post remains effect:\"unverifiable\" without implying delivery failure or recommending foreground. Key names: return, tab, escape, up/down/left/right, space, delete, home, end, pageup, pagedown, f1-f12, plus any letter or digit. Modifiers array: cmd, shift, option/alt, ctrl, fn.",
+      "description": "Press and release a single key. Follows the same `delivery_mode` ladder as click/type_text — it does NOT raise the window by default:\n• `background` (default): post to the pid WITHOUT fronting/raising — the auth-message path (Chromium-safe). With element_token it focuses that AX element first. `window_id` only targets; it does not raise.\n• `foreground`: guard and briefly front the exact window, focus an addressed AX element when supplied, send a genuine HID key transition so Chromium content, inline editors, and native menu equivalents receive it, then restore prior frontmost. Requires window_id.\n\nA key press is confirmed only when a bounded native AX value/selection read-back changes on the same control. Otherwise a successfully attempted post remains effect:\"unverifiable\" without implying delivery failure or recommending foreground. Key names: return, tab, escape, up/down/left/right, space, delete, home, end, pageup, pagedown, f1-f12, plus any letter or digit. Modifiers array: cmd, shift, option/alt, ctrl, fn.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2708,12 +2911,9 @@ export default {
             ],
             "type": "string"
           },
-          "element_index": {
-            "description": "Element index from get_window_state. Requires the matching `snapshot_id` alongside it. Prefer `element_token`, which carries both values.",
-            "type": "integer"
-          },
           "element_token": {
-            "description": "Opaque per-snapshot element handle from `structuredContent.elements[].element_token`. If element_index, snapshot_id, or window_id are also supplied they must agree. Returns an explicit stale error once a newer snapshot supersedes it.",
+            "description": "Opaque per-snapshot element handle from `structuredContent.elements[].element_token`. Returns an explicit stale error naming the current snapshots once a newer read supersedes it.",
+            "pattern": "^s[0-9a-f]{8}:[0-9]+$",
             "type": "string"
           },
           "key": {
@@ -2728,6 +2928,7 @@ export default {
             "type": "array"
           },
           "pid": {
+            "description": "Target process ID.",
             "type": "integer"
           },
           "scope": {
@@ -2743,11 +2944,6 @@ export default {
             "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
             "type": "string"
           },
-          "snapshot_id": {
-            "description": "Snapshot handle from get_window_state. Required when targeting by element_index; stale snapshots fail closed.",
-            "pattern": "^s[0-9a-f]{8}$",
-            "type": "string"
-          },
           "target": {
             "anyOf": [
               {
@@ -2761,12 +2957,10 @@ export default {
                         "type": "string"
                       },
                       "pid": {
-                        "format": "uint32",
                         "minimum": 0,
                         "type": "integer"
                       },
                       "window_id": {
-                        "format": "uint64",
                         "minimum": 0,
                         "type": "integer"
                       }
@@ -2800,14 +2994,15 @@ export default {
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "Preferred per-call target: an exact window (`kind=\"window\"`, `pid`, `window_id`) or the\nprimary desktop (`kind=\"desktop\"`, `display_id=\"primary\"`)."
           },
           "window_id": {
             "description": "Target window. Required for delivery_mode:\"foreground\". Does NOT itself raise the window — raising is gated on delivery_mode.",
             "type": "integer"
           },
           "x": {
-            "description": "Screenshot-pixel X — the element px action form: pixel-click there to focus, then send the key. Use when the key must go to a Chromium/Electron surface the AX path can't focus. Pass with y, no element_index.",
+            "description": "Screenshot-pixel X — the element px action form: pixel-click there to focus, then send the key. Use when the key must go to a Chromium/Electron surface the AX path can't focus. Pass with y, no element_token.",
             "type": "number"
           },
           "y": {
@@ -2830,7 +3025,6 @@ export default {
                 "additionalProperties": false,
                 "properties": {
                   "delivered_count": {
-                    "format": "uint32",
                     "minimum": 0,
                     "type": [
                       "integer",
@@ -2864,6 +3058,27 @@ export default {
                   "refused"
                 ],
                 "type": "string"
+              },
+              "error": {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "hint": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "code"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
               },
               "escalation": {
                 "additionalProperties": false,
@@ -2901,6 +3116,12 @@ export default {
                 "items": {
                   "additionalProperties": false,
                   "properties": {
+                    "detail": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
                     "kind": {
                       "enum": [
                         "value_readback",
@@ -2929,6 +3150,12 @@ export default {
                   "trusted_input"
                 ],
                 "type": "string"
+              },
+              "summary": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -2981,12 +3208,9 @@ export default {
             ],
             "type": "string"
           },
-          "element_index": {
-            "description": "Element index from get_window_state. Requires the matching `snapshot_id` alongside it. Prefer `element_token`, which carries both values.",
-            "type": "integer"
-          },
           "element_token": {
-            "description": "Opaque per-snapshot element handle from `structuredContent.elements[].element_token`. If element_index, snapshot_id, or window_id are also supplied they must agree. Returns an explicit stale error once a newer snapshot supersedes it.",
+            "description": "Opaque per-snapshot element handle from `structuredContent.elements[].element_token`. Returns an explicit stale error naming the current snapshots once a newer read supersedes it.",
+            "pattern": "^s[0-9a-f]{8}:[0-9]+$",
             "type": "string"
           },
           "keys": {
@@ -3014,11 +3238,6 @@ export default {
             "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
             "type": "string"
           },
-          "snapshot_id": {
-            "description": "Snapshot handle from get_window_state. Required when targeting by element_index; stale snapshots fail closed.",
-            "pattern": "^s[0-9a-f]{8}$",
-            "type": "string"
-          },
           "target": {
             "anyOf": [
               {
@@ -3032,12 +3251,10 @@ export default {
                         "type": "string"
                       },
                       "pid": {
-                        "format": "uint32",
                         "minimum": 0,
                         "type": "integer"
                       },
                       "window_id": {
-                        "format": "uint64",
                         "minimum": 0,
                         "type": "integer"
                       }
@@ -3071,7 +3288,8 @@ export default {
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "Preferred per-call target: an exact window (`kind=\"window\"`, `pid`, `window_id`) or the\nprimary desktop (`kind=\"desktop\"`, `display_id=\"primary\"`)."
           },
           "window_id": {
             "description": "Target window. Required for delivery_mode:\"foreground\" (the NSMenu activation needs a window). Does NOT itself raise the window — raising is gated on delivery_mode.",
@@ -3101,7 +3319,6 @@ export default {
                 "additionalProperties": false,
                 "properties": {
                   "delivered_count": {
-                    "format": "uint32",
                     "minimum": 0,
                     "type": [
                       "integer",
@@ -3135,6 +3352,27 @@ export default {
                   "refused"
                 ],
                 "type": "string"
+              },
+              "error": {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "hint": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "code"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
               },
               "escalation": {
                 "additionalProperties": false,
@@ -3172,6 +3410,12 @@ export default {
                 "items": {
                   "additionalProperties": false,
                   "properties": {
+                    "detail": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
                     "kind": {
                       "enum": [
                         "value_readback",
@@ -3200,6 +3444,12 @@ export default {
                   "trusted_input"
                 ],
                 "type": "string"
+              },
+              "summary": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -3240,28 +3490,21 @@ export default {
     },
     {
       "name": "set_value",
-      "description": "Set a value on a UI element. Two modes depending on element role:\n\n- **AXPopUpButton / select dropdown**: finds the child option whose title or value matches `value` (case-insensitive) and AXPresses it directly — the native macOS popup menu is never opened, so focus is never stolen. Use this for HTML <select> elements in Safari or any native NSPopUpButton.\n\n- **All other elements**: writes AXValue directly (sliders, steppers, date pickers, native text fields that expose settable AXValue).\n\nFor free-form text entry into web inputs, prefer `type_text_chars` which synthesises key events — AXValue writes are ignored by WebKit.",
+      "description": "Set a value on a UI element. Two modes depending on element role:\n\n- **AXPopUpButton / select dropdown**: finds the child option whose title or value matches `value` (case-insensitive) and AXPresses it directly — the native macOS popup menu is never opened, so focus is never stolen. Use this for HTML <select> elements in Safari or any native NSPopUpButton.\n\n- **All other elements**: writes AXValue directly (sliders, steppers, date pickers, native text fields that expose settable AXValue).\n\n- **A file's name as Finder lists it** (a text field carrying AXFilename and a file URL, not being edited) or **as Finder's Get Info window shows it** (Finder's text field with AXIdentifier `Name`, not being edited): refused with `file_name_needs_rename`, because the write changes only what Finder shows, never the file. The refusal names the keyboard route that renames it.\n\nFor free-form text entry into web inputs, prefer `type_text_chars` which synthesises key events — AXValue writes are ignored by WebKit.",
       "inputSchema": {
         "type": "object",
         "properties": {
-          "element_index": {
-            "description": "Element index from get_window_state. Requires the matching `snapshot_id` alongside it. Prefer `element_token`, which carries both values.",
-            "type": "integer"
-          },
           "element_token": {
-            "description": "Opaque per-snapshot element handle from `structuredContent.elements[].element_token`. If element_index, snapshot_id, or window_id are also supplied they must agree. Returns an explicit stale error once a newer snapshot supersedes it.",
+            "description": "Opaque per-snapshot element handle from `structuredContent.elements[].element_token`. Returns an explicit stale error naming the current snapshots once a newer read supersedes it.",
+            "pattern": "^s[0-9a-f]{8}:[0-9]+$",
             "type": "string"
           },
           "pid": {
+            "description": "Target process ID.",
             "type": "integer"
           },
           "session": {
             "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
-            "type": "string"
-          },
-          "snapshot_id": {
-            "description": "Snapshot handle from get_window_state. Required when targeting by element_index; stale snapshots fail closed.",
-            "pattern": "^s[0-9a-f]{8}$",
             "type": "string"
           },
           "value": {
@@ -3269,7 +3512,7 @@ export default {
             "type": "string"
           },
           "window_id": {
-            "description": "CGWindowID for the window whose get_window_state produced the element_index. Required when element_index is used; optional when element_token is supplied (the token carries it).",
+            "description": "CGWindowID. Omit when element_token is supplied (the token carries it).",
             "type": "integer"
           }
         },
@@ -3289,7 +3532,6 @@ export default {
                 "additionalProperties": false,
                 "properties": {
                   "delivered_count": {
-                    "format": "uint32",
                     "minimum": 0,
                     "type": [
                       "integer",
@@ -3323,6 +3565,27 @@ export default {
                   "refused"
                 ],
                 "type": "string"
+              },
+              "error": {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "hint": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "code"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
               },
               "escalation": {
                 "additionalProperties": false,
@@ -3360,6 +3623,12 @@ export default {
                 "items": {
                   "additionalProperties": false,
                   "properties": {
+                    "detail": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
                     "kind": {
                       "enum": [
                         "value_readback",
@@ -3388,6 +3657,12 @@ export default {
                   "trusted_input"
                 ],
                 "type": "string"
+              },
+              "summary": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -3428,12 +3703,12 @@ export default {
     },
     {
       "name": "scroll",
-      "description": "Scroll the target pid. Two paths, picked by how you address the scroll:\n\n• **Targeted wheel path** — when you pass a target, either `element_index`/`element_token` (preferred) or window-local `x, y` pixels: the driver synthesizes a real mouse-wheel event (CGEventCreateScrollWheelEvent, at that screen point. The renderer hit-tests the wheel at the cursor, so the scroll lands on whatever element is under the point — exactly like physically rolling the wheel over it. This is the ONLY way to scroll a nested `overflow:auto` region (e.g. a scrollable <div> with no tabindex): such regions never take keyboard focus, so the keystroke path below no-ops on them. Use this for inner/nested scrollers in web views.\n\n• **Keystroke path (focused region)** — when you pass NO target (just pid + direction): synthesizes PageDown/PageUp (by='page') or Down/Up arrows (by='line'); horizontal uses Left/Right arrows. Drives the focused / page scroller only.\n\nMapping: by='page' → larger step; by='line' → smaller step; amount = number of wheel notches (targeted path) or keystroke repetitions (keystroke path).",
+      "description": "Scroll the target pid. Two paths, picked by how you address the scroll:\n\n• **Targeted wheel path** — when you pass a target, either `element_token` (preferred) or window-local `x, y` pixels: the driver synthesizes a real mouse-wheel event (CGEventCreateScrollWheelEvent, at that screen point. The renderer hit-tests the wheel at the cursor, so the scroll lands on whatever element is under the point — exactly like physically rolling the wheel over it. This is the ONLY way to scroll a nested `overflow:auto` region (e.g. a scrollable <div> with no tabindex): such regions never take keyboard focus, so the keystroke path below no-ops on them. Use this for inner/nested scrollers in web views.\n\n• **Keystroke path (focused region)** — when you pass NO target (just pid + direction): synthesizes PageDown/PageUp (by='page') or Down/Up arrows (by='line'); horizontal uses Left/Right arrows. Drives the focused / page scroller only.\n\nMapping: by='page' → larger step; by='line' → smaller step; amount = number of wheel notches (targeted path) or keystroke repetitions (keystroke path).",
       "inputSchema": {
         "type": "object",
         "properties": {
           "amount": {
-            "description": "Pixel-wheel path: number of wheel notches. Keystroke path: number of keystroke repetitions. Default: 3.",
+            "description": "Pixel-wheel path: number of wheel notches. Keystroke path: number of keystroke repetitions. Larger requests are clamped to the maximum. Default: 3.",
             "maximum": 50,
             "minimum": 1,
             "type": "integer"
@@ -3464,15 +3739,13 @@ export default {
             ],
             "type": "string"
           },
-          "element_index": {
-            "description": "Element index from get_window_state. Requires the matching `snapshot_id` alongside it. Prefer `element_token`, which carries both values.",
-            "type": "integer"
-          },
           "element_token": {
-            "description": "Opaque per-snapshot element handle from `structuredContent.elements[].element_token`. If element_index, snapshot_id, or window_id are also supplied they must agree. Returns an explicit stale error once a newer snapshot supersedes it.",
+            "description": "Opaque per-snapshot element handle from `structuredContent.elements[].element_token`. Returns an explicit stale error naming the current snapshots once a newer read supersedes it.",
+            "pattern": "^s[0-9a-f]{8}:[0-9]+$",
             "type": "string"
           },
           "pid": {
+            "description": "Target process ID. Required unless scope is \"desktop\".",
             "type": "integer"
           },
           "scope": {
@@ -3488,11 +3761,6 @@ export default {
             "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
             "type": "string"
           },
-          "snapshot_id": {
-            "description": "Snapshot handle from get_window_state. Required when targeting by element_index; stale snapshots fail closed.",
-            "pattern": "^s[0-9a-f]{8}$",
-            "type": "string"
-          },
           "target": {
             "anyOf": [
               {
@@ -3506,12 +3774,10 @@ export default {
                         "type": "string"
                       },
                       "pid": {
-                        "format": "uint32",
                         "minimum": 0,
                         "type": "integer"
                       },
                       "window_id": {
-                        "format": "uint64",
                         "minimum": 0,
                         "type": "integer"
                       }
@@ -3545,9 +3811,11 @@ export default {
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "Preferred per-call target: an exact window (`kind=\"window\"`, `pid`, `window_id`) or the\nprimary desktop (`kind=\"desktop\"`, `display_id=\"primary\"`)."
           },
           "window_id": {
+            "description": "CGWindowID of the target window. Required with x/y; optional with element_token (the token carries it).",
             "type": "integer"
           },
           "x": {
@@ -3574,7 +3842,6 @@ export default {
                 "additionalProperties": false,
                 "properties": {
                   "delivered_count": {
-                    "format": "uint32",
                     "minimum": 0,
                     "type": [
                       "integer",
@@ -3608,6 +3875,27 @@ export default {
                   "refused"
                 ],
                 "type": "string"
+              },
+              "error": {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "hint": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "code"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
               },
               "escalation": {
                 "additionalProperties": false,
@@ -3645,6 +3933,12 @@ export default {
                 "items": {
                   "additionalProperties": false,
                   "properties": {
+                    "detail": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
                     "kind": {
                       "enum": [
                         "value_readback",
@@ -3673,6 +3967,12 @@ export default {
                   "trusted_input"
                 ],
                 "type": "string"
+              },
+              "summary": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -3959,10 +4259,15 @@ export default {
     },
     {
       "name": "get_desktop_state",
-      "description": "Capture the full display in true screen pixels with no downscale. Use its native-size PNG as the coordinate source for actions whose target is {kind:\"desktop\",display_id:\"primary\"}. Returns the true screen size and backing scale factor. Vision-only: no AX tree walk.",
+      "description": "Capture the full display in true screen pixels, full size unless `max_image_dimension` caps it. Use its PNG as the coordinate source for actions whose target is {kind:\"desktop\",display_id:\"primary\"}. Returns the true screen size and backing scale factor. Vision-only: no AX tree walk.",
       "inputSchema": {
         "type": "object",
         "properties": {
+          "max_image_dimension": {
+            "description": "Optional long-edge cap for the returned PNG, in pixels (aspect ratio preserved). Omitted or 0 returns the full-size capture. When the cap downsizes the image, the response reports `screenshot_original_width/height`, and x/y read off it for this session's later scope:\"desktop\" actions (or passed with its `capture_id`) are mapped back to the full-size frame automatically.",
+            "minimum": 0,
+            "type": "integer"
+          },
           "screenshot_out_file": {
             "description": "Write PNG here instead of base64.",
             "type": "string"
@@ -3980,6 +4285,46 @@ export default {
           {
             "additionalProperties": true,
             "properties": {
+              "agent_overlay_capture": {
+                "additionalProperties": false,
+                "properties": {
+                  "method": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "status": {
+                    "oneOf": [
+                      {
+                        "const": "excluded",
+                        "type": "string"
+                      },
+                      {
+                        "const": "not_present",
+                        "type": "string"
+                      },
+                      {
+                        "const": "not_excluded",
+                        "type": "string"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "status"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
               "display": {
                 "type": "string"
               },
@@ -4131,6 +4476,7 @@ export default {
           },
           "scope": {
             "default": "window",
+            "description": "\"window\" (default) moves only the agent cursor overlay; \"desktop\" moves the real OS pointer.",
             "enum": [
               "window",
               "desktop"
@@ -4154,12 +4500,10 @@ export default {
                         "type": "string"
                       },
                       "pid": {
-                        "format": "uint32",
                         "minimum": 0,
                         "type": "integer"
                       },
                       "window_id": {
-                        "format": "uint64",
                         "minimum": 0,
                         "type": "integer"
                       }
@@ -4194,12 +4538,14 @@ export default {
                 "type": "null"
               }
             ],
-            "description": "Preferred per-call target. New callers should set this field."
+            "description": "Preferred per-call target: an exact window (`kind=\"window\"`, `pid`, `window_id`) or the\nprimary desktop (`kind=\"desktop\"`, `display_id=\"primary\"`)."
           },
           "x": {
+            "description": "Destination X. Window scope: screen points for the agent cursor overlay. Desktop scope: native get_desktop_state screenshot pixels.",
             "type": "number"
           },
           "y": {
+            "description": "Destination Y, in the same space as x.",
             "type": "number"
           }
         },
@@ -4219,7 +4565,6 @@ export default {
                 "additionalProperties": false,
                 "properties": {
                   "delivered_count": {
-                    "format": "uint32",
                     "minimum": 0,
                     "type": [
                       "integer",
@@ -4253,6 +4598,27 @@ export default {
                   "refused"
                 ],
                 "type": "string"
+              },
+              "error": {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "hint": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "code"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
               },
               "escalation": {
                 "additionalProperties": false,
@@ -4290,6 +4656,12 @@ export default {
                 "items": {
                   "additionalProperties": false,
                   "properties": {
+                    "detail": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
                     "kind": {
                       "enum": [
                         "value_readback",
@@ -4318,6 +4690,12 @@ export default {
                   "trusted_input"
                 ],
                 "type": "string"
+              },
+              "summary": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -4363,9 +4741,11 @@ export default {
         "type": "object",
         "properties": {
           "enabled": {
+            "description": "`true` shows the session's agent cursor overlay; `false` hides it.",
             "type": "boolean"
           },
           "session": {
+            "description": "Public label of the session that owns the cursor.",
             "type": "string"
           }
         },
@@ -4426,71 +4806,138 @@ export default {
     },
     {
       "name": "set_agent_cursor_motion",
-      "description": "Configure only movement physics and visibility timing for a session cursor.",
+      "description": "Configure the movement style, timing, effects and visibility timing for a session cursor.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "arc_flow": {
-            "format": "double",
+            "description": "Added to the arc asymmetry of `signature_arc`, `spring_settle` and `comet_swoop`:\npositive moves the apex toward the destination. Clamped to -1..1 (default 0).",
             "type": [
               "number",
               "null"
             ]
           },
           "arc_size": {
-            "format": "double",
+            "description": "Scales the arc of `signature_arc`, `spring_settle` and `comet_swoop`: 0.25 (default)\nkeeps the style's arc, 0 is a straight line, 0.5 doubles it. Clamped to 0..1.",
             "type": [
               "number",
               "null"
             ]
           },
           "dwell_after_click_ms": {
-            "format": "double",
+            "description": "Pause after a click animation, in milliseconds. Clamped to 0..5000 (default 80).",
             "type": [
               "number",
               "null"
             ]
           },
+          "effects": {
+            "additionalProperties": false,
+            "description": "Turn single effects on or off. An omitted effect keeps its current setting; null\nrestores the style's default.",
+            "properties": {
+              "glow": {
+                "description": "Soft glow around the cursor that grows with speed.",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "magnet": {
+                "description": "Target glow when the `magnetic` style locks on.",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "ripple": {
+                "description": "Ring that expands from the hotspot on click.",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "squish": {
+                "description": "Brief scale-down of the cursor on click.",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "trail": {
+                "description": "Short fading trail behind the cursor.",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              }
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "end_handle": {
-            "format": "double",
+            "description": "Arc control-point offset from the end, as a fraction of the distance, for\n`signature_arc`, `spring_settle` and `comet_swoop`. Clamped to 0..1 (default 0.3).",
             "type": [
               "number",
               "null"
             ]
           },
           "glide_duration_ms": {
-            "format": "double",
+            "description": "Move duration in milliseconds for `fixed` timing (1430 ms when 0, the default). A\nnonzero value with `native` timing also fixes the duration. Clamped to 0..5000.",
             "type": [
               "number",
               "null"
             ]
           },
           "idle_hide_ms": {
-            "format": "double",
+            "description": "Hide the cursor after this many idle milliseconds; 0 never hides it. Clamped to\n0..60000 (default 15000).",
             "type": [
               "number",
               "null"
             ]
           },
           "session": {
+            "description": "Public label of the session that owns the cursor. Omitted or null motion fields keep\ntheir current value.",
             "type": "string"
           },
           "spring": {
-            "format": "double",
+            "description": "Arrival spring damping for `classic`: 1 is critically damped, 0.3 is bouncy. Clamped\nto 0.3..1 (default 0.72).",
             "type": [
               "number",
               "null"
             ]
           },
           "start_handle": {
-            "format": "double",
+            "description": "Arc control-point offset from the start, as a fraction of the distance, for\n`signature_arc`, `spring_settle` and `comet_swoop`. Clamped to 0..1 (default 0.3).",
             "type": [
               "number",
               "null"
             ]
           },
+          "style": {
+            "description": "Trajectory style. `signature_arc` (default) is one arc with a small follow-through;\n`spring_settle` lands with one soft bounce; `magnetic` is pulled into the target;\n`comet_swoop` is a wide arc with a short trail; `adaptive` picks a careful approach for\nsmall targets and a swoop for long moves; `classic` is the previous Dubins glide. When\nthe theme's reduced motion is on, every move is a short straight glide with no effects.",
+            "enum": [
+              "signature_arc",
+              "spring_settle",
+              "magnetic",
+              "comet_swoop",
+              "adaptive",
+              "classic"
+            ],
+            "type": "string"
+          },
+          "timing": {
+            "description": "`native` uses the style's own timing; `fitts` scales the move time with distance and\ntarget size; `fixed` uses glide_duration_ms (1430 ms when 0).",
+            "enum": [
+              "native",
+              "fitts",
+              "fixed"
+            ],
+            "type": "string"
+          },
           "turn_radius": {
-            "format": "double",
+            "description": "Minimum turning radius of the `classic` glide path, in points; smaller turns tighter.\nClamped to 1..1000 (default 80).",
             "type": [
               "number",
               "null"
@@ -4511,39 +4958,79 @@ export default {
               "motion": {
                 "properties": {
                   "arc_flow": {
-                    "format": "double",
                     "type": "number"
                   },
                   "arc_size": {
-                    "format": "double",
                     "type": "number"
                   },
                   "dwell_after_click_ms": {
-                    "format": "double",
                     "type": "number"
                   },
+                  "effects": {
+                    "properties": {
+                      "glow": {
+                        "type": "boolean"
+                      },
+                      "magnet": {
+                        "type": "boolean"
+                      },
+                      "ripple": {
+                        "type": "boolean"
+                      },
+                      "squish": {
+                        "type": "boolean"
+                      },
+                      "trail": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "trail",
+                      "glow",
+                      "magnet",
+                      "ripple",
+                      "squish"
+                    ],
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  },
                   "end_handle": {
-                    "format": "double",
                     "type": "number"
                   },
                   "glide_duration_ms": {
-                    "format": "double",
                     "type": "number"
                   },
                   "idle_hide_ms": {
-                    "format": "double",
                     "type": "number"
                   },
                   "spring": {
-                    "format": "double",
                     "type": "number"
                   },
                   "start_handle": {
-                    "format": "double",
                     "type": "number"
                   },
+                  "style": {
+                    "enum": [
+                      "signature_arc",
+                      "spring_settle",
+                      "magnetic",
+                      "comet_swoop",
+                      "adaptive",
+                      "classic"
+                    ],
+                    "type": "string"
+                  },
+                  "timing": {
+                    "enum": [
+                      "native",
+                      "fitts",
+                      "fixed"
+                    ],
+                    "type": "string"
+                  },
                   "turn_radius": {
-                    "format": "double",
                     "type": "number"
                   }
                 },
@@ -4608,6 +5095,7 @@ export default {
         "properties": {
           "reduced_motion": {
             "default": "auto",
+            "description": "Theme animation policy: `on` uses the theme's reduced-motion frames, `off` always\nanimates, `auto` (default) leaves the choice to the host.",
             "enum": [
               "auto",
               "on",
@@ -4616,9 +5104,11 @@ export default {
             "type": "string"
           },
           "session": {
+            "description": "Public label of the session that owns the cursor.",
             "type": "string"
           },
           "theme_id": {
+            "description": "Id of an installed cursor theme (see `cua-driver cursor-theme list`).",
             "maxLength": 200,
             "minLength": 1,
             "type": "string"
@@ -4722,6 +5212,7 @@ export default {
         "type": "object",
         "properties": {
           "session": {
+            "description": "Public label of the session whose cursor to inspect.",
             "type": "string"
           }
         },
@@ -4742,39 +5233,79 @@ export default {
               "motion": {
                 "properties": {
                   "arc_flow": {
-                    "format": "double",
                     "type": "number"
                   },
                   "arc_size": {
-                    "format": "double",
                     "type": "number"
                   },
                   "dwell_after_click_ms": {
-                    "format": "double",
                     "type": "number"
                   },
+                  "effects": {
+                    "properties": {
+                      "glow": {
+                        "type": "boolean"
+                      },
+                      "magnet": {
+                        "type": "boolean"
+                      },
+                      "ripple": {
+                        "type": "boolean"
+                      },
+                      "squish": {
+                        "type": "boolean"
+                      },
+                      "trail": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "trail",
+                      "glow",
+                      "magnet",
+                      "ripple",
+                      "squish"
+                    ],
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  },
                   "end_handle": {
-                    "format": "double",
                     "type": "number"
                   },
                   "glide_duration_ms": {
-                    "format": "double",
                     "type": "number"
                   },
                   "idle_hide_ms": {
-                    "format": "double",
                     "type": "number"
                   },
                   "spring": {
-                    "format": "double",
                     "type": "number"
                   },
                   "start_handle": {
-                    "format": "double",
                     "type": "number"
                   },
+                  "style": {
+                    "enum": [
+                      "signature_arc",
+                      "spring_settle",
+                      "magnetic",
+                      "comet_swoop",
+                      "adaptive",
+                      "classic"
+                    ],
+                    "type": "string"
+                  },
+                  "timing": {
+                    "enum": [
+                      "native",
+                      "fitts",
+                      "fixed"
+                    ],
+                    "type": "string"
+                  },
                   "turn_radius": {
-                    "format": "double",
                     "type": "number"
                   }
                 },
@@ -4792,21 +5323,26 @@ export default {
                 "type": "object"
               },
               "position": {
-                "properties": {
-                  "x": {
-                    "format": "double",
-                    "type": "number"
+                "anyOf": [
+                  {
+                    "properties": {
+                      "x": {
+                        "type": "number"
+                      },
+                      "y": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "x",
+                      "y"
+                    ],
+                    "type": "object"
                   },
-                  "y": {
-                    "format": "double",
-                    "type": "number"
+                  {
+                    "type": "null"
                   }
-                },
-                "required": [
-                  "x",
-                  "y"
-                ],
-                "type": "object"
+                ]
               },
               "session": {
                 "type": "string"
@@ -4853,7 +5389,6 @@ export default {
               "visual_state": {
                 "properties": {
                   "frame": {
-                    "format": "uint64",
                     "minimum": 0,
                     "type": "integer"
                   },
@@ -4867,7 +5402,6 @@ export default {
                     "type": "string"
                   },
                   "preempted_count": {
-                    "format": "uint64",
                     "minimum": 0,
                     "type": "integer"
                   },
@@ -4971,6 +5505,10 @@ export default {
             "default": false,
             "description": "Raise the system permission prompts for missing grants. Default false; only a trusted host setup route may set true.",
             "type": "boolean"
+          },
+          "session": {
+            "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
+            "type": "string"
           }
         },
         "additionalProperties": false
@@ -4984,7 +5522,7 @@ export default {
     },
     {
       "name": "health_report",
-      "description": "Single-call end-to-end driver diagnostics. Designed to let downstream consumers ship one stable call instead of stitching together check_permissions, doctor, version, bundle attribution, and platform capability status. On macOS, prompt-capable direct capture is deliberately skipped; use `cua-driver permissions grant` to verify it explicitly. cua-driver owns the health model; consumers stay thin.\n\nInput — all optional:\n  {\n    \"include\": [\"<check_name>\", ...],   // run only these\n    \"skip\":    [\"<check_name>\", ...]    // skip these\n  }\nIf both are given, `include` wins.\n\nCanonical check names:\n  macOS  : binary_version, platform_supported, session_active,\n           bundle_identity, tcc_accessibility, tcc_screen_recording,\n           ax_capability, screen_capture_capability\n  Windows: binary_version, platform_supported, session_active,\n           ax_capability (via UIA), screen_capture_capability (via DXGI)\n  Linux  : binary_version, platform_supported, session_active,\n           ax_capability (via AT-SPI), screen_capture_capability (via X11)\n\nOutput — stable contract, schema_version=\"1\":\n  {\n    \"schema_version\": \"1\",\n    \"platform\": \"darwin\" | \"win32\" | \"linux\",\n    \"driver_version\": \"<semver>\",\n    \"overall\": \"ok\" | \"degraded\" | \"failed\",\n    \"checks\": [\n      {\n        \"name\": \"<one of the canonical names above>\",\n        \"status\": \"pass\" | \"fail\" | \"skip\",\n        \"message\": \"<one-line summary, always present>\",\n        \"hint\": \"<remediation step, present when status=fail>\",\n        \"data\": { /* check-specific structured fields */ }\n      },\n      ...\n    ]\n  }\n\n`overall` rules:\n  - `ok`       — every non-skipped check passes\n  - `degraded` — at least one non-core check fails (binary is still usable)\n  - `failed`   — any core check fails (binary_version, platform_supported, session_active)\n\nStability: schema_version=\"1\" is the contract. Future breaking changes will be `\"2\"`. Adding new check names under the same schema_version is non-breaking; consumers must tolerate unknown check names.",
+      "description": "Single-call end-to-end driver diagnostics. Designed to let downstream consumers ship one stable call instead of stitching together check_permissions, doctor, version, bundle attribution, and platform capability status. On macOS, prompt-capable direct capture is deliberately skipped. For standalone CuaDriver, use `cua-driver permissions grant` to verify it explicitly. For an embedded or linked driver, use the host's permission flow for the app or executable macOS attributes this process's permission request to; the standalone command does not verify the host's capture readiness. cua-driver owns the health model; consumers stay thin.\n\nInput — all optional:\n  {\n    \"include\": [\"<check_name>\", ...],   // run only these\n    \"skip\":    [\"<check_name>\", ...]    // skip these\n  }\nIf both are given, `include` wins.\n\nCanonical check names:\n  macOS  : binary_version, platform_supported, session_active,\n           bundle_identity, tcc_accessibility, tcc_screen_recording,\n           ax_capability, screen_capture_capability\n  Windows: binary_version, platform_supported, session_active,\n           ax_capability (via UIA), screen_capture_capability (via DXGI)\n  Linux  : binary_version, platform_supported, session_active,\n           ax_capability (via AT-SPI), screen_capture_capability (via X11)\n\nOutput — stable contract, schema_version=\"1\":\n  {\n    \"schema_version\": \"1\",\n    \"platform\": \"darwin\" | \"win32\" | \"linux\",\n    \"driver_version\": \"<semver>\",\n    \"overall\": \"ok\" | \"degraded\" | \"failed\",\n    \"checks\": [\n      {\n        \"name\": \"<one of the canonical names above>\",\n        \"status\": \"pass\" | \"fail\" | \"skip\",\n        \"message\": \"<one-line summary, always present>\",\n        \"hint\": \"<remediation step, present when status=fail>\",\n        \"data\": { /* check-specific structured fields */ }\n      },\n      ...\n    ]\n  }\n\n`overall` rules:\n  - `ok`       — every non-skipped check passes\n  - `degraded` — at least one non-core check fails (binary is still usable)\n  - `failed`   — any core check fails (binary_version, platform_supported, session_active)\n\nStability: schema_version=\"1\" is the contract. Future breaking changes will be `\"2\"`. Adding new check names under the same schema_version is non-breaking; consumers must tolerate unknown check names.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -4994,6 +5532,10 @@ export default {
               "type": "string"
             },
             "type": "array"
+          },
+          "session": {
+            "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
+            "type": "string"
           },
           "skip": {
             "description": "Skip these checks (canonical names). Ignored when `include` is set.",
@@ -5017,7 +5559,12 @@ export default {
       "description": "Return the current cua-driver-rs configuration.",
       "inputSchema": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "session": {
+            "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
+            "type": "string"
+          }
+        },
         "additionalProperties": false
       },
       "annotations": {
@@ -5029,10 +5576,54 @@ export default {
     },
     {
       "name": "set_config",
-      "description": "Update cua-driver-rs configuration. Changes to max_image_dimension take effect immediately. The experimental_pip keys are persisted to ~/.cua-driver/config.json and take effect on the next daemon restart (the PiP backend is initialised once at startup).\n\nNote: capture_mode is a per-call param (on get_window_state / click), not a stored setting. Capture modality is selected by each action's target; the old capture_scope config key is retired.",
+      "description": "Update cua-driver-rs configuration. Changes to max_image_dimension take effect immediately. The experimental_pip keys are persisted to ~/.cua-driver/config.json and take effect on the next daemon restart (the PiP backend is initialised once at startup).\n\nNote: capture_mode is a per-call param (on get_window_state / click), not a stored setting. Capture modality is selected by each action's target; the old capture_scope config key is retired.\n\nCursor motion defaults: cursor.motion.style, cursor.motion.timing and cursor.motion.effects.<trail|glow|magnet|ripple|squish> are saved to ~/.cua-driver/config.json and seed sessions started afterwards. start_session cursor_motion and set_agent_cursor_motion override them; reduced motion always wins.",
       "inputSchema": {
         "type": "object",
         "properties": {
+          "cursor.motion": {
+            "description": "Pass null (or `default`) to clear every saved cursor motion default."
+          },
+          "cursor.motion.effects.glow": {
+            "description": "Saved default for the `glow` cursor effect. Unset follows the style.",
+            "type": "boolean"
+          },
+          "cursor.motion.effects.magnet": {
+            "description": "Saved default for the `magnet` cursor effect. Unset follows the style.",
+            "type": "boolean"
+          },
+          "cursor.motion.effects.ripple": {
+            "description": "Saved default for the `ripple` cursor effect. Unset follows the style.",
+            "type": "boolean"
+          },
+          "cursor.motion.effects.squish": {
+            "description": "Saved default for the `squish` cursor effect. Unset follows the style.",
+            "type": "boolean"
+          },
+          "cursor.motion.effects.trail": {
+            "description": "Saved default for the `trail` cursor effect. Unset follows the style.",
+            "type": "boolean"
+          },
+          "cursor.motion.style": {
+            "description": "Saved default cursor motion style for new sessions. Overridden by start_session cursor_motion and set_agent_cursor_motion; reduced motion always wins. Built-in default: signature_arc.",
+            "enum": [
+              "signature_arc",
+              "spring_settle",
+              "magnetic",
+              "comet_swoop",
+              "adaptive",
+              "classic"
+            ],
+            "type": "string"
+          },
+          "cursor.motion.timing": {
+            "description": "Saved default cursor move timing for new sessions.",
+            "enum": [
+              "native",
+              "fitts",
+              "fixed"
+            ],
+            "type": "string"
+          },
           "experimental_pip": {
             "description": "Enable the experimental picture-in-picture preview window. Applies on next daemon restart.",
             "type": "boolean"
@@ -5048,6 +5639,10 @@ export default {
           "max_image_dimension": {
             "description": "Max dimension for screenshot resizing (0 = no limit).",
             "type": "integer"
+          },
+          "session": {
+            "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
+            "type": "string"
           },
           "value": {
             "description": "New value for `key`. JSON type depends on the key."
@@ -5067,7 +5662,12 @@ export default {
       "description": "Return a lightweight snapshot of the desktop: running regular apps and on-screen visible windows with their bounds, z-order, and owner pid.\n\nFor the full AX subtree of a single window (with interactive element indices you can click by), use `get_window_state` instead — that's the heavy per-window tool. This one is a fast discovery read that needs no TCC grants.",
       "inputSchema": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "session": {
+            "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
+            "type": "string"
+          }
+        },
         "additionalProperties": false
       },
       "annotations": {
@@ -5079,13 +5679,17 @@ export default {
     },
     {
       "name": "zoom",
-      "description": "Capture a cropped JPEG of a window region (x1,y1)–(x2,y2) in screenshot pixel coordinates, with 20% padding added on each side. The output image is at most 500 px wide.\n\nAfter a zoom, pass `from_zoom=true` to click/type_text to auto-translate coordinates back to full-window space.",
+      "description": "Capture a cropped JPEG of a window region (x1,y1)–(x2,y2) in screenshot pixel coordinates, with 20% padding added on each side. The output image is at most 500 px wide.\n\nAfter a zoom, pass `from_zoom=true` to click/type_text to auto-translate coordinates back to full-window space. Coordinate actions return `screenshot_context_missing` when no current snapshot contains a screenshot owned by this session. `from_zoom` actions return `zoom_context_missing` when the zoom was never created or was replaced; call `get_window_state`, then `zoom`, again on the same connection.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "pid": {
-            "description": "Target pid — required for from_zoom click/type translation.",
+            "description": "Optional target pid. When omitted, the driver resolves the unique current snapshot for this session and window.",
             "type": "integer"
+          },
+          "session": {
+            "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
+            "type": "string"
           },
           "window_id": {
             "description": "CGWindowID from list_windows.",
@@ -5174,6 +5778,10 @@ export default {
           },
           "selector": {
             "description": "CSS selector for click_element (e.g. 'button.submit', '#login a').",
+            "type": "string"
+          },
+          "session": {
+            "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
             "type": "string"
           },
           "target_url_contains": {
@@ -5282,6 +5890,7 @@ export default {
           },
           "profile": {
             "additionalProperties": false,
+            "description": "Driver-owned isolated Chromium profile to launch with allow_launch=true. mode=isolated_new creates a fresh throwaway profile; mode=isolated_named reuses the named driver-owned profile. Never an existing user profile.",
             "properties": {
               "mode": {
                 "enum": [
@@ -5306,6 +5915,7 @@ export default {
           },
           "strategy": {
             "additionalProperties": false,
+            "description": "Attach to an already-running browser instead of launching one. kind=existing_profile attaches to the user's running profile at pid/window_id and requires explicit profile authorization.",
             "properties": {
               "kind": {
                 "enum": [
@@ -5373,10 +5983,19 @@ export default {
     },
     {
       "name": "browser_click",
-      "description": "Click a page element (by ref) or viewport coordinates in an exactly-bound tab. Default route is trusted hardware-like input (Input.dispatchMouseEvent), and refuses where that route cannot preserve standalone-browser background posture. input_route=\"dom_event\" (synthetic el.click(), ref required) is used only when explicitly requested; it proves dispatch, not control activation, because trust-gated controls may ignore synthetic events. Refused for heuristic bindings.",
+      "description": "Click a page element (by ref) or viewport coordinates in an exactly-bound tab. Default route is trusted hardware-like input (Input.dispatchMouseEvent), and refuses where that route cannot preserve standalone-browser background posture unless delivery_mode=\"foreground\" accepts that the browser window may activate (Linux Chromium; for example a browser inside a sandbox). input_route=\"dom_event\" (synthetic el.click(), ref required) is used only when explicitly requested; it proves dispatch, not control activation, because trust-gated controls may ignore synthetic events. Refused for heuristic bindings.",
       "inputSchema": {
         "type": "object",
         "properties": {
+          "delivery_mode": {
+            "default": "background",
+            "description": "background (default) refuses trusted input where it would activate the browser window (Linux Chromium). foreground accepts that activation, for a browser whose window nobody else is using (for example inside a sandbox).",
+            "enum": [
+              "background",
+              "foreground"
+            ],
+            "type": "string"
+          },
           "input_route": {
             "description": "\"trusted\" (default): Input.dispatchMouseEvent. It refuses rather than foregrounding a standalone browser. \"dom_event\": synthetic full-background DOM click, only when explicitly requested. Dispatch does not prove the control activated; refresh page state and verify the expected postcondition.",
             "enum": [
@@ -5426,7 +6045,6 @@ export default {
                 "additionalProperties": false,
                 "properties": {
                   "delivered_count": {
-                    "format": "uint32",
                     "minimum": 0,
                     "type": [
                       "integer",
@@ -5460,6 +6078,27 @@ export default {
                   "refused"
                 ],
                 "type": "string"
+              },
+              "error": {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "hint": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "code"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
               },
               "escalation": {
                 "additionalProperties": false,
@@ -5497,6 +6136,12 @@ export default {
                 "items": {
                   "additionalProperties": false,
                   "properties": {
+                    "detail": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
                     "kind": {
                       "enum": [
                         "value_readback",
@@ -5525,6 +6170,12 @@ export default {
                   "trusted_input"
                 ],
                 "type": "string"
+              },
+              "summary": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -5620,7 +6271,6 @@ export default {
                 "additionalProperties": false,
                 "properties": {
                   "delivered_count": {
-                    "format": "uint32",
                     "minimum": 0,
                     "type": [
                       "integer",
@@ -5654,6 +6304,27 @@ export default {
                   "refused"
                 ],
                 "type": "string"
+              },
+              "error": {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "hint": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "code"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
               },
               "escalation": {
                 "additionalProperties": false,
@@ -5691,6 +6362,12 @@ export default {
                 "items": {
                   "additionalProperties": false,
                   "properties": {
+                    "detail": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
                     "kind": {
                       "enum": [
                         "value_readback",
@@ -5719,6 +6396,12 @@ export default {
                   "trusted_input"
                 ],
                 "type": "string"
+              },
+              "summary": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -5764,6 +6447,7 @@ export default {
         "type": "object",
         "properties": {
           "action": {
+            "description": "inspect returns the current dialog and its dialog_id; accept or dismiss resolves that exact dialog.",
             "enum": [
               "inspect",
               "accept",
@@ -5822,6 +6506,7 @@ export default {
         "type": "object",
         "properties": {
           "files": {
+            "description": "Absolute paths of 1 to 32 local regular files to assign to the input.",
             "items": {
               "description": "Absolute path to one local regular file.",
               "type": "string"
@@ -5912,12 +6597,22 @@ export default {
         "type": "object",
         "properties": {
           "action": {
+            "description": "Pointer gesture. scroll needs delta_x or delta_y; drag needs destination_ref or to_x/to_y.",
             "enum": [
               "hover",
               "right_click",
               "double_click",
               "scroll",
               "drag"
+            ],
+            "type": "string"
+          },
+          "delivery_mode": {
+            "default": "background",
+            "description": "background (default) refuses trusted input where it would activate the browser window (Linux Chromium). foreground accepts that activation, for a browser whose window nobody else is using (for example inside a sandbox).",
+            "enum": [
+              "background",
+              "foreground"
             ],
             "type": "string"
           },
@@ -5935,6 +6630,7 @@ export default {
           },
           "input_route": {
             "default": "trusted",
+            "description": "trusted sends CDP Input events; dom_event synthesizes DOM events in the page and requires ref.",
             "enum": [
               "trusted",
               "dom_event"
@@ -5992,7 +6688,6 @@ export default {
                 "additionalProperties": false,
                 "properties": {
                   "delivered_count": {
-                    "format": "uint32",
                     "minimum": 0,
                     "type": [
                       "integer",
@@ -6026,6 +6721,27 @@ export default {
                   "refused"
                 ],
                 "type": "string"
+              },
+              "error": {
+                "additionalProperties": false,
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "hint": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "code"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
               },
               "escalation": {
                 "additionalProperties": false,
@@ -6063,6 +6779,12 @@ export default {
                 "items": {
                   "additionalProperties": false,
                   "properties": {
+                    "detail": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
                     "kind": {
                       "enum": [
                         "value_readback",
@@ -6091,6 +6813,12 @@ export default {
                   "trusted_input"
                 ],
                 "type": "string"
+              },
+              "summary": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -6131,17 +6859,33 @@ export default {
     },
     {
       "name": "start_recording",
-      "description": "Start trajectory recording. Every subsequent action-tool invocation (click, right_click, scroll, type_text, press_key, hotkey, set_value) writes a turn folder under `output_dir`:\n\n- `before_state.json` / `after_state.json` — application AX/UIA/AT-SPI state immediately before and after the action.\n- `before.png` / `after.png` — target-window screenshots immediately before and after the action.\n- `evidence.json` — capture status and a stable classification when an expected artifact could not be captured.\n- `app_state.json` — post-action AX/UIA snapshot for the target pid.\n- `screenshot.png` — compatibility alias of `after.png`.\n- `action.json` — tool name, full input arguments, result summary, result-error flag, pid, click point (when applicable), ISO-8601 timestamp.\n- `click.png` — for dispatched click-family actions only, `before.png` with a red marker at the click point. A call refused before target resolution is explicitly not applicable instead.\n\nTurn folders are named `turn-00001/`, `turn-00002/`, etc.  Turn numbering restarts at 1 each time recording is (re-)started.\n\n**Video is off by default.** Pass `record_video: true` to also capture the main display to `<output_dir>/recording.mp4` (H.264 / 30 fps) for the lifetime of the session. The recording is torn down automatically when the MCP client disconnects.\n\n**macOS uses native ScreenCaptureKit** (daemon-owned SCStream + SCRecordingOutput) so video inherits the daemon's Screen Recording grant — no extra TCC prompt, no ffmpeg subprocess. Requires macOS 15.0+.\n\n**Windows + Linux use an ffmpeg subprocess** (`gdigrab` / `x11grab` + libx264). Requires ffmpeg on PATH (winget install Gyan.FFmpeg / apt install ffmpeg); when ffmpeg is missing or fails on startup the per-turn capture (screenshots + action.json) still runs and the session's `last_error` field carries the diagnostic.\n\nState persists for the life of the daemon; a restart resets to disabled with no on-disk state. Call `stop_recording` to disable + finalize the mp4.",
+      "description": "Start trajectory recording for the calling session. Each action-tool invocation (click, right_click, scroll, type_text, press_key, hotkey, set_value) from that session writes a turn folder under `output_dir`. Without `session`, every call on the same connection is recorded, including named-session calls. Other connections and session lifecycle calls (`start_session` / `end_session`) are not recorded. CLI recordings started with `cua-driver recording start` are daemon-wide.\n\nEach turn folder holds:\n\n- `before_state.json` / `after_state.json` — application AX/UIA/AT-SPI state immediately before and after the action.\n- `before.png` / `after.png` — target-window screenshots immediately before and after the action.\n- `evidence.json` — capture status and a stable classification when an expected artifact could not be captured.\n- `app_state.json` — post-action AX/UIA snapshot for the target pid.\n- `screenshot.png` — compatibility alias of `after.png`.\n- `action.json` — tool name, full input arguments, result summary, result-error flag, pid, click point (when applicable), ISO-8601 timestamp.\n- `click.png` — for dispatched click-family actions only, `before.png` with a red marker at the click point. A call refused before target resolution is explicitly not applicable instead.\n\nThe per-turn accessibility walk is bounded like `get_window_state`: `state_timeout_ms` (default 1000) caps each before/after walk, a walk that runs out of budget records the PARTIAL tree, and `evidence.json` carries `truncated`, `truncation_reason`, `nodes_visited`, `nodes_pending` and `timeout_ms` for that phase. A provider that stops answering is abandoned after the budget plus a short grace and the phase is classified `state_capture_timeout`. Actions refused before dispatch (for example an unknown or expired `capture_id`) skip the state walk; their state is classified `not_applicable` / `action_refused_before_dispatch`. Pass `include_accessibility_tree: false` to record screenshots and actions without state.\n\nTurn folders are named `turn-00001/`, `turn-00002/`, etc.  Turn numbering restarts at 1 each time recording is (re-)started.\n\n**Video is off by default.** Pass `record_video: true` to also capture the main display to `<output_dir>/recording.mp4` (H.264 / 30 fps) for the lifetime of the session. The recording is torn down automatically when the MCP client disconnects.\n\n**macOS uses native ScreenCaptureKit** (daemon-owned SCStream + SCRecordingOutput) under the daemon's Screen Recording grant, with no ffmpeg subprocess. Requires macOS 15.0+. On macOS 26 (Tahoe), the first direct capture can also show a one-time consent asking to let Cua Driver bypass the system private window picker and directly access your screen and audio; choose Allow, or run `cua-driver permissions grant` beforehand to answer it up front. The recorder captures screen video only and does not enable system-audio capture.\n\n**Windows + Linux use an ffmpeg subprocess** (`gdigrab` / `x11grab` + libx264). Requires ffmpeg on PATH (winget install Gyan.FFmpeg / apt install ffmpeg); when ffmpeg is missing or fails on startup the per-turn capture (screenshots + action.json) still runs and the session's `last_error` field carries the diagnostic.\n\nState persists for the life of the daemon; a restart resets to disabled with no on-disk state. Call `stop_recording` to disable + finalize the mp4.",
       "inputSchema": {
         "type": "object",
         "properties": {
+          "include_accessibility_tree": {
+            "default": true,
+            "description": "Default true. Set false to skip the per-turn before/after accessibility walks entirely; screenshots, click markers and action.json are still recorded and state is classified `state_capture_disabled`.",
+            "type": "boolean"
+          },
           "output_dir": {
             "description": "Absolute or ~-rooted directory where turn folders and (when enabled) the video file are written.",
             "type": "string"
           },
           "record_video": {
-            "description": "Capture the main display to <output_dir>/recording.mp4. Default: false. Set to true to also capture the main display to recording.mp4 (otherwise only the per-turn screenshots + JSON are recorded). On macOS this uses native ScreenCaptureKit (no extra TCC prompt, macOS 15.0+); on Windows + Linux it requires ffmpeg on PATH.",
+            "description": "Capture the main display to <output_dir>/recording.mp4. Default: false. Set to true to also capture the main display to recording.mp4 (otherwise only the per-turn screenshots + JSON are recorded). On macOS this uses native ScreenCaptureKit (macOS 15.0+); macOS 26 can show a one-time direct screen-capture consent on first use (see `cua-driver permissions grant`). On Windows + Linux it requires ffmpeg on PATH.",
             "type": "boolean"
+          },
+          "session": {
+            "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
+            "type": "string"
+          },
+          "state_timeout_ms": {
+            "default": 1000,
+            "description": "Wall-clock budget in milliseconds for EACH per-turn before/after accessibility walk (same default and bounds as get_window_state's timeout_ms). A walk that runs out records the partial tree and marks it truncated in evidence.json.",
+            "maximum": 120000,
+            "minimum": 100,
+            "type": "integer"
           }
         },
         "required": [
@@ -6161,7 +6905,12 @@ export default {
       "description": "Stop trajectory recording. Disables further per-turn capture and, when video was enabled, gracefully terminates the ffmpeg subprocess so the mp4's moov atom is finalized (the file is playable). Calling stop on an already-stopped session is a no-op. The response carries `last_video_path` pointing at the finalized mp4 (when video was on).\n\nA manual `stop_recording` is **unconditional** — it stops whatever recording is active regardless of which session started it. Ownership-scoped teardown (so one client disconnecting can't stop a recording a later client started) is handled by the registry's `session_end` lifecycle hook, not by this tool.",
       "inputSchema": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "session": {
+            "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
+            "type": "string"
+          }
+        },
         "additionalProperties": false
       },
       "annotations": {
@@ -6176,7 +6925,12 @@ export default {
       "description": "Report the current trajectory recorder state: whether recording is enabled, the output directory (when enabled), and the 1-based counter for the next turn folder that will be written. Counter increments on every recorded action tool call and resets to 1 each time recording is (re-)enabled.\n\nPure read-only.",
       "inputSchema": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "session": {
+            "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
+            "type": "string"
+          }
+        },
         "additionalProperties": false
       },
       "annotations": {
@@ -6188,7 +6942,7 @@ export default {
     },
     {
       "name": "replay_trajectory",
-      "description": "Replay a recorded trajectory by re-invoking every turn's tool call in lexical order. `dir` must point at a directory previously written by `start_recording`. Each `turn-NNNNN/` is parsed for `action.json`, and the recorded tool is called with its recorded `arguments` via the same dispatch path an MCP / CLI call uses.\n\nCaveats:\n- Element-indexed actions (`click({pid, element_index})` etc.) will fail because element indices are per-snapshot and don't survive across sessions. Pixel clicks (`click({pid, x, y})`) and all keyboard tools replay cleanly. Failures are reported but don't stop replay unless `stop_on_error` is true.\n- `get_window_state` and other read-only tools are NOT currently recorded, so replays do not re-populate the per-(pid, window_id) element cache.\n- If recording is ENABLED while replay runs, the replay itself is recorded into the currently configured output directory.  That's deliberate: recording a replay against a new build and diffing the two trajectories is the regression-test workflow.",
+      "description": "Replay a recorded trajectory by re-invoking every turn's tool call in lexical order. `dir` must point at a directory previously written by `start_recording`. Each `turn-NNNNN/` is parsed for `action.json`, and the recorded tool is called with its recorded `arguments` via the same dispatch path an MCP / CLI call uses.\n\nCaveats:\n- Element-token actions (`click({pid, element_token})` etc.) will fail because element tokens are per-snapshot and don't survive across sessions. Pixel clicks (`click({pid, x, y})`) and all keyboard tools replay cleanly. Failures are reported but don't stop replay unless `stop_on_error` is true.\n- `get_window_state` and other read-only tools are NOT currently recorded, so replays do not re-populate the per-(pid, window_id) element cache.\n- If recording is ENABLED while replay runs, the replay itself is recorded into the currently configured output directory.  That's deliberate: recording a replay against a new build and diffing the two trajectories is the regression-test workflow.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -6200,6 +6954,10 @@ export default {
           },
           "dir": {
             "description": "Trajectory directory previously written by `start_recording`. Absolute or ~-rooted.",
+            "type": "string"
+          },
+          "session": {
+            "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
             "type": "string"
           },
           "stop_on_error": {
@@ -6228,6 +6986,10 @@ export default {
           "confirm": {
             "description": "Run the install command. Without it, only the planned command is reported.",
             "type": "boolean"
+          },
+          "session": {
+            "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
+            "type": "string"
           }
         },
         "additionalProperties": false
@@ -6253,6 +7015,145 @@ export default {
               "desktop"
             ],
             "type": "string"
+          },
+          "cursor_motion": {
+            "additionalProperties": false,
+            "description": "Optional initial cursor motion (style, timing, effects and tuning). The host applies it\nbefore the cursor is first made visible. A later `set_agent_cursor_motion` call wins;\nthis wins over the saved default (`cursor.motion.*` in the driver config) and the\nbuilt-in `signature_arc`. Reduced motion always wins.",
+            "properties": {
+              "arc_flow": {
+                "description": "Added to the arc asymmetry of `signature_arc`, `spring_settle` and `comet_swoop`:\npositive moves the apex toward the destination. Clamped to -1..1 (default 0).",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "arc_size": {
+                "description": "Scales the arc of `signature_arc`, `spring_settle` and `comet_swoop`: 0.25 (default)\nkeeps the style's arc, 0 is a straight line, 0.5 doubles it. Clamped to 0..1.",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "dwell_after_click_ms": {
+                "description": "Pause after a click animation, in milliseconds. Clamped to 0..5000 (default 80).",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "effects": {
+                "additionalProperties": false,
+                "description": "Turn single effects on or off. An omitted effect keeps its current setting; null\nrestores the style's default.",
+                "properties": {
+                  "glow": {
+                    "description": "Soft glow around the cursor that grows with speed.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "magnet": {
+                    "description": "Target glow when the `magnetic` style locks on.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "ripple": {
+                    "description": "Ring that expands from the hotspot on click.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "squish": {
+                    "description": "Brief scale-down of the cursor on click.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "trail": {
+                    "description": "Short fading trail behind the cursor.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "end_handle": {
+                "description": "Arc control-point offset from the end, as a fraction of the distance, for\n`signature_arc`, `spring_settle` and `comet_swoop`. Clamped to 0..1 (default 0.3).",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "glide_duration_ms": {
+                "description": "Move duration in milliseconds for `fixed` timing (1430 ms when 0, the default). A\nnonzero value with `native` timing also fixes the duration. Clamped to 0..5000.",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "idle_hide_ms": {
+                "description": "Hide the cursor after this many idle milliseconds; 0 never hides it. Clamped to\n0..60000 (default 15000).",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "spring": {
+                "description": "Arrival spring damping for `classic`: 1 is critically damped, 0.3 is bouncy. Clamped\nto 0.3..1 (default 0.72).",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "start_handle": {
+                "description": "Arc control-point offset from the start, as a fraction of the distance, for\n`signature_arc`, `spring_settle` and `comet_swoop`. Clamped to 0..1 (default 0.3).",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "style": {
+                "description": "Trajectory style. `signature_arc` (default) is one arc with a small follow-through;\n`spring_settle` lands with one soft bounce; `magnetic` is pulled into the target;\n`comet_swoop` is a wide arc with a short trail; `adaptive` picks a careful approach for\nsmall targets and a swoop for long moves; `classic` is the previous Dubins glide. When\nthe theme's reduced motion is on, every move is a short straight glide with no effects.",
+                "enum": [
+                  "signature_arc",
+                  "spring_settle",
+                  "magnetic",
+                  "comet_swoop",
+                  "adaptive",
+                  "classic"
+                ],
+                "type": "string"
+              },
+              "timing": {
+                "description": "`native` uses the style's own timing; `fitts` scales the move time with distance and\ntarget size; `fixed` uses glide_duration_ms (1430 ms when 0).",
+                "enum": [
+                  "native",
+                  "fitts",
+                  "fixed"
+                ],
+                "type": "string"
+              },
+              "turn_radius": {
+                "description": "Minimum turning radius of the `classic` glide path, in points; smaller turns tighter.\nClamped to 1..1000 (default 80).",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "cursor_theme": {
             "description": "Optional initial cursor theme. The host applies it before the cursor is\nfirst made visible, avoiding a flash of the default theme.",
@@ -6302,6 +7203,127 @@ export default {
                   "desktop"
                 ],
                 "type": "string"
+              },
+              "cursor_motion": {
+                "additionalProperties": false,
+                "properties": {
+                  "arc_flow": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "arc_size": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "dwell_after_click_ms": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "effects": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "glow": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "magnet": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "ripple": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "squish": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "trail": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      }
+                    },
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  },
+                  "end_handle": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "glide_duration_ms": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "idle_hide_ms": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "spring": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "start_handle": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "style": {
+                    "enum": [
+                      "signature_arc",
+                      "spring_settle",
+                      "magnetic",
+                      "comet_swoop",
+                      "adaptive",
+                      "classic"
+                    ],
+                    "type": "string"
+                  },
+                  "timing": {
+                    "enum": [
+                      "native",
+                      "fitts",
+                      "fixed"
+                    ],
+                    "type": "string"
+                  },
+                  "turn_radius": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
               },
               "desktop_capture_authorized": {
                 "type": "boolean"
@@ -6405,6 +7427,7 @@ export default {
             "type": "string"
           },
           "reason": {
+            "description": "Why the window-scoped attempt failed and desktop capture is needed.",
             "enum": [
               "ax_tree_pixel_mismatch",
               "background_delivery_failed",
@@ -6415,6 +7438,7 @@ export default {
             "type": "string"
           },
           "session": {
+            "description": "Public label of the legacy capture-scope session to escalate.",
             "type": "string"
           }
         },
@@ -6557,12 +7581,10 @@ export default {
                 "type": "boolean"
               },
               "expires_in_seconds": {
-                "format": "uint64",
                 "minimum": 0,
                 "type": "integer"
               },
               "idle_seconds": {
-                "format": "uint64",
                 "minimum": 0,
                 "type": "integer"
               },
@@ -6654,7 +7676,6 @@ export default {
           },
           "limit": {
             "description": "Maximum number of content-free summaries to return (default 50, max\n100). Ordinary agent transports are scoped to their own lease.",
-            "format": "uint32",
             "minimum": 0,
             "type": [
               "integer",
@@ -6698,12 +7719,10 @@ export default {
                       "type": "boolean"
                     },
                     "expires_in_seconds": {
-                      "format": "uint64",
                       "minimum": 0,
                       "type": "integer"
                     },
                     "idle_seconds": {
-                      "format": "uint64",
                       "minimum": 0,
                       "type": "integer"
                     },
@@ -6973,7 +7992,12 @@ export default {
       "description": "Check the saved stable/nightly Cua Driver channel for a release on GitHub. Returns current and selected channels, current and latest versions, an `update_available` boolean, the install one-liner, and the release notes URL. Read-only — never installs. Pacman-owned Linux executables return package-manager guidance without checking GitHub. Mirror of `cua-driver check-update --json`.",
       "inputSchema": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "session": {
+            "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
+            "type": "string"
+          }
+        },
         "additionalProperties": false
       },
       "annotations": {
@@ -6981,6 +8005,508 @@ export default {
         "destructiveHint": false,
         "idempotentHint": true,
         "openWorldHint": true
+      }
+    },
+    {
+      "name": "install_extension",
+      "description": "Preview or install one Driver-managed optional extension. The first call without confirm returns the exact signed artifact, destination, license, source, and trust plan without mutation. Re-call with confirm=true to perform that exact verified installation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "confirm": {
+            "description": "Install the previewed extension. Omit or false for a read-only plan.",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "Extension to preview or install. Only perception (the local visual-region parser used by parse_visual_regions) is available.",
+            "enum": [
+              "perception"
+            ],
+            "type": "string"
+          },
+          "session": {
+            "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "parse_visual_regions",
+      "description": "Parse one immutable registered capture into model-neutral text and icon regions.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "capture_id": {
+            "description": "`capture_id` of a screenshot returned by get_window_state or get_desktop_state.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "options": {
+            "additionalProperties": false,
+            "default": {},
+            "description": "Optional, model-neutral controls for one bounded parse.",
+            "properties": {
+              "kinds": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "enum": [
+                        "text",
+                        "icon"
+                      ]
+                    },
+                    "maxItems": 2,
+                    "minItems": 1,
+                    "type": "array",
+                    "uniqueItems": true
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Region kinds to return (`text`, `icon`). Omit for all kinds."
+              },
+              "max_regions": {
+                "description": "Return at most this many regions.",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "min_confidence": {
+                "description": "Drop regions below this confidence (0 to 1).",
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "session": {
+            "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "capture_id"
+        ],
+        "additionalProperties": false,
+        "description": "Parse one immutable screenshot capture. Pass the `capture_id` returned by\n`get_window_state` or `get_desktop_state`; the Driver capture registry\nresolves it to the exact pixels and action-coordinate transform."
+      },
+      "outputSchema": {
+        "type": "object",
+        "anyOf": [
+          {
+            "additionalProperties": true,
+            "properties": {
+              "capture": {
+                "properties": {
+                  "action_coordinate_space": {
+                    "oneOf": [
+                      {
+                        "properties": {
+                          "kind": {
+                            "const": "screenshot_pixels",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "properties": {
+                          "kind": {
+                            "const": "affine",
+                            "type": "string"
+                          },
+                          "m11": {
+                            "type": "number"
+                          },
+                          "m12": {
+                            "type": "number"
+                          },
+                          "m21": {
+                            "type": "number"
+                          },
+                          "m22": {
+                            "type": "number"
+                          },
+                          "tx": {
+                            "type": "number"
+                          },
+                          "ty": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "m11",
+                          "m12",
+                          "m21",
+                          "m22",
+                          "tx",
+                          "ty"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  "capture_id": {
+                    "type": "string"
+                  },
+                  "captured_at": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "screenshot": {
+                    "properties": {
+                      "height": {
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "mime_type": {
+                        "const": "image/png"
+                      },
+                      "reference": {
+                        "type": "string"
+                      },
+                      "sha256": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "width": {
+                        "minimum": 1,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "reference",
+                      "width",
+                      "height",
+                      "mime_type"
+                    ],
+                    "type": "object"
+                  },
+                  "source": {
+                    "oneOf": [
+                      {
+                        "properties": {
+                          "kind": {
+                            "const": "window",
+                            "type": "string"
+                          },
+                          "pid": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "window_id": {
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "pid",
+                          "window_id"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "properties": {
+                          "display_id": {
+                            "const": "primary"
+                          },
+                          "kind": {
+                            "const": "primary_desktop",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "display_id"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "capture_id",
+                  "source",
+                  "screenshot",
+                  "action_coordinate_space"
+                ],
+                "type": "object"
+              },
+              "parser": {
+                "properties": {
+                  "backend": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "extension_id": {
+                    "type": "string"
+                  },
+                  "extension_version": {
+                    "type": "string"
+                  },
+                  "fixture_sha256": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "model_id": {
+                    "type": "string"
+                  },
+                  "model_manifest_sha256": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "model_source_revision": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "model_version": {
+                    "type": "string"
+                  },
+                  "onnx_runtime_library_sha256": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "onnx_runtime_version": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "runtime": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "extension_id",
+                  "extension_version",
+                  "model_id",
+                  "model_version"
+                ],
+                "type": "object"
+              },
+              "regions": {
+                "items": {
+                  "properties": {
+                    "bounds": {
+                      "properties": {
+                        "height": {
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "width": {
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "x": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "y": {
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "x",
+                        "y",
+                        "width",
+                        "height"
+                      ],
+                      "type": "object"
+                    },
+                    "confidence": {
+                      "maximum": 1,
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    "group_id": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "interactive": {
+                      "type": "boolean"
+                    },
+                    "kind": {
+                      "enum": [
+                        "text",
+                        "icon"
+                      ],
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "parent_id": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "reading_order": {
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "text": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind",
+                    "bounds",
+                    "confidence",
+                    "interactive"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "request_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "schema": {
+                "const": "cua.visual_regions_v1"
+              },
+              "timing": {
+                "properties": {
+                  "duration_ms": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "inference_ms": {
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "preprocess_ms": {
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "duration_ms"
+                ],
+                "type": "object"
+              },
+              "warnings": {
+                "items": {
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "schema",
+              "capture",
+              "parser",
+              "regions",
+              "timing"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": true,
+            "anyOf": [
+              {
+                "required": [
+                  "refusal"
+                ]
+              },
+              {
+                "required": [
+                  "status"
+                ]
+              },
+              {
+                "required": [
+                  "code"
+                ]
+              }
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
       }
     }
   ]

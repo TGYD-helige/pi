@@ -190,7 +190,9 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
 
     if (
       toolName === 'start_recording' ||
-      (HIGH_RISK_TOOLS.has(toolName) && config?.confirmDangerousActions !== false)
+      ((HIGH_RISK_TOOLS.has(toolName) ||
+        (toolName === 'install_extension' && params.confirm === true)) &&
+        config?.confirmDangerousActions !== false)
     ) {
       if (!ctx.hasUI) return false;
       const approved = await ctx.ui.confirm(
@@ -659,11 +661,7 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
     if (!connectedAtStartup) return;
 
     try {
-      const permissions = await client!.callTool(
-        'check_permissions',
-        { prompt: false },
-        ctx.signal,
-      );
+      const permissions = await client!.callTool('check_permissions', {}, ctx.signal);
       const status = permissions.structuredContent;
       if (status?.accessibility === false || status?.screen_recording === false) {
         ctx.ui.notify(`pi-computer-use: ${permissionHint()}`, 'warning');
