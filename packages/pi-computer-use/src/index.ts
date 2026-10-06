@@ -661,11 +661,7 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
     if (!connectedAtStartup) return;
 
     try {
-      const permissions = await client!.callTool(
-        'check_permissions',
-        { prompt: false },
-        ctx.signal,
-      );
+      const permissions = await client!.callTool('check_permissions', {}, ctx.signal);
       const status = permissions.structuredContent;
       if (status?.accessibility === false || status?.screen_recording === false) {
         ctx.ui.notify(`pi-computer-use: ${permissionHint()}`, 'warning');

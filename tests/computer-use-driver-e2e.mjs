@@ -20,7 +20,7 @@ try {
   const names = new Set(tools.map(({ name }) => name));
   for (const name of ['get_window_state', 'click', 'check_permissions', 'health_report']) assert(names.has(name), `missing ${name}`);
   assert(tools.length >= 50, `expected at least 50 tools, received ${tools.length}`);
-  const permissions = await client.callTool('check_permissions', { prompt: false });
+  const permissions = await client.callTool('check_permissions', process.platform === 'darwin' ? { prompt: false } : {});
   assert(permissions.content.length > 0, 'check_permissions returned no result');
   if (process.platform !== 'darwin') {
     const health = await client.callTool('health_report', {

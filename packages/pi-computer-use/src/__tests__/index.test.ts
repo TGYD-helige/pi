@@ -112,6 +112,7 @@ vi.mock('node:child_process', () => ({
     child.kill = vi.fn();
     queueMicrotask(() => {
       child.emit('spawn');
+      child.stderr.emit('data', 'daemon listening on');
       child.emit('exit', 0);
     });
     return child;
@@ -525,7 +526,10 @@ describe('computerUseExtension', () => {
     expect(result.isError).toBe(true);
   });
 
-  it('keeps eager discovery and permission probing on non-macOS platforms', async () => {
+  it.each([
+    'linux',
+    'win32',
+  ] as const)('uses the parameterless permission probe on %s', async (platform) => {
     let connects = 0;
     let permissionArgs: Record<string, unknown> | undefined;
     mockConnect = async () => {
@@ -536,10 +540,10 @@ describe('computerUseExtension', () => {
       return { content: [{ type: 'text', text: 'ok' }] };
     };
 
-    await start(undefined, 'linux');
+    await start({ mode: 'path', binaryPath: '/mock/cua-driver' }, platform);
 
     expect(connects).toBe(1);
-    expect(permissionArgs).toEqual({ prompt: false });
+    expect(permissionArgs).toEqual({});
   });
 
   it('registers only a recovery contract after failed platform discovery', async () => {
