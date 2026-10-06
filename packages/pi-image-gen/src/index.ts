@@ -276,7 +276,7 @@ const IMAGE_PARAM_BASE =
  * - `quality` appears only when {@link resolveImageToolCapabilities} says the
  *   active provider honors it.
  */
-export function buildImageToolParameters(caps: ImageToolCapabilities) {
+export function buildImageToolParameters(caps: ImageToolCapabilities): Type.TObject {
   const model = caps.model;
   const aspectRatios = model && hasAspectRatioKnob(model) ? model.aspectRatios : undefined;
   const tieredImageSizes = model && hasImageSizeKnob(model) ? model.imageSizes : undefined;
