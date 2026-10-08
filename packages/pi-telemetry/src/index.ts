@@ -23,6 +23,7 @@ export interface RuntimeEventExporter {
   publish(event: RuntimeTelemetryEvent): Promise<void>;
   flush?(): Promise<void>;
   close?(): Promise<void>;
+  getStatus?(): { enabled: boolean; state: string; error?: string };
 }
 
 export type TelemetryEnvironment = Record<string, string | undefined>;
@@ -33,7 +34,12 @@ export type RuntimeTelemetryOptions = {
   serviceName?: string | undefined;
   serviceVersion?: string | undefined;
   includePayloads?: boolean;
+  mediaUploadEnabled?: boolean;
+  userId?: string;
+  environment?: string;
+  release?: string;
   redactEvent?: TelemetryRedactor | undefined;
+  maskingSecrets?: readonly string[];
 };
 
 // The concrete exporters live in a leaf module so that sibling modules (extension.ts,

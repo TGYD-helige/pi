@@ -1,4 +1,4 @@
-import type { TelemetryConfig } from './config.js';
+import { configurationWarnings, runtimeTelemetryOptions, type TelemetryConfig } from './config.js';
 import { NoopRuntimeEventExporter } from './exporters.js';
 import type { RuntimeEventExporter, TelemetryEnvironment } from './index.js';
 import {
@@ -21,11 +21,14 @@ export function createTelemetryExporter(telemetryConfig: TelemetryConfig): Runti
   const langfuse = resolveLangfuseExporterConfig(telemetryConfig);
   const otel = resolveOtelExporterConfig(telemetryConfig);
   if (!langfuse.enabled && !otel.enabled) {
-    return new NoopRuntimeEventExporter();
+    return new NoopRuntimeEventExporter(
+      configurationWarnings(telemetryConfig).join('; ') || undefined,
+    );
   }
   const primary = langfuse.enabled ? langfuse : otel;
   return new OtelRuntimeEventExporter({
     enabled: true,
+    configurationWarnings: configurationWarnings(telemetryConfig),
     endpoint: otel.enabled ? otel.endpoint : '',
     ...(otel.headers ? { headers: otel.headers } : {}),
     ...(langfuse.enabled
@@ -45,13 +48,15 @@ export function createTelemetryExporter(telemetryConfig: TelemetryConfig): Runti
     ...(primary.serviceVersion !== undefined ? { serviceVersion: primary.serviceVersion } : {}),
     // Both resolvers default this to false; a truthy spread here would drop the
     // false and applyTelemetryRedaction's strict === false check would never strip.
-    includePayloads: primary.includePayloads === true,
+    ...runtimeTelemetryOptions(telemetryConfig),
   });
 }
 
 export function createOtelExporter(telemetryConfig: TelemetryConfig): RuntimeEventExporter {
   const config = resolveOtelExporterConfig(telemetryConfig);
-  return config.enabled ? new OtelRuntimeEventExporter(config) : new NoopRuntimeEventExporter();
+  return config.enabled
+    ? new OtelRuntimeEventExporter(config)
+    : new NoopRuntimeEventExporter(config.configurationWarnings?.join('; ') || undefined);
 }
 
 export function resolveOtelExporterConfig(telemetryConfig: TelemetryConfig): OtelExporterConfig {
@@ -59,13 +64,14 @@ export function resolveOtelExporterConfig(telemetryConfig: TelemetryConfig): Ote
   const endpoint = otel?.endpoint ?? '';
   return {
     enabled: Boolean(otel?.enabled && endpoint),
+    configurationWarnings: configurationWarnings({ ...(otel ? { otel } : {}) }),
     endpoint,
     ...(otel?.headers ? { headers: otel.headers } : {}),
     flushAt: parsePositiveInteger(otel?.flushAt, DEFAULT_OTEL_FLUSH_AT),
     flushIntervalMs: parsePositiveInteger(otel?.flushIntervalMs, DEFAULT_OTEL_FLUSH_INTERVAL_MS),
     serviceName: telemetryConfig.serviceName ?? 'pi',
     ...(telemetryConfig.serviceVersion ? { serviceVersion: telemetryConfig.serviceVersion } : {}),
-    includePayloads: telemetryConfig.includePayloads ?? false,
+    ...runtimeTelemetryOptions(telemetryConfig),
   };
 }
 

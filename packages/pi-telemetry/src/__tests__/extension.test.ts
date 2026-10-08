@@ -24,6 +24,7 @@ const handlers = new Map<string, EventHandler>();
 
 const mockPi = {
   registerTool: vi.fn(),
+  registerCommand: vi.fn(),
   on: vi.fn((event: string, handler: EventHandler) => {
     handlers.set(event, handler);
   }),
@@ -57,6 +58,278 @@ describe('telemetryExtension', () => {
       publish: vi.fn(() => Promise.resolve()),
       flush: vi.fn(() => Promise.resolve()),
       close: vi.fn(() => Promise.resolve()),
+    });
+  });
+
+  it('keeps retry generations in the prompt trace until the agent settles', async () => {
+    telemetryExtension(mockPi as any);
+    await fireEvent(
+      'session_start',
+      {},
+      { sessionManager: { getSessionId: () => 'persisted-session' } },
+    );
+    await fireEvent('input', { text: 'retry this' });
+    await fireEvent('turn_start', { timestamp: Date.now() });
+    await fireEvent('agent_end', { messages: [{ role: 'assistant', content: 'first' }] });
+    expect(
+      getPublishedEvents().filter((e) => 'type' in e && e.type === 'chat_turn_completed'),
+    ).toHaveLength(0);
+    await fireEvent('before_provider_request', { payload: {} });
+    await fireEvent('agent_end', { messages: [{ role: 'assistant', content: 'final' }] });
+    await fireEvent('agent_settled', {});
+    const completed = getPublishedEvents().filter(
+      (e) => 'type' in e && e.type === 'chat_turn_completed',
+    );
+    expect(completed).toHaveLength(1);
+    expect(completed[0]).toMatchObject({
+      sessionId: 'persisted-session',
+      details: { output: 'final' },
+    });
+  });
+
+  it('marks aborted generations and roots as failed while keeping the response', async () => {
+    telemetryExtension(mockPi as any);
+    await fireEvent('session_start', {});
+    await fireEvent('input', { text: 'cancel' });
+    await fireEvent('turn_start', { timestamp: Date.now() });
+    await fireEvent('before_provider_request', { payload: {} });
+    const message = {
+      role: 'assistant',
+      content: 'partial',
+      stopReason: 'aborted',
+      errorMessage: 'Cancelled',
+    };
+    await fireEvent('message_end', { message });
+    await fireEvent('agent_end', { messages: [message] });
+    await fireEvent('agent_settled', {});
+    expect(getPublishedEvents()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          llmGenerationId: 'gen-1',
+          status: 'failed',
+          stopReason: 'aborted',
+          error: 'Cancelled',
+        }),
+        expect.objectContaining({
+          type: 'chat_turn_failed',
+          error: 'Cancelled',
+          details: { output: 'partial', outcome: 'aborted' },
+        }),
+      ]),
+    );
+  });
+
+  it('measures first content latency rather than the stream start and records actual model attribution', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-10-08T00:00:00Z'));
+      telemetryExtension(mockPi as any);
+      await fireEvent('session_start', {});
+      await fireEvent('turn_start', { timestamp: Date.now() });
+      await fireEvent(
+        'before_provider_request',
+        { payload: { temperature: 0.3, max_tokens: 4096 } },
+        { model: { provider: 'openai', id: 'requested' }, thinkingLevel: 'high' },
+      );
+      await fireEvent('message_update', { assistantMessageEvent: { type: 'start' } });
+      vi.advanceTimersByTime(250);
+      await fireEvent('message_update', {
+        assistantMessageEvent: { type: 'thinking_delta', delta: 'reason' },
+      });
+      vi.advanceTimersByTime(100);
+      await fireEvent('message_end', {
+        message: {
+          role: 'assistant',
+          content: 'answer',
+          responseModel: 'served',
+          api: 'openai-responses',
+        },
+      });
+      expect(getPublishedEvents()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            status: 'started',
+            modelParameters: { temperature: 0.3, max_tokens: 4096, thinkingLevel: 'high' },
+          }),
+          expect.objectContaining({
+            status: 'completed',
+            completionStartTime: '2026-10-08T00:00:00.250Z',
+            requestedModel: 'requested',
+            model: { provider: 'openai', model: 'served', thinkingLevel: 'high' },
+            api: 'openai-responses',
+          }),
+        ]),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('records compaction and branch summary usage even outside an active prompt', async () => {
+    telemetryExtension(mockPi as any);
+    await fireEvent('session_start', {}, { sessionManager: { getSessionId: () => 's' } });
+    const ctx = { model: { provider: 'openai', id: 'summary' } };
+    const usage = { input: 100, output: 20, reasoning: 5, cost: { total: 0.1 } };
+    await fireEvent('session_before_compact', {});
+    await fireEvent(
+      'session_compact',
+      { compactionEntry: { summary: 'compact', usage }, reason: 'manual' },
+      ctx,
+    );
+    await fireEvent('session_tree', { summaryEntry: { summary: 'branch', usage } }, ctx);
+    const generations = getPublishedEvents().filter((e) => 'llmGenerationId' in e);
+    expect(generations).toHaveLength(4);
+    expect(generations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: 'completed',
+          source: 'compaction',
+          usage: { input: 100, output: 20, reasoning: 5, cost: { total: 0.1 } },
+        }),
+        expect.objectContaining({ status: 'completed', source: 'branch_summary' }),
+      ]),
+    );
+    expect(generations[0]!.traceId).toBe(generations[1]!.traceId);
+    expect(generations[2]!.traceId).not.toBe(generations[0]!.traceId);
+  });
+
+  it('keeps raw requests intact while exposing readable history, thinking and tool calls', async () => {
+    telemetryExtension(mockPi as any);
+    await fireEvent('session_start', {});
+    await fireEvent('input', { text: 'hello' });
+    await fireEvent('turn_start', { timestamp: Date.now() });
+    await fireEvent('agent_start', {}, { getSystemPrompt: () => 'final instructions' });
+    await fireEvent('context', { messages: [{ role: 'user', content: 'hello' }] });
+    const payload = { messages: [{ role: 'user', content: 'hello' }], max_tokens: 10 };
+    await fireEvent('before_provider_request', { payload });
+    await fireEvent('message_end', {
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'check' },
+          { type: 'text', text: 'answer' },
+          { type: 'toolCall', id: 'call', name: 'read', arguments: { path: 'a' } },
+        ],
+      },
+    });
+    const generations = getPublishedEvents().filter((e) => 'llmGenerationId' in e) as any[];
+    expect(generations[0].input).toEqual(payload);
+    expect(payload).toEqual({ messages: [{ role: 'user', content: 'hello' }], max_tokens: 10 });
+    expect(generations[0].displayInput).toEqual([
+      { role: 'system', content: 'final instructions' },
+      { role: 'user', content: 'hello' },
+    ]);
+    expect(generations[1].displayOutput).toMatchObject({
+      role: 'assistant',
+      content: 'answer',
+      thinking: ['check'],
+      tool_calls: [
+        { id: 'call', type: 'function', function: { name: 'read', arguments: '{"path":"a"}' } },
+      ],
+    });
+  });
+
+  it('offers safe status and flush commands without claiming backend delivery', async () => {
+    mockPi.registerCommand.mockClear();
+    const exporter = {
+      publish: vi.fn(),
+      flush: vi.fn(),
+      close: vi.fn(),
+      getStatus: () => ({ enabled: true, state: 'error', error: 'Telemetry export failed' }),
+    };
+    vi.mocked(createTelemetryExporter).mockReturnValueOnce(exporter);
+    telemetryExtension(mockPi as any);
+    await fireEvent('session_start', {});
+    const command = mockPi.registerCommand.mock.calls.find(([name]) => name === 'telemetry')?.[1];
+    expect(command).toBeDefined();
+    const notify = vi.fn();
+    await command.handler('status', { hasUI: true, ui: { notify } });
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining('error'), 'info');
+    await command.handler('flush', { hasUI: true, ui: { notify } });
+    expect(exporter.flush).toHaveBeenCalledOnce();
+    expect(notify).toHaveBeenLastCalledWith('Telemetry export failed', 'error');
+    expect(JSON.stringify(notify.mock.calls)).not.toContain('trace sent');
+  });
+
+  it('restores prompt numbering and separates newly selected sessions', async () => {
+    telemetryExtension(mockPi as any);
+    const manager = {
+      getSessionId: () => 'restored',
+      getEntries: () => [
+        { type: 'message', message: { role: 'user' } },
+        { type: 'message', message: { role: 'assistant' } },
+        { type: 'message', message: { role: 'user' } },
+      ],
+    };
+    await fireEvent('session_start', {}, { sessionManager: manager });
+    await fireEvent('input', { text: 'third' });
+    await fireEvent('turn_start', { timestamp: Date.now() });
+    expect(getPublishedEvents()[0]).toMatchObject({ sessionId: 'restored', promptNumber: 3 });
+    await fireEvent('agent_end', { messages: [] });
+    await fireEvent('agent_settled', {});
+    await fireEvent(
+      'session_start',
+      {},
+      { sessionManager: { getSessionId: () => 'new', getEntries: () => [] } },
+    );
+    await fireEvent('input', { text: 'first' });
+    await fireEvent('turn_start', { timestamp: Date.now() });
+    const nextExporter = vi.mocked(createTelemetryExporter).mock.results[1]!.value;
+    expect(nextExporter.publish.mock.calls.at(-1)[0]).toMatchObject({
+      sessionId: 'new',
+      promptNumber: 1,
+    });
+  });
+
+  it('keeps steering and queued follow-ups in the running trace until settlement', async () => {
+    telemetryExtension(mockPi as any);
+    await fireEvent('session_start', {});
+    await fireEvent('input', { text: 'original' });
+    await fireEvent('turn_start', { timestamp: Date.now() });
+    await fireEvent('before_provider_request', { payload: {} });
+    const traceId = getPublishedEvents()[0]!.traceId;
+    await fireEvent('input', { text: 'follow-up', streamingBehavior: 'followUp' });
+    await fireEvent('message_end', { message: { role: 'assistant', content: 'first' } });
+    await fireEvent('before_provider_request', { payload: {} });
+    await fireEvent('message_end', { message: { role: 'assistant', content: 'final' } });
+    await fireEvent('agent_end', { messages: [{ role: 'assistant', content: 'final' }] });
+    await fireEvent('agent_settled', {});
+    const events = getPublishedEvents();
+    expect(events.every((event) => event.traceId === traceId)).toBe(true);
+    expect(
+      events.filter((event) => 'type' in event && event.type === 'chat_turn_completed'),
+    ).toHaveLength(1);
+    expect(events.some((event) => 'error' in event && event.error)).toBe(false);
+    expect(events.at(-1)).toMatchObject({ promptNumber: 1 });
+  });
+
+  it.each([
+    [
+      { thinkingBudget: 512, includeThoughts: true },
+      { thinkingBudget: 512, includeThoughts: true },
+    ],
+    [{ thinkingLevel: 'HIGH' }, { thinkingLevel: 'HIGH' }],
+  ])('records Google Vertex generation config without collecting request content: %j', async (thinkingConfig, expectedThinking) => {
+    telemetryExtension(mockPi as any);
+    await fireEvent('session_start', {});
+    await fireEvent('input', { text: 'private question' });
+    await fireEvent('turn_start', { timestamp: Date.now() });
+    await fireEvent(
+      'before_provider_request',
+      {
+        payload: {
+          model: 'gemini',
+          contents: [{ role: 'user', parts: [{ text: 'private question' }] }],
+          config: { temperature: 0.7, maxOutputTokens: 2048, thinkingConfig },
+        },
+      },
+      { model: { id: 'gemini', provider: 'google-vertex' } },
+    );
+    const generation = getPublishedEvents().find((event) => 'llmGenerationId' in event) as any;
+    expect(generation.modelParameters).toEqual({
+      temperature: 0.7,
+      maxOutputTokens: 2048,
+      ...expectedThinking,
     });
   });
 
@@ -149,8 +422,11 @@ describe('telemetryExtension', () => {
         turnIndex: 1,
         timestamp: 1700000001000,
       });
-      expect(getPublishedEvents()[1]!.traceId).toMatch(/^[0-9a-f]{32}$/);
-      expect(getPublishedEvents()[1]!.traceId).not.toBe('ci-known-trace');
+      const starts = getPublishedEvents().filter(
+        (event) => 'type' in event && event.type === 'chat_turn_started',
+      );
+      expect(starts[1]!.traceId).toMatch(/^[0-9a-f]{32}$/);
+      expect(starts[1]!.traceId).not.toBe('ci-known-trace');
     } finally {
       delete process.env.PI_TELEMETRY_TRACE_ID;
       delete process.env.PI_TELEMETRY_SESSION_ID;
@@ -198,7 +474,7 @@ describe('telemetryExtension', () => {
     }
   });
 
-  it('publishes chat_turn_completed on agent_end with durationMs', async () => {
+  it('publishes chat_turn_completed after settlement with durationMs', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
 
@@ -208,6 +484,7 @@ describe('telemetryExtension', () => {
       type: 'agent_end',
       messages: [{ role: 'assistant', content: [{ type: 'text', text: 'done' }] }],
     });
+    await fireEvent('agent_settled', {});
 
     const events = getPublishedEvents();
     expect(events).toHaveLength(2);
@@ -246,6 +523,7 @@ describe('telemetryExtension', () => {
       type: 'agent_end',
       messages: [{ role: 'assistant', content: [{ type: 'text', text: 'done' }] }],
     });
+    await fireEvent('agent_settled', {});
 
     const events = getPublishedEvents();
     const traceIds = new Set(events.map((e) => e.traceId));
@@ -604,7 +882,9 @@ describe('telemetryExtension', () => {
     });
 
     const events = getPublishedEvents();
-    const llmEvents = events.filter((e) => 'llmGenerationId' in e);
+    const llmEvents = events.filter(
+      (e) => 'llmGenerationId' in e && 'status' in e && e.status === 'started',
+    );
     expect(llmEvents[0]).toMatchObject({ llmGenerationId: 'gen-1' });
     expect(llmEvents[1]).toMatchObject({ llmGenerationId: 'gen-2' });
   });
@@ -915,6 +1195,7 @@ describe('telemetryExtension', () => {
         type: 'agent_end',
         messages: [{ role: 'assistant', content: [{ type: 'text', text: 'done' }] }],
       });
+      await fireEvent('agent_settled', {});
 
       const events = getPublishedEvents();
       const completed = events.find((e) => 'type' in e && e.type === 'subagent_completed');

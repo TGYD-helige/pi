@@ -13,7 +13,7 @@ This repository contains the open-source runtime contracts, adapters, and orches
 | Core | `@amaster.ai/pi-shared` | Shared runtime types and contracts: settings loader, session/event/artifact types, turn and subagent types. |
 | Core | `@amaster.ai/pi-storage` | JSON-file and MySQL/Prisma persistence adapters for sessions, transcripts, events, memory, artifacts, subagents, and scheduled tasks. |
 | Extension | `@amaster.ai/pi-attachments` | Attachment normalization, local/remote upload handling, document parsing, and model-readable attachment prompts. |
-| Extension | `@amaster.ai/pi-telemetry` | Runtime telemetry with Langfuse and OpenTelemetry exporters. |
+| Extension | `@amaster.ai/pi-telemetry` | Runtime traces, TTFT, token/cost accounting and diagnostics with Langfuse and OpenTelemetry exporters. |
 | Extension | `@amaster.ai/pi-task-scheduler` | Cron-based scheduled task management with LLM-callable tools. |
 | Extension | `@amaster.ai/pi-goal` | Derives a goal from the conversation and keeps the agent working until the condition is met, with iteration/token backstops. |
 | Extension | `@amaster.ai/pi-browser-use` | Browser automation wrapping chrome-devtools-mcp with `browser_`-prefixed tools. |
@@ -38,7 +38,7 @@ Every package is ESM-only and published under the `@amaster.ai` npm scope.
 <table>
   <tr>
     <td><strong>@amaster.ai/pi-attachments</strong><br><img src="./packages/pi-attachments/preview.png" alt="pi-attachments preview" width="260"></td>
-    <td><strong>@amaster.ai/pi-telemetry</strong><br><img src="./packages/pi-telemetry/preview.png" alt="pi-telemetry preview" width="260"></td>
+    <td><strong>@amaster.ai/pi-telemetry</strong><br><img src="./packages/pi-telemetry/preview-observability.png" alt="pi-telemetry preview" width="260"></td>
     <td><strong>@amaster.ai/pi-task-scheduler</strong><br><img src="./packages/pi-task-scheduler/preview.png" alt="pi-task-scheduler preview" width="260"></td>
   </tr>
   <tr>

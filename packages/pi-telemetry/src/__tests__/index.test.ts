@@ -1,3 +1,5 @@
+import { once } from 'node:events';
+import { createServer } from 'node:http';
 import { getLangfuseTracerProvider, setLangfuseTracerProvider } from '@langfuse/tracing';
 import { SpanStatusCode } from '@opentelemetry/api';
 import {
@@ -51,6 +53,7 @@ function makeExporter(configOverrides: Partial<OtelExporterConfig> = {}) {
     {
       enabled: true,
       endpoint: '',
+      includePayloads: true,
       flushAt: 10,
       flushIntervalMs: 60_000,
       ...configOverrides,
@@ -82,6 +85,273 @@ afterEach(() => {
 });
 
 describe('telemetry', () => {
+  it('splits reasoning without double counting and preserves cache costs', async () => {
+    const { exporter, inMemory } = makeExporter();
+    await exporter.publish({
+      id: 'usage',
+      traceId,
+      sessionId: 's',
+      conversationId: 's',
+      llmGenerationId: 'g',
+      createdAt: new Date().toISOString(),
+      model: { provider: 'openai', model: 'm' },
+      status: 'completed',
+      usage: {
+        input: 100,
+        output: 40,
+        reasoning: 10,
+        cacheRead: 20,
+        cacheWrite: 30,
+        cacheWrite1h: 5,
+        totalTokens: 190,
+        cost: { input: 1, output: 4, cacheRead: 0.2, cacheWrite: 0.3, total: 5.5 },
+      },
+    });
+    const attributes = inMemory.getFinishedSpans()[0]!.attributes;
+    expect(JSON.parse(String(attributes['langfuse.observation.usage_details']))).toEqual({
+      input: 100,
+      output: 30,
+      output_reasoning_tokens: 10,
+      cache_read_input_tokens: 20,
+      cache_creation_input_tokens: 30,
+      total: 190,
+    });
+    expect(JSON.parse(String(attributes['langfuse.observation.cost_details']))).toEqual({
+      input: 1,
+      output: 3,
+      output_reasoning_tokens: 1,
+      cache_read_input_tokens: 0.2,
+      cache_creation_input_tokens: 0.3,
+      total: 5.5,
+    });
+    expect(attributes['langfuse.observation.metadata.cacheWrite1h']).toBe('5');
+    await exporter.close();
+  });
+
+  it('masks configured credentials even in errors and strips image binaries when media is disabled', async () => {
+    const { exporter, inMemory } = makeExporter({
+      includePayloads: true,
+      headers: { Authorization: 'Bearer private-token' },
+      langfuse: {
+        publicKey: 'pk-lf-test',
+        secretKey: 'sk-lf-test',
+        baseUrl: 'https://example.test',
+        flushAt: 20,
+        flushIntervalMs: 5000,
+      },
+    });
+    await exporter.publish({
+      id: 'privacy',
+      traceId,
+      sessionId: 's',
+      conversationId: 's',
+      llmGenerationId: 'g',
+      status: 'failed',
+      createdAt: new Date().toISOString(),
+      model: { provider: 'p', model: 'm' },
+      input: {
+        image: { type: 'image', mimeType: 'image/png', data: 'aGVsbG8=' },
+        text: 'sk-lf-test private-token',
+      },
+      displayInput: [
+        {
+          role: 'user',
+          content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,aGVsbG8=' } }],
+        },
+      ],
+      error: 'Failed sk-lf-test private-token',
+    });
+    const span = inMemory.getFinishedSpans()[0]!;
+    const serialized = JSON.stringify({ attributes: span.attributes, status: span.status });
+    expect(serialized).not.toContain('sk-lf-test');
+    expect(serialized).not.toContain('private-token');
+    expect(serialized).not.toContain('aGVsbG8=');
+    expect(serialized).toContain('[redacted]');
+    await exporter.close();
+  });
+
+  it('reports a Langfuse transport failure even when generic OTLP succeeds', async () => {
+    const requests: string[] = [];
+    const server = createServer((request, response) => {
+      requests.push(request.url ?? '');
+      request.resume();
+      response.writeHead(request.url?.startsWith('/api/public/otel') ? 400 : 200);
+      response.end();
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('missing test server port');
+    const endpoint = `http://127.0.0.1:${address.port}`;
+    const exporter = createTelemetryExporter({
+      langfuse: {
+        enabled: true,
+        publicKey: 'pk-lf-test',
+        secretKey: 'sk-lf-test',
+        baseUrl: endpoint,
+      },
+      otel: { enabled: true, endpoint },
+    });
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      delayMock.mockImplementationOnce(() => new Promise<void>(() => {}));
+      await exporter.publish(completedTurnEvent('transport'));
+      await exporter.flush?.();
+      expect(requests).toEqual(
+        expect.arrayContaining(['/api/public/otel/v1/traces', '/v1/traces']),
+      );
+      expect(exporter.getStatus?.()).toMatchObject({ state: 'error' });
+      expect(JSON.stringify(errors.mock.calls)).not.toContain('sk-lf-test');
+    } finally {
+      await exporter.close?.();
+      server.close();
+      await once(server, 'close');
+    }
+  });
+
+  it('exports normalized conversation and timing but removes both raw and display payloads in private mode', async () => {
+    for (const includePayloads of [false, true]) {
+      const { exporter, inMemory } = makeExporter({
+        includePayloads,
+        userId: 'user',
+        environment: 'production',
+        release: 'v1',
+      });
+      const event = {
+        id: 'display',
+        traceId,
+        sessionId: 's',
+        conversationId: 's',
+        llmGenerationId: 'g',
+        model: { provider: 'p', model: 'm' },
+        createdAt: '2026-10-08T00:00:00Z',
+        input: { messages: ['secret-request'] },
+        displayInput: [{ role: 'user', content: 'secret-question' }],
+      };
+      await exporter.publish({ ...event, status: 'started' });
+      await exporter.publish({
+        ...event,
+        status: 'completed',
+        createdAt: '2026-10-08T00:00:01Z',
+        completionStartTime: '2026-10-08T00:00:00.250Z',
+        displayOutput: { role: 'assistant', content: 'secret-answer' },
+      });
+      const attributes = inMemory.getFinishedSpans()[0]!.attributes;
+      expect(attributes['langfuse.observation.completion_start_time']).toBe(
+        '2026-10-08T00:00:00.250Z',
+      );
+      expect(attributes).toMatchObject({
+        'user.id': 'user',
+        'langfuse.environment': 'production',
+        'langfuse.release': 'v1',
+      });
+      if (includePayloads) {
+        expect(JSON.parse(String(attributes['langfuse.observation.input']))).toEqual([
+          { role: 'user', content: 'secret-question' },
+        ]);
+        expect(JSON.parse(String(attributes['langfuse.observation.metadata.rawInput']))).toEqual({
+          messages: ['secret-request'],
+        });
+      } else expect(JSON.stringify(attributes)).not.toContain('secret-');
+      await exporter.close();
+    }
+  });
+
+  it('explains missing keys while retaining masking for disabled destinations', async () => {
+    const disabled = createTelemetryExporter({ langfuse: { enabled: true } });
+    expect(disabled.getStatus?.()).toMatchObject({
+      enabled: false,
+      state: 'missing-configuration',
+      error: expect.stringContaining('credentials'),
+    });
+    const partlyEnabled = createTelemetryExporter({
+      langfuse: { enabled: true },
+      otel: { enabled: true, endpoint: 'https://example.test' },
+    });
+    expect(partlyEnabled.getStatus?.()).toMatchObject({
+      enabled: true,
+      state: 'configuration-warning',
+      error: expect.stringContaining('credentials'),
+    });
+    await partlyEnabled.close?.();
+    const config = {
+      includePayloads: true,
+      langfuse: { enabled: false, publicKey: 'custom-public', secretKey: 'custom-secret' },
+      otel: { enabled: true, endpoint: 'https://example.test' },
+    };
+    for (const resolved of [
+      resolveLangfuseExporterConfig(config),
+      resolveOtelExporterConfig(config),
+    ]) {
+      const { exporter, inMemory } = makeExporter({ ...resolved, enabled: true });
+      await exporter.publish({
+        id: 'mask',
+        traceId,
+        sessionId: 's',
+        conversationId: 's',
+        toolCallId: 't',
+        toolName: 'read',
+        status: 'failed',
+        error: 'custom-secret',
+        createdAt: new Date().toISOString(),
+      });
+      expect(inMemory.getFinishedSpans()[0]!.status.message).toBe('[redacted]');
+      await exporter.close();
+    }
+  });
+
+  it('replaces malformed provider media with markers before SDK detection', async () => {
+    const { exporter, inMemory } = makeExporter({
+      includePayloads: true,
+      mediaUploadEnabled: true,
+    });
+    const base = {
+      id: 'invalid-media',
+      traceId,
+      sessionId: 's',
+      conversationId: 's',
+      llmGenerationId: 'g',
+      model: { provider: 'p', model: 'm' },
+      createdAt: new Date().toISOString(),
+    };
+    await exporter.publish({ ...base, status: 'started', input: 'data:image/png;base64,abcd!!!!' });
+    await exporter.publish({ ...base, status: 'completed' });
+    expect(
+      String(inMemory.getFinishedSpans()[0]!.attributes['langfuse.observation.input']),
+    ).not.toContain('data:image/png');
+    await exporter.close();
+  });
+
+  it('keeps valid media after rejecting an oversized or invalid preceding image', async () => {
+    const { exporter, inMemory } = makeExporter({
+      includePayloads: true,
+      mediaUploadEnabled: true,
+    });
+    const gif = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+    const base = {
+      id: 'media-budget',
+      traceId,
+      sessionId: 's',
+      conversationId: 's',
+      llmGenerationId: 'g',
+      model: { provider: 'p', model: 'm' },
+      createdAt: new Date().toISOString(),
+    };
+    await exporter.publish({
+      ...base,
+      status: 'started',
+      input: {
+        rejected: `data:image/png;base64,${'!'.repeat(750_004)}`,
+        accepted: gif,
+      },
+    });
+    await exporter.publish({ ...base, status: 'completed' });
+    expect(
+      String(inMemory.getFinishedSpans()[0]!.attributes['langfuse.observation.input']),
+    ).toContain(gif);
+    await exporter.close();
+  });
+
   it('keeps root exporters resilient when one delegate fails', async () => {
     const event: RuntimeTelemetryEvent = {
       id: 'event-1',
