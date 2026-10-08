@@ -137,20 +137,51 @@ export function displayContent(content: unknown, mediaEnabled = false): JsonValu
     : parts;
 }
 
-export function displayMessage(message: unknown): JsonObject | undefined {
+export function displayMessage(message: unknown, systemUpdate = false): JsonObject | undefined {
   if (!message || typeof message !== 'object') return undefined;
   const msg = message as Record<string, unknown>;
   const role = msg.role === 'toolResult' ? 'tool' : msg.role;
   if (!['user', 'assistant', 'system', 'tool'].includes(String(role))) return undefined;
   const content = displayContent(msg.content);
   const result: JsonObject = { role: String(role), content };
+  if (role === 'system') {
+    const sections =
+      msg.sections && typeof msg.sections === 'object' && !Array.isArray(msg.sections)
+        ? Object.entries(msg.sections).flatMap(([name, text]) =>
+            text === null && systemUpdate
+              ? [`Removed system prompt section "${name}".`]
+              : typeof text === 'string'
+                ? [systemUpdate ? `Updated system prompt section "${name}":\n\n${text}` : text]
+                : [],
+          )
+        : [];
+    result.content = [typeof content === 'string' ? content : '', ...sections]
+      .filter(Boolean)
+      .join('\n\n');
+    if (Array.isArray(msg.toolsAdded)) result.tools = toTelemetryValue(msg.toolsAdded);
+  }
   if (typeof msg.toolCallId === 'string') result.tool_call_id = msg.toolCallId;
   if (typeof msg.toolName === 'string') result.name = msg.toolName;
   if (Array.isArray(msg.content)) {
     const thinking = msg.content
-      .filter((part) => part?.type === 'thinking' && typeof part.thinking === 'string')
-      .map((part) => part.thinking);
+      .filter(
+        (part) => part?.type === 'thinking' && !part.redacted && typeof part.thinking === 'string',
+      )
+      .map((part) => ({
+        type: 'thinking',
+        content: part.thinking,
+        ...(typeof part.thinkingSignature === 'string'
+          ? { signature: part.thinkingSignature }
+          : {}),
+      }));
     if (thinking.length) result.thinking = thinking;
+    const redacted = msg.content
+      .filter(
+        (part) =>
+          part?.type === 'thinking' && part.redacted && typeof part.thinkingSignature === 'string',
+      )
+      .map((part) => ({ type: 'redacted_thinking', data: part.thinkingSignature }));
+    if (redacted.length) result.redacted_thinking = redacted;
     const calls = msg.content
       .filter((part) => part?.type === 'toolCall')
       .map((part) => ({

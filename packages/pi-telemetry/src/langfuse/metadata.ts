@@ -78,6 +78,7 @@ export function llmGenerationMetadata(event: RuntimeLlmGenerationEvent): JsonObj
     ...(event.source ? { source: event.source } : {}),
     ...(event.usage?.cacheWrite1h !== undefined ? { cacheWrite1h: event.usage.cacheWrite1h } : {}),
     ...(event.usage?.reasoning !== undefined ? { reasoning: event.usage.reasoning } : {}),
+    ...(event.usage?.costSource ? { costSource: event.usage.costSource } : {}),
     ...(event.usage ? { usage: event.usage } : {}),
     ...(event.error ? { error: event.error } : {}),
   };
@@ -106,7 +107,7 @@ export function toLangfuseUsageDetails(usage: RuntimeLlmUsage): JsonObject {
 }
 
 export function langfuseUsageAttributes(usage: RuntimeLlmUsage): JsonObject {
-  const cost = usage.cost;
+  const cost = usage.costSource === 'unknown' ? undefined : usage.cost;
   const reasoning = reasoningSubset(usage);
   // Pi reports combined output cost; the split is proportional, not separately metered.
   const reasoningCost =

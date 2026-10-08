@@ -7,12 +7,12 @@
 // observations, with parentage and completion checked — not just names:
 //
 //   span       chat-turn  (root: parentObservationId == null, endTime set)
-//   ├─ span       bash [echo <codeword> parent]                    (endTime set)
-//   ├─ span       bash [bash .github/scripts/telemetry-…]          (endTime set)
+//   ├─ tool       bash [echo <codeword> parent]                    (endTime set)
+//   ├─ tool       bash [bash .github/scripts/telemetry-…]          (endTime set)
 //   ├─ generation llm-generation [main] …                          (endTime set)
 //   │  └─ span       llm-stream                                 (endTime set)
 //   └─ span       subagent [ci-probe]                              (endTime set)
-//      ├─ span       bash [echo <codeword> child]                  (endTime set)
+//      ├─ tool       bash [echo <codeword> child]                  (endTime set)
 //      └─ generation llm-generation [subagent] …                   (endTime set)
 //         └─ span       llm-stream                                  (endTime set)
 //
@@ -82,6 +82,7 @@ async function readBodyCapped(response, maxBytes) {
 // Returns a list of problems; empty list means the trace fully matches.
 export function evaluateTrace(observations, codeword, scenario = 'basic') {
   const spans = observations.filter((o) => o.type === 'SPAN');
+  const tools = observations.filter((o) => o.type === 'TOOL');
   const generations = observations.filter((o) => o.type === 'GENERATION');
   const problems = [];
   const need = (condition, message) => {
@@ -121,7 +122,48 @@ export function evaluateTrace(observations, codeword, scenario = 'basic') {
       isCount(usageDetails.input) && isCount(usageDetails.output) && isCount(usageDetails.total),
       `${label} is missing input/output/total usage`,
     );
-    need(isCount(costDetails.total), `${label} is missing total cost`);
+    need(
+      isCount(costDetails.total) || generation.metadata?.costSource === 'unknown',
+      `${label} is missing total cost without unknown cost provenance`,
+    );
+    if (scenario !== 'redacted') {
+      const input = Array.isArray(generation.input) ? generation.input : [];
+      need(
+        input.some((message) => message?.role === 'system' && typeof message.content === 'string' && message.content.trim()),
+        `${label} is missing non-empty system input`,
+      );
+      let rawInput = generation.metadata?.rawInput;
+      if (typeof rawInput === 'string') {
+        try {
+          rawInput = JSON.parse(rawInput);
+        } catch {
+          need(false, `${label} has invalid JSON in raw provider input`);
+        }
+      }
+      const rawMessages = rawInput?.messages;
+      if (Array.isArray(rawMessages)) {
+        const systemText = input.filter((message) => message?.role === 'system').map((message) => message.content).join('\n\n');
+        for (const message of rawMessages) {
+          if (message?.role === 'system' && typeof message.content === 'string' && message.content.trim()) {
+            need(systemText.includes(message.content), `${label} is missing complete system content from the provider request`);
+          }
+        }
+      }
+      for (const message of [...input, generation.output]) {
+        if (message?.thinking !== undefined) {
+          need(
+            Array.isArray(message.thinking) && message.thinking.every((block) => block?.type === 'thinking' && typeof block.content === 'string'),
+            `${label} has invalid thinking blocks`,
+          );
+        }
+        if (message?.redacted_thinking !== undefined) {
+          need(
+            Array.isArray(message.redacted_thinking) && message.redacted_thinking.every((block) => block?.type === 'redacted_thinking' && typeof block.data === 'string'),
+            `${label} has invalid redacted thinking blocks`,
+          );
+        }
+      }
+    }
 
     const streams = spans.filter(
       (observation) =>
@@ -191,8 +233,8 @@ export function evaluateTrace(observations, codeword, scenario = 'basic') {
     }
     validateChildren([
       {
-        label: 'span "bash"',
-        matches: spans.filter((o) => o.name === 'bash'),
+        label: 'tool "bash"',
+        matches: tools.filter((o) => o.name === 'bash'),
         parent: root,
         exact: true,
       },
@@ -224,8 +266,8 @@ export function evaluateTrace(observations, codeword, scenario = 'basic') {
 
     validateChildren([
       {
-        label: 'span "bash [... telemetry-subagent.sh hierarchy]"',
-        matches: spans.filter((o) => o.name?.startsWith('bash [') && o.name.includes('telemetry-subagent.sh') && o.name.includes('hierarchy')),
+        label: 'tool "bash [... telemetry-subagent.sh hierarchy]"',
+        matches: tools.filter((o) => o.name?.startsWith('bash [') && o.name.includes('telemetry-subagent.sh') && o.name.includes('hierarchy')),
         parent: root,
         exact: true,
       },
@@ -235,8 +277,8 @@ export function evaluateTrace(observations, codeword, scenario = 'basic') {
         parent: root,
       },
       {
-        label: 'span "bash [... telemetry-subagent.sh]"',
-        matches: spans.filter((o) => o.name?.startsWith('bash [') && o.name.includes('telemetry-subagent.sh') && !o.name.includes('hierarchy')),
+        label: 'tool "bash [... telemetry-subagent.sh]"',
+        matches: tools.filter((o) => o.name?.startsWith('bash [') && o.name.includes('telemetry-subagent.sh') && !o.name.includes('hierarchy')),
         parent: outer,
         exact: true,
       },
@@ -246,8 +288,8 @@ export function evaluateTrace(observations, codeword, scenario = 'basic') {
         parent: outer,
       },
       {
-        label: `span "bash [echo ${codeword} child]"`,
-        matches: spans.filter((o) => o.name?.startsWith('bash [') && o.name.includes(codeword) && o.name.includes('child')),
+        label: `tool "bash [echo ${codeword} child]"`,
+        matches: tools.filter((o) => o.name?.startsWith('bash [') && o.name.includes(codeword) && o.name.includes('child')),
         parent: inner,
         exact: true,
       },
@@ -276,18 +318,18 @@ export function evaluateTrace(observations, codeword, scenario = 'basic') {
 
   const checks = [
     {
-      label: `span "bash [echo ${codeword} parent]"`,
+      label: `tool "bash [echo ${codeword} parent]"`,
       // The model may quote the string or wrap the command — match on the
       // codeword and "parent" appearing in a bash span, not an exact prefix.
-      matches: spans.filter(
+      matches: tools.filter(
         (o) => o.name?.startsWith('bash [') && o.name.includes(codeword) && o.name.includes('parent'),
       ),
       parent: root,
       exact: true,
     },
     {
-      label: `span "bash [... telemetry-subagent.sh]"`,
-      matches: spans.filter(
+      label: `tool "bash [... telemetry-subagent.sh]"`,
+      matches: tools.filter(
         (o) => o.name?.startsWith('bash [') && o.name.includes('telemetry-subagent.sh'),
       ),
       parent: root,
@@ -299,8 +341,8 @@ export function evaluateTrace(observations, codeword, scenario = 'basic') {
       parent: root,
     },
     {
-      label: `span "bash [echo ${codeword} child]"`,
-      matches: spans.filter(
+      label: `tool "bash [echo ${codeword} child]"`,
+      matches: tools.filter(
         (o) => o.name?.startsWith('bash [') && o.name.includes(codeword) && o.name.includes('child'),
       ),
       parent: subagent,

@@ -222,7 +222,7 @@ describe('telemetryExtension', () => {
     expect(generations[1].displayOutput).toMatchObject({
       role: 'assistant',
       content: 'answer',
-      thinking: ['check'],
+      thinking: [{ type: 'thinking', content: 'check' }],
       tool_calls: [
         { id: 'call', type: 'function', function: { name: 'read', arguments: '{"path":"a"}' } },
       ],

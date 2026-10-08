@@ -56,6 +56,7 @@ export const FILTERABLE_METADATA_KEYS = [
   'requestedModel',
   'api',
   'source',
+  'costSource',
   'reasoning',
   'cacheWrite1h',
   'responseId',

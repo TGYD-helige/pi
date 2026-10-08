@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 import {
   BasicTracerProvider,
   InMemorySpanExporter,
@@ -92,6 +93,159 @@ describe('interrupt flow', () => {
       return originalExport(spans, callback);
     });
   }
+
+  it('exports the full system transcript when the context getter is empty', async () => {
+    await fireEvent('session_start', {});
+    recordExports();
+    await fireEvent('input', { text: 'question' });
+    await fireEvent('before_agent_start', { prompt: 'question', systemPrompt: 'initial prompt' });
+    await fireEvent('agent_start', {}, { getSystemPrompt: () => '' });
+    await fireEvent('turn_start', { timestamp: Date.now() });
+    await fireEvent('context', { messages: [{ role: 'user', content: 'question' }] });
+    await fireEvent('context_with_system', {
+      messages: [
+        {
+          role: 'system',
+          content: 'actual prompt',
+          sections: { instructions: '<rules>final rules</rules>' },
+          toolsAdded: [
+            { name: 'bash', description: 'Run command', parameters: { type: 'object' } },
+          ],
+        },
+        { role: 'user', content: 'question' },
+      ],
+    });
+    await fireEvent(
+      'before_provider_request',
+      { payload: { messages: [] } },
+      { getSystemPrompt: () => '' },
+    );
+    await fireEvent('message_end', { message: assistantMessage('answer') });
+    const generation = exported.find(
+      (span) => span.attributes['langfuse.observation.type'] === 'generation',
+    )!;
+    expect(JSON.parse(String(generation.attributes['langfuse.observation.input']))).toEqual([
+      {
+        role: 'system',
+        content: 'actual prompt\n\n<rules>final rules</rules>',
+        tools: [{ name: 'bash', description: 'Run command', parameters: { type: 'object' } }],
+      },
+      { role: 'user', content: 'question' },
+    ]);
+    expect(generation.instrumentationScope.version).toBe(
+      createRequire(import.meta.url)('../../package.json').version,
+    );
+  });
+
+  it('exports thinking and redacted thinking in the backend ChatML shape', async () => {
+    await fireEvent('session_start', {});
+    recordExports();
+    await fireEvent('input', { text: 'run pwd' });
+    await fireEvent('turn_start', { timestamp: Date.now() });
+    await fireEvent('before_provider_request', { payload: {} });
+    await fireEvent('message_end', {
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'Need directory', thinkingSignature: 'sig' },
+          { type: 'thinking', thinking: '', thinkingSignature: 'opaque', redacted: true },
+          { type: 'toolCall', id: 'call', name: 'bash', arguments: { command: 'pwd' } },
+        ],
+      },
+    });
+    const generation = exported.find(
+      (span) => span.attributes['langfuse.observation.type'] === 'generation',
+    )!;
+    expect(JSON.parse(String(generation.attributes['langfuse.observation.output']))).toEqual({
+      role: 'assistant',
+      content: '',
+      thinking: [{ type: 'thinking', content: 'Need directory', signature: 'sig' }],
+      redacted_thinking: [{ type: 'redacted_thinking', data: 'opaque' }],
+      tool_calls: [
+        {
+          id: 'call',
+          type: 'function',
+          function: { name: 'bash', arguments: '{"command":"pwd"}' },
+        },
+      ],
+    });
+  });
+
+  it('does not report unpriced SDK default zeros as known costs', async () => {
+    await fireEvent('session_start', {});
+    recordExports();
+    await fireEvent('input', { text: 'question' });
+    await fireEvent('turn_start', { timestamp: Date.now() });
+    await fireEvent(
+      'before_provider_request',
+      { payload: {} },
+      {
+        model: {
+          id: 'unpriced',
+          provider: 'custom',
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      },
+    );
+    await fireEvent('message_end', {
+      message: {
+        ...assistantMessage('answer'),
+        usage: {
+          input: 10,
+          output: 2,
+          totalTokens: 12,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+    });
+    const generation = exported.find(
+      (span) => span.attributes['langfuse.observation.type'] === 'generation',
+    )!;
+    expect(generation.attributes['langfuse.observation.cost_details']).toBeUndefined();
+    expect(generation.attributes['langfuse.observation.metadata.costSource']).toBe('unknown');
+    expect(
+      JSON.parse(String(generation.attributes['langfuse.observation.usage_details'])),
+    ).toMatchObject({ total: 12 });
+  });
+
+  it.each([
+    { rate: 1, total: 0, costSource: undefined, expectedSource: 'model-pricing' },
+    { rate: 0, total: 0, costSource: 'provided', expectedSource: 'provided' },
+    { rate: 0, total: 0.01, costSource: undefined, expectedSource: undefined },
+  ])('preserves known costs through the extension ($expectedSource, $total)', async ({
+    rate,
+    total,
+    costSource,
+    expectedSource,
+  }) => {
+    await fireEvent('session_start', {});
+    recordExports();
+    await fireEvent('input', { text: 'question' });
+    await fireEvent(
+      'before_provider_request',
+      { payload: {} },
+      { model: { id: 'model', provider: 'custom', cost: { input: rate, output: rate } } },
+    );
+    await fireEvent('message_end', {
+      message: {
+        ...assistantMessage('answer'),
+        usage: {
+          input: 10,
+          output: 2,
+          totalTokens: 12,
+          cost: { total },
+          ...(costSource ? { costSource } : {}),
+        },
+      },
+    });
+    const generation = exported.find(
+      (span) => span.attributes['langfuse.observation.type'] === 'generation',
+    )!;
+    expect(JSON.parse(String(generation.attributes['langfuse.observation.cost_details']))).toEqual({
+      total,
+    });
+    expect(generation.attributes['langfuse.observation.metadata.costSource']).toBe(expectedSource);
+  });
 
   it('does not export an extra completed generation after an HTTP failure', async () => {
     await fireEvent('session_start', {});

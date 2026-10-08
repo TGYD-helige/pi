@@ -10,7 +10,7 @@ export function langfuseObservationAttributes(input: {
   input?: JsonValue | undefined;
   output?: JsonValue | undefined;
   level?: 'DEFAULT' | 'WARNING' | 'ERROR';
-  type?: 'span' | 'generation';
+  type?: 'span' | 'generation' | 'tool';
 }): JsonObject {
   return {
     'langfuse.observation.type': input.type ?? 'span',

@@ -170,7 +170,7 @@ function shouldSuppressToolOutput(details: unknown): boolean {
   );
 }
 
-function mapUsage(usage: Record<string, unknown>): RuntimeLlmUsage {
+function mapUsage(usage: Record<string, unknown>, modelPricingKnown?: boolean): RuntimeLlmUsage {
   const result: RuntimeLlmUsage = {};
   if (typeof usage.input === 'number') result.input = usage.input;
   if (typeof usage.output === 'number') result.output = usage.output;
@@ -179,9 +179,35 @@ function mapUsage(usage: Record<string, unknown>): RuntimeLlmUsage {
   if (typeof usage.cacheWrite1h === 'number') result.cacheWrite1h = usage.cacheWrite1h;
   if (typeof usage.reasoning === 'number') result.reasoning = usage.reasoning;
   if (typeof usage.totalTokens === 'number') result.totalTokens = usage.totalTokens;
-  if (usage.cost != null && typeof usage.cost === 'object')
-    result.cost = usage.cost as NonNullable<RuntimeLlmUsage['cost']>;
+  if (usage.cost && typeof usage.cost === 'object' && !Array.isArray(usage.cost)) {
+    const cost: NonNullable<RuntimeLlmUsage['cost']> = {};
+    for (const key of ['input', 'output', 'cacheRead', 'cacheWrite', 'total'] as const) {
+      const value = (usage.cost as Record<string, unknown>)[key];
+      if (typeof value === 'number' && Number.isFinite(value) && value >= 0) cost[key] = value;
+    }
+    if (Object.keys(cost).length) result.cost = cost;
+  }
+  if (
+    usage.costSource === 'unknown' ||
+    usage.costSource === 'provided' ||
+    usage.costSource === 'model-pricing'
+  ) {
+    result.costSource = usage.costSource;
+  } else if (
+    !result.cost ||
+    (modelPricingKnown === false && Object.values(result.cost).every((value) => value === 0))
+  ) {
+    result.costSource = 'unknown';
+  } else if (modelPricingKnown === true) {
+    result.costSource = 'model-pricing';
+  }
   return result;
+}
+
+function hasModelPricing(ctx: ExtensionContext): boolean {
+  return Object.values(ctx.model?.cost ?? {}).some(
+    (rate) => typeof rate === 'number' && Number.isFinite(rate) && rate > 0,
+  );
 }
 
 function nonEmptyEnv(name: string): string | undefined {
@@ -245,11 +271,13 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   let pendingImages: unknown[] = [];
   let systemPrompt: string | undefined;
   let contextHistory: JsonObject[] | undefined;
+  let hasFullContext = false;
   let mediaEnabled = false;
   let lastModelConfig: RuntimeModelConfig = { provider: 'unknown', model: 'unknown' };
   let streamStartedAt: number | undefined;
   let completionStartTime: string | undefined;
   let requestParameters: JsonObject = {};
+  let modelPricingKnown = false;
   let generationOpen = false;
   let boundaryFailure: { error?: string; outcome?: string } = {};
   let streamEvents: JsonValue[] = [];
@@ -321,6 +349,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     pendingInput = undefined;
     pendingImages = [];
     contextHistory = undefined;
+    hasFullContext = false;
     systemPrompt = undefined;
     promptNumber = (ctx.sessionManager?.getEntries?.() ?? []).filter(
       (entry) => entry.type === 'message' && entry.message.role === 'user',
@@ -383,6 +412,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     pendingInput = event.text;
     pendingImages = event.images ?? [];
     contextHistory = undefined;
+    hasFullContext = false;
     if (!isSubagent) {
       currentTraceId = presetRootTraceId ?? randomUUID().replace(/-/g, '');
       presetRootTraceId = undefined;
@@ -404,8 +434,15 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     systemPrompt = ctx.getSystemPrompt?.() ?? systemPrompt;
   });
   pi.on('context', (event) => {
+    hasFullContext = false;
     contextHistory = (convertMessages ? convertMessages(event.messages) : event.messages)
       .map((message) => displayMessage(message))
+      .filter((message) => message !== undefined);
+  });
+  pi.on('context_with_system', (event) => {
+    hasFullContext = true;
+    contextHistory = (convertMessages ? convertMessages(event.messages) : event.messages)
+      .map((message, index) => displayMessage(message, index > 0))
       .filter((message) => message !== undefined);
   });
 
@@ -627,7 +664,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   async function publishAuxiliary(
     source: 'compaction' | 'branch_summary' | 'tool',
     ctx: ExtensionContext,
-    entry: { summary?: string; usage?: unknown },
+    entry: { summary?: string; usage?: unknown; fromHook?: boolean },
     startedAt?: number,
     parentToolCallId?: string,
   ): Promise<void> {
@@ -663,7 +700,12 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
         ? { output: entry.summary, displayOutput: { role: 'assistant', content: entry.summary } }
         : {}),
       ...(entry.usage && typeof entry.usage === 'object'
-        ? { usage: mapUsage(entry.usage as Record<string, unknown>) }
+        ? {
+            usage: mapUsage(
+              entry.usage as Record<string, unknown>,
+              source === 'tool' || entry.fromHook ? undefined : hasModelPricing(ctx),
+            ),
+          }
         : {}),
     });
   }
@@ -693,6 +735,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   });
 
   function generationDisplayInput(): JsonValue {
+    if (hasFullContext) return contextHistory ?? [];
     const messages: JsonObject[] = [
       ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
       ...(contextHistory ?? []),
@@ -705,7 +748,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
         description: tool.description,
         parameters: toTelemetryValue(tool.parameters),
       }));
-    if (tools.length) messages.unshift({ role: 'system', content: '', tools });
+    if (tools.length && messages[0]) messages[0] = { ...messages[0], tools };
     return messages;
   }
 
@@ -732,6 +775,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     llmGenerationCounter++;
     generationOpen = true;
     lastModelConfig = modelConfigFromCtx(ctx);
+    modelPricingKnown = hasModelPricing(ctx);
     requestParameters = modelParameters(event.payload, ctx.thinkingLevel);
     systemPrompt = ctx.getSystemPrompt?.() ?? systemPrompt;
     completionStartTime = undefined;
@@ -786,7 +830,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
 
     const content = simplifyContent(msg.content) ?? extractOutput(event.message);
     const usage = msg.usage as Record<string, unknown> | undefined;
-    const mapped = usage ? mapUsage(usage) : undefined;
+    const mapped = usage ? mapUsage(usage, modelPricingKnown) : undefined;
     const failure = messageFailure(msg);
     const displayOutput = displayMessage(msg);
 

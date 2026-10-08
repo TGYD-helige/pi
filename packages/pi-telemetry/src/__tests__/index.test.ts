@@ -352,6 +352,57 @@ describe('telemetry', () => {
     await exporter.close();
   });
 
+  it.each([
+    true,
+    false,
+  ])('classifies completed and terminal-only tools as TOOL (start=%s)', async (hasStart) => {
+    const { exporter, inMemory } = makeExporter();
+    const base = {
+      id: 'tool-type',
+      traceId,
+      sessionId: 's',
+      conversationId: 's',
+      toolCallId: 't',
+      toolName: 'bash',
+      createdAt: new Date().toISOString(),
+    };
+    if (hasStart) await exporter.publish({ ...base, status: 'started', args: { command: 'pwd' } });
+    await exporter.publish({ ...base, status: 'failed', error: 'tool failed' });
+    expect(inMemory.getFinishedSpans()[0]!.attributes['langfuse.observation.type']).toBe('tool');
+    await exporter.close();
+  });
+
+  it.each([
+    'provided',
+    'model-pricing',
+    undefined,
+  ] as const)('preserves known zero cost (%s)', async (costSource) => {
+    const { exporter, inMemory } = makeExporter();
+    await exporter.publish({
+      id: 'known-zero',
+      traceId,
+      sessionId: 's',
+      conversationId: 's',
+      llmGenerationId: 'g',
+      status: 'completed',
+      createdAt: new Date().toISOString(),
+      model: { provider: 'p', model: 'free' },
+      usage: {
+        input: 1,
+        output: 1,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, total: 0 },
+        ...(costSource ? { costSource } : {}),
+      },
+    });
+    expect(
+      JSON.parse(
+        String(inMemory.getFinishedSpans()[0]!.attributes['langfuse.observation.cost_details']),
+      ),
+    ).toEqual({ input: 0, output: 0, total: 0 });
+    await exporter.close();
+  });
+
   it('keeps root exporters resilient when one delegate fails', async () => {
     const event: RuntimeTelemetryEvent = {
       id: 'event-1',

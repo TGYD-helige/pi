@@ -356,6 +356,8 @@ export type RuntimeToolEvent = {
 export type RuntimeLlmGenerationEventStatus = 'started' | 'completed' | 'failed';
 
 export type RuntimeLlmUsage = {
+  /** Unknown SDK default costs must not override backend price inference. */
+  costSource?: 'unknown' | 'provided' | 'model-pricing';
   input?: number;
   output?: number;
   cacheRead?: number;

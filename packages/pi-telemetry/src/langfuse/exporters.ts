@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { setTimeout as delay } from 'node:timers/promises';
 import type {
   JsonObject,
@@ -131,7 +132,10 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
           console.error(`[pi-telemetry] ${destination} export failed`);
         }
       });
-    this.tracer = this.provider.getTracer('@amaster.ai/pi-telemetry', '0.1.0');
+    this.tracer = this.provider.getTracer(
+      '@amaster.ai/pi-telemetry',
+      (createRequire(import.meta.url)('../../package.json') as { version: string }).version,
+    );
   }
 
   async publish(event: RuntimeTelemetryEvent): Promise<void> {
@@ -371,7 +375,7 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
           {
             ...toolMetadata(event),
             ...(event.args ? { args: event.args } : {}),
-            ...langfuseObservationAttributes({ input: event.args, level: 'DEFAULT' }),
+            ...langfuseObservationAttributes({ type: 'tool', input: event.args, level: 'DEFAULT' }),
           },
           event,
         ),
@@ -384,6 +388,7 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
       {
         ...toolMetadata(event),
         ...langfuseObservationAttributes({
+          type: 'tool',
           output: event.error
             ? { error: event.error }
             : (event.details?.displayOutput ?? event.details),
