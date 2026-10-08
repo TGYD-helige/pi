@@ -18,7 +18,7 @@ import type {
 import { truncateHead, truncateLine } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
 import { formatRecalledMemory, redactMemoryText } from './privacy.js';
-import { type Mem0Provider, waitWithCancellation } from './provider.js';
+import { getAddResult, type Mem0Provider, waitWithCancellation } from './provider.js';
 import type { MemoryItem } from './types.js';
 
 /** Tool results land in model context — keep the block small. */
@@ -101,6 +101,7 @@ export function createMem0MemoryTool(opts: Mem0MemoryToolOptions): ToolDefinitio
     promptGuidelines: [
       'Search mem0_memory BEFORE answering when the request could depend on the user’s past work, preferences, or prior decisions.',
       'Save durable facts proactively — user preferences, corrections, environment facts. Do not save task progress or temporary session state.',
+      'An accepted add may still be processing in the background. Do not retry an accepted write just because search does not find it yet.',
     ],
     parameters: Type.Object({
       action: StringEnum(['search', 'add', 'get_all', 'delete'] as const, {
@@ -152,10 +153,8 @@ export function createMem0MemoryTool(opts: Mem0MemoryToolOptions): ToolDefinitio
               ...scope,
               ...signalOpts,
             });
-            const created = result?.results ?? [];
-            if (created.length === 0) {
-              return textResult('No memory was extracted from the provided content.');
-            }
+            const { message, memories: created, isError } = getAddResult(result);
+            if (message) return isError ? errorResult(message) : textResult(message);
             return formatBlock(`Saved ${created.length} memories:`, created);
           }
           case 'get_all': {

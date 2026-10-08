@@ -35,6 +35,7 @@ import { Prefetch } from './prefetch.js';
 import { formatRecalledMemory, redactMemoryText, scopeMemoryUserId } from './privacy.js';
 import {
   createMem0Provider,
+  getAddResult,
   type Mem0Provider,
   normalizeMem0Mode,
   normalizeMemoryMode,
@@ -267,11 +268,9 @@ export default function mem0Extension(pi: ExtensionAPI): void {
             ...(activeAgentId ? { agentId: activeAgentId } : {}),
           },
         );
-        // Extraction legitimately finds nothing in many turns, but a totally
-        // silent no-op makes a broken pipeline indistinguishable from a quiet
-        // one — gate a diagnostic behind DEBUG.
-        if (process.env.DEBUG?.includes('pi-memory-mem0') && !result?.results?.length) {
-          console.error('[pi-memory-mem0] turn capture stored no memories (extraction empty?)');
+        const { message, isError } = getAddResult(result);
+        if (message && (isError || process.env.DEBUG?.includes('pi-memory-mem0'))) {
+          console.error(`[pi-memory-mem0] turn capture: ${message}`);
         }
       })
       .catch((err) => {
@@ -373,9 +372,9 @@ export default function mem0Extension(pi: ExtensionAPI): void {
             ...scope,
             ...(ctx.signal ? { signal: ctx.signal } : {}),
           });
-          const created = result?.results ?? [];
-          if (created.length === 0) {
-            ctx.ui.notify('No memory was extracted from the provided text.', 'info');
+          const { message, memories: created, isError } = getAddResult(result);
+          if (message) {
+            ctx.ui.notify(message, isError ? 'error' : 'info');
           } else {
             const lines = created.map((m, i) => `${i + 1}. ${formatRecalledMemory(m.memory)}`);
             ctx.ui.notify(`Mem0 saved ${created.length}:\n${lines.join('\n')}`, 'info');

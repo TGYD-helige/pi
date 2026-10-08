@@ -151,6 +151,85 @@ describe('mem0_memory tool', () => {
       expect(result.content[0]!.text).toContain('[UNTRUSTED MEMORY DATA] "prefers dark mode"');
     });
 
+    it.each([
+      { response: [{ id: 'legacy-1', memory: 'prefers tea', event: 'ADD' }] },
+      { response: [{ memory_id: 'legacy-1', data: { memory: 'prefers tea' }, event: 'ADD' }] },
+      {
+        response: {
+          results: [{ memory_id: 'legacy-1', data: { memory: 'prefers tea' }, event: 'ADD' }],
+        },
+      },
+    ])('reads legacy add results: %j', async ({ response }) => {
+      const result = await execute(
+        createTool(mockProvider({ add: vi.fn().mockResolvedValue(response) })),
+        { action: 'add', content: 'prefers tea' },
+      );
+      expect(result.content[0]!.text).toContain('Saved 1 memories:');
+      expect(result.content[0]!.text).toContain('legacy-1');
+      expect(result.content[0]!.text).toContain('[UNTRUSTED MEMORY DATA] "prefers tea"');
+    });
+
+    it.each([
+      { response: { status: 'PENDING', event_id: 'event-1', results: [] } },
+      { response: [{ status: 'PENDING', event_id: 'event-1' }] },
+      { response: { results: [{ status: 'PENDING', event_id: 'event-1' }] } },
+    ])('reports asynchronous acceptance without claiming extraction is empty or complete: %j', async ({
+      response,
+    }) => {
+      const provider = mockProvider({
+        add: vi.fn().mockResolvedValue(response),
+      });
+      const result = await execute(createTool(provider), { action: 'add', content: 'prefers tea' });
+
+      expect(result.isError).toBeUndefined();
+      expect(result.content[0]!.text).toContain('accepted');
+      expect(result.content[0]!.text).toContain('processing');
+      expect(result.content[0]!.text).not.toContain('No memory was extracted');
+      expect(result.content[0]!.text).not.toContain('Saved');
+    });
+
+    it.each([
+      null,
+      {},
+      { results: null },
+      { results: 'unexpected' },
+      { results: [null] },
+      { results: [{ id: 'm1' }] },
+    ])('reports an unknown write outcome when the response has no results: %j', async (response) => {
+      const provider = mockProvider({ add: vi.fn().mockResolvedValue(response) });
+      const result = await execute(createTool(provider), { action: 'add', content: 'prefers tea' });
+
+      expect(result.content[0]!.text).toContain('outcome is unknown');
+      expect(result.content[0]!.text).not.toContain('accepted');
+      expect(result.content[0]!.text).not.toContain('No memory was extracted');
+    });
+
+    it('reports empty extraction only when the backend returns an empty results array', async () => {
+      const result = await execute(createTool(mockProvider()), { action: 'add', content: 'hello' });
+
+      expect(result.content[0]!.text).toBe('No memory was extracted from the provided content.');
+    });
+
+    it.each([
+      { status: 'FAILED', error: 'secret diagnostic', results: [] },
+      {
+        results: [
+          { status: 'FAILED', error: 'secret diagnostic', id: 'm1', memory: 'prefers tea' },
+        ],
+      },
+    ])('reports explicit write failures without exposing backend diagnostics: %j', async (response) => {
+      const result = await execute(
+        createTool(
+          mockProvider({
+            add: vi.fn().mockResolvedValue(response),
+          }),
+        ),
+        { action: 'add', content: 'prefers tea' },
+      );
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).toBe('Mem0 memory write failed.');
+    });
+
     it('rejects empty content', async () => {
       const provider = mockProvider();
       const tool = createTool(provider);

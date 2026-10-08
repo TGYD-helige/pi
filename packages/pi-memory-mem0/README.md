@@ -326,6 +326,8 @@ mem0_memory(action="delete", memory_id="...")    # Remove a memory by id
 
 Stored content is credential-redacted first; results are returned with the same `[UNTRUSTED MEMORY DATA]` wrapping as passive recall, including the memory ids needed for `delete`.
 
+Platform writes are asynchronous: `mem0_memory` add and `/mem0 add` report that the write was accepted and is processing in the background. This does not confirm extraction has completed; memories may not be searchable yet, so do not retry an accepted write. Synchronous backends report returned memories or an explicitly empty extraction result; both legacy result arrays and `{ results: [...] }` envelopes are supported, including memory text in `data.memory`. Explicit `FAILED` statuses are reported as write failures. A response without an extraction result or a pending status is reported as an unknown write outcome.
+
 ## Commands
 
 ```

@@ -172,6 +172,33 @@ describe('memoryMode gating', () => {
     return provider;
   }
 
+  it('logs explicit capture failures without DEBUG or backend diagnostics', async () => {
+    mockActiveProvider({
+      add: vi.fn().mockResolvedValue({ status: 'FAILED', error: 'private backend diagnostic' }),
+    });
+    vi.mocked(loadPiSettings).mockReturnValue({
+      mode: 'platform',
+      apiKey: 'm0-test',
+      memoryMode: 'passive',
+    });
+    vi.stubEnv('DEBUG', '');
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { pi, handlers } = createMockPi();
+      mem0Extension(pi as never);
+      const ctx = createMockCtx();
+      await handlers.session_start![0]!({}, ctx);
+      await handlers.input![0]!({ text: 'I prefer tea' }, ctx);
+      await handlers.turn_end![0]!({ message: { role: 'assistant', content: 'Noted.' } }, ctx);
+      await handlers.session_shutdown![0]!({}, ctx);
+
+      expect(log).toHaveBeenCalledWith('[pi-memory-mem0] turn capture: Mem0 memory write failed.');
+      expect(JSON.stringify(log.mock.calls)).not.toContain('private backend diagnostic');
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it('passive mode registers no tools but still captures turns', async () => {
     const provider = activateWith('passive');
     const { pi, handlers, tools } = createMockPi();
@@ -1224,6 +1251,60 @@ describe('/mem0 command — active subcommands', () => {
       expect.anything(),
       expect.objectContaining({ agentId: 'agent-1' }),
     );
+  });
+
+  it('add reports asynchronous acceptance instead of empty extraction', async () => {
+    mockActiveProvider({
+      add: vi.fn().mockResolvedValue({ status: 'PENDING', event_id: 'event-1' }),
+    });
+    const { pi, handlers, commands } = createMockPi();
+    mem0Extension(pi as never);
+    const ctx = createMockCtx();
+    await handlers.session_start![0]!({}, ctx);
+
+    await commands.mem0!.handler('add prefers tea', ctx);
+
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining('accepted and processing'),
+      'info',
+    );
+    expect(ctx.ui.notify).not.toHaveBeenCalledWith(
+      expect.stringContaining('No memory was extracted'),
+      'info',
+    );
+  });
+
+  it.each([
+    [{}, 'outcome is unknown'],
+    [{ results: [] }, 'No memory was extracted'],
+    [[], 'No memory was extracted'],
+    [[{ status: 'PENDING', event_id: 'event-1' }], 'accepted and processing'],
+    [{ results: [{ status: 'PENDING', event_id: 'event-1' }] }, 'accepted and processing'],
+    [[{ memory_id: 'm1', data: { memory: 'prefers tea' }, event: 'ADD' }], 'Mem0 saved 1:'],
+    [{ results: [null] }, 'outcome is unknown'],
+    [{ results: [{ id: 'm1', memory: 'prefers tea', event: 'ADD' }] }, 'Mem0 saved 1:'],
+  ])('add distinguishes synchronous results from an unknown outcome: %j', async (response, message) => {
+    mockActiveProvider({ add: vi.fn().mockResolvedValue(response) });
+    const { pi, handlers, commands } = createMockPi();
+    mem0Extension(pi as never);
+    const ctx = createMockCtx();
+    await handlers.session_start![0]!({}, ctx);
+
+    await commands.mem0!.handler('add prefers tea', ctx);
+
+    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining(message), 'info');
+  });
+
+  it('add reports an explicit failed write as an error', async () => {
+    mockActiveProvider({ add: vi.fn().mockResolvedValue({ status: 'FAILED', results: [] }) });
+    const { pi, handlers, commands } = createMockPi();
+    mem0Extension(pi as never);
+    const ctx = createMockCtx();
+    await handlers.session_start![0]!({}, ctx);
+
+    await commands.mem0!.handler('add prefers tea', ctx);
+
+    expect(ctx.ui.notify).toHaveBeenCalledWith('Mem0 memory write failed.', 'error');
   });
 
   it('add stores text with credentials redacted', async () => {

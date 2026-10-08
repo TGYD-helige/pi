@@ -122,6 +122,51 @@ function normalizeResults(raw: unknown): MemoryItem[] {
   return [];
 }
 
+/** Preserve queued/unknown outcomes while accepting legacy synchronous result shapes. */
+export function getAddResult(raw: unknown): {
+  memories: MemoryItem[];
+  message?: string;
+  isError?: boolean;
+} {
+  const entries = Array.isArray(raw)
+    ? raw
+    : raw && typeof raw === 'object' && 'results' in raw && Array.isArray(raw.results)
+      ? raw.results
+      : undefined;
+  const responses = [raw, ...(entries ?? [])];
+  const hasStatus = (status: string) =>
+    responses.some((item) => item && typeof item === 'object' && item.status === status);
+  if (hasStatus('FAILED')) {
+    return { memories: [], message: 'Mem0 memory write failed.', isError: true };
+  }
+  if (hasStatus('PENDING')) {
+    return {
+      memories: [],
+      message:
+        'Memory write accepted and processing in the background. Memories may not be searchable yet; do not retry this write.',
+    };
+  }
+  const unknown = {
+    memories: [],
+    message: 'Mem0 returned no extraction result. The write outcome is unknown.',
+  };
+  if (!entries) return unknown;
+  if (entries.length === 0) {
+    return { memories: [], message: 'No memory was extracted from the provided content.' };
+  }
+  const memories: MemoryItem[] = [];
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object') return unknown;
+    const memory = entry.memory ?? entry.data?.memory ?? entry.text ?? entry.content;
+    const id = entry.id ?? entry.memory_id;
+    if (typeof memory !== 'string' || !memory.trim() || typeof id !== 'string' || !id.trim()) {
+      return unknown;
+    }
+    memories.push(normalizeMemoryItem({ ...entry, memory }));
+  }
+  return { memories };
+}
+
 function cancellationReason(signal: AbortSignal): Error {
   return signal.reason instanceof Error ? signal.reason : new Error('Mem0 request cancelled.');
 }

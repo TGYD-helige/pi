@@ -77,5 +77,7 @@ export interface MemoryItem {
 }
 
 export interface AddResult {
+  status?: string;
+  event_id?: string;
   results?: Array<{ id: string; memory: string; event: string }>;
 }
