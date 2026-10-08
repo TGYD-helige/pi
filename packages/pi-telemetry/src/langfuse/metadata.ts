@@ -40,6 +40,7 @@ export function lineageMetadata(event: {
 export function lifecycleMetadata(event: RuntimeLifecycleEvent): JsonObject {
   return {
     eventType: event.type,
+    ...(event.promptNumber !== undefined ? { promptNumber: event.promptNumber } : {}),
     ...lineageMetadata(event),
     ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
     ...(event.model ? { model: `${event.model.provider}/${event.model.model}` } : {}),
@@ -72,34 +73,64 @@ export function llmGenerationMetadata(event: RuntimeLlmGenerationEvent): JsonObj
     ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
     ...(event.responseId ? { responseId: event.responseId } : {}),
     ...(event.stopReason ? { stopReason: event.stopReason } : {}),
+    ...(event.requestedModel ? { requestedModel: event.requestedModel } : {}),
+    ...(event.api ? { api: event.api } : {}),
+    ...(event.source ? { source: event.source } : {}),
+    ...(event.usage?.cacheWrite1h !== undefined ? { cacheWrite1h: event.usage.cacheWrite1h } : {}),
+    ...(event.usage?.reasoning !== undefined ? { reasoning: event.usage.reasoning } : {}),
+    ...(event.usage?.costSource ? { costSource: event.usage.costSource } : {}),
     ...(event.usage ? { usage: event.usage } : {}),
     ...(event.error ? { error: event.error } : {}),
   };
 }
 
+function validCount(value: number | undefined): value is number {
+  return value !== undefined && Number.isFinite(value) && value >= 0;
+}
+
+function reasoningSubset(usage: RuntimeLlmUsage): number | undefined {
+  return validCount(usage.reasoning) && validCount(usage.output) && usage.reasoning <= usage.output
+    ? usage.reasoning
+    : undefined;
+}
+
 export function toLangfuseUsageDetails(usage: RuntimeLlmUsage): JsonObject {
+  const reasoning = reasoningSubset(usage);
   return {
-    ...(usage.input !== undefined ? { input: usage.input } : {}),
-    ...(usage.output !== undefined ? { output: usage.output } : {}),
-    ...(usage.cacheRead !== undefined ? { cache_read: usage.cacheRead } : {}),
-    ...(usage.cacheWrite !== undefined ? { cache_write: usage.cacheWrite } : {}),
-    ...(usage.totalTokens !== undefined ? { total: usage.totalTokens } : {}),
+    ...(validCount(usage.input) ? { input: usage.input } : {}),
+    ...(validCount(usage.output) ? { output: usage.output - (reasoning ?? 0) } : {}),
+    ...(reasoning !== undefined ? { output_reasoning_tokens: reasoning } : {}),
+    ...(validCount(usage.cacheRead) ? { cache_read_input_tokens: usage.cacheRead } : {}),
+    ...(validCount(usage.cacheWrite) ? { cache_creation_input_tokens: usage.cacheWrite } : {}),
+    ...(validCount(usage.totalTokens) ? { total: usage.totalTokens } : {}),
   };
 }
 
-// Langfuse maps these two JSON-string attributes onto a generation's
-// usage/cost statistics; unrecognized flat keys (usage.input etc.) would only
-// land in unfilterable metadata.
 export function langfuseUsageAttributes(usage: RuntimeLlmUsage): JsonObject {
+  const cost = usage.costSource === 'unknown' ? undefined : usage.cost;
+  const reasoning = reasoningSubset(usage);
+  // Pi reports combined output cost; the split is proportional, not separately metered.
+  const reasoningCost =
+    reasoning !== undefined && usage.output && validCount(cost?.output)
+      ? (cost.output * reasoning) / usage.output
+      : undefined;
   return {
     'langfuse.observation.usage_details': JSON.stringify(toLangfuseUsageDetails(usage)),
-    ...(usage.cost
+    ...(cost
       ? {
           'langfuse.observation.cost_details': JSON.stringify({
-            ...(usage.cost.input !== undefined ? { input: usage.cost.input } : {}),
-            ...(usage.cost.output !== undefined ? { output: usage.cost.output } : {}),
-            ...(usage.cost.total !== undefined ? { total: usage.cost.total } : {}),
+            ...(validCount(cost.input) ? { input: cost.input } : {}),
+            ...(validCount(cost.output) ? { output: cost.output - (reasoningCost ?? 0) } : {}),
+            ...(reasoningCost !== undefined ? { output_reasoning_tokens: reasoningCost } : {}),
+            ...(validCount(cost.cacheRead) ? { cache_read_input_tokens: cost.cacheRead } : {}),
+            ...(validCount(cost.cacheWrite)
+              ? { cache_creation_input_tokens: cost.cacheWrite }
+              : {}),
+            ...(validCount(cost.total) ? { total: cost.total } : {}),
           }),
+          ...(reasoningCost !== undefined
+            ? { 'langfuse.observation.metadata.reasoningCostSource': 'proportional-output-cost' }
+            : {}),
         }
       : {}),
   };

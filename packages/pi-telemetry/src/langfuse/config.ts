@@ -1,4 +1,4 @@
-import type { TelemetryConfig } from '../config.js';
+import { configurationWarnings, runtimeTelemetryOptions, type TelemetryConfig } from '../config.js';
 import { NoopRuntimeEventExporter } from '../exporters.js';
 import type { RuntimeEventExporter, TelemetryEnvironment } from '../index.js';
 import { parseBoolean, parsePositiveInteger, trim } from '../parse.js';
@@ -22,7 +22,11 @@ export function createLangfuseExporter(telemetryConfig: TelemetryConfig): Runtim
   const config = resolveLangfuseExporterConfig(telemetryConfig);
   return config.enabled
     ? new OtelRuntimeEventExporter(langfuseOtelConfig(config))
-    : new NoopRuntimeEventExporter();
+    : new NoopRuntimeEventExporter(
+        configurationWarnings({
+          ...(telemetryConfig.langfuse ? { langfuse: telemetryConfig.langfuse } : {}),
+        }).join('; ') || undefined,
+      );
 }
 
 // Langfuse's write path is OTLP/HTTP via the official SDK: the exporter's
@@ -48,7 +52,7 @@ function langfuseOtelConfig(config: LangfuseExporterConfig): OtelExporterConfig 
     flushIntervalMs: config.flushIntervalMs,
     ...(config.serviceName ? { serviceName: config.serviceName } : {}),
     ...(config.serviceVersion ? { serviceVersion: config.serviceVersion } : {}),
-    ...(config.includePayloads !== undefined ? { includePayloads: config.includePayloads } : {}),
+    ...runtimeTelemetryOptions(config),
   };
 }
 
@@ -68,7 +72,7 @@ export function resolveLangfuseExporterConfig(
     flushIntervalMs: parsePositiveInteger(lf?.flushIntervalMs, DEFAULT_FLUSH_INTERVAL_MS),
     serviceName: telemetryConfig.serviceName ?? 'pi-server',
     ...(telemetryConfig.serviceVersion ? { serviceVersion: telemetryConfig.serviceVersion } : {}),
-    includePayloads: telemetryConfig.includePayloads ?? false,
+    ...runtimeTelemetryOptions(telemetryConfig),
   };
 }
 
@@ -91,6 +95,16 @@ export function resolveLangfuseConfig(env: TelemetryEnvironment): LangfuseExport
     ),
     serviceName: trim(env.TELEMETRY_SERVICE_NAME ?? env.OTEL_SERVICE_NAME) ?? 'pi-server',
     ...(serviceVersion ? { serviceVersion } : {}),
-    includePayloads: parseBoolean(env.TELEMETRY_INCLUDE_PAYLOADS ?? env.LANGFUSE_INCLUDE_PAYLOADS),
+    ...runtimeTelemetryOptions({
+      includePayloads: parseBoolean(
+        env.TELEMETRY_INCLUDE_PAYLOADS ?? env.LANGFUSE_INCLUDE_PAYLOADS,
+      ),
+      mediaUploadEnabled: parseBoolean(env.LANGFUSE_MEDIA_UPLOAD_ENABLED),
+      ...(trim(env.LANGFUSE_USER_ID) ? { userId: trim(env.LANGFUSE_USER_ID)! } : {}),
+      ...(trim(env.LANGFUSE_TRACING_ENVIRONMENT)
+        ? { environment: trim(env.LANGFUSE_TRACING_ENVIRONMENT)! }
+        : {}),
+      ...(trim(env.LANGFUSE_RELEASE) ? { release: trim(env.LANGFUSE_RELEASE)! } : {}),
+    }),
   };
 }

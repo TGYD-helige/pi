@@ -1,5 +1,7 @@
 import type { RuntimeLlmGenerationEvent, RuntimeToolEvent } from '@amaster.ai/pi-shared';
+import { credentialMaskValues } from '../config.js';
 import type { RuntimeLlmStreamEvent, RuntimeTelemetryEvent } from '../index.js';
+import { isInlineImage } from '../observations.js';
 import { type LangfuseExporterConfig, MAX_ATTRIBUTE_VALUE_BYTES } from './types.js';
 
 export function utf8Prefix(value: string, maxBytes: number): string {
@@ -16,6 +18,11 @@ export function truncateAttributePayload(value: string): string {
   if (bytes <= MAX_ATTRIBUTE_VALUE_BYTES) {
     return value;
   }
+  value = value.replace(
+    /data:[^;,]{1,100};base64,[A-Za-z0-9+/]+=*/g,
+    '[image binary omitted before truncation]',
+  );
+  if (Buffer.byteLength(value, 'utf8') <= MAX_ATTRIBUTE_VALUE_BYTES) return value;
   if (isStructuredJson(value)) {
     return JSON.stringify({
       truncated: true,
@@ -101,23 +108,85 @@ export function isLlmStreamEvent(event: RuntimeTelemetryEvent): event is Runtime
 }
 
 export function applyTelemetryRedaction(
-  config: Pick<LangfuseExporterConfig, 'includePayloads' | 'redactEvent'>,
+  config: Pick<
+    LangfuseExporterConfig,
+    'includePayloads' | 'redactEvent' | 'mediaUploadEnabled' | 'maskingSecrets'
+  > & {
+    langfuse?: { publicKey: string; secretKey: string };
+    headers?: Record<string, string>;
+  },
   event: RuntimeTelemetryEvent,
 ): RuntimeTelemetryEvent | undefined {
   const redacted = config.redactEvent ? config.redactEvent(event) : event;
   if (!redacted) {
     return undefined;
   }
-  return config.includePayloads === false ? stripTelemetryPayloads(redacted) : redacted;
+  const stripped = config.includePayloads === false ? stripTelemetryPayloads(redacted) : redacted;
+  const secrets = credentialMaskValues(config);
+  let mediaBytes = 0;
+  function clean(value: unknown, ancestors = new Set<object>()): unknown {
+    if (typeof value === 'string') {
+      let text = value;
+      for (const secret of secrets) text = text.split(secret).join('[redacted]');
+      text = text.replace(/\b[sp]k-lf-[\w-]+\b/g, '[redacted]');
+      return text.replace(
+        /data:([^;,]{1,100});base64,([^\s"'<>)\]}]*)/g,
+        (uri, mime: string, data: string) => {
+          const bytes = Buffer.byteLength(uri);
+          if (
+            config.includePayloads === true &&
+            config.mediaUploadEnabled === true &&
+            mediaBytes + bytes <= 750_000 &&
+            isInlineImage(mime, data)
+          ) {
+            mediaBytes += bytes;
+            return uri;
+          }
+          return `[image ${mime}, binary omitted]`;
+        },
+      );
+    }
+    if (!value || typeof value !== 'object') return value;
+    if (ancestors.has(value)) return '[circular]';
+    ancestors.add(value);
+    const result = Array.isArray(value)
+      ? value.map((item) => clean(item, ancestors))
+      : Object.fromEntries(
+          Object.entries(value).map(([key, item]) => [
+            clean(key, ancestors),
+            key === 'data' &&
+            typeof item === 'string' &&
+            ('mimeType' in value ||
+              'media_type' in value ||
+              (value as { type?: string }).type === 'base64')
+              ? '[image binary omitted]'
+              : clean(item, ancestors),
+          ]),
+        );
+    ancestors.delete(value);
+    return result;
+  }
+  return clean(stripped) as RuntimeTelemetryEvent;
 }
 
 export function stripTelemetryPayloads(event: RuntimeTelemetryEvent): RuntimeTelemetryEvent {
   if (isLlmStreamEvent(event)) {
-    const { streamEvents: _streamEvents, ...rest } = event;
+    const {
+      streamEvents: _streamEvents,
+      displayInput: _displayInput,
+      displayOutput: _displayOutput,
+      ...rest
+    } = event;
     return { ...rest, streamEvents: [] };
   }
   if (isLlmGenerationEvent(event)) {
-    const { input: _input, output: _output, ...rest } = event;
+    const {
+      input: _input,
+      output: _output,
+      displayInput: _displayInput,
+      displayOutput: _displayOutput,
+      ...rest
+    } = event;
     return rest as RuntimeTelemetryEvent;
   }
   if (isToolEvent(event)) {

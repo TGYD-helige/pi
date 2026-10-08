@@ -1,7 +1,7 @@
 {
   "name": "@amaster.ai/pi-telemetry",
   "version": "0.1.2-beta.15",
-  "description": "Pi extension for runtime telemetry with Langfuse and OpenTelemetry exporters",
+  "description": "Pi runtime observability: Langfuse and OpenTelemetry traces, TTFT, token and cost accounting, and diagnostics",
   "keywords": [
     "pi-package",
     "pi",
@@ -45,10 +45,11 @@
   "files": [
     "dist",
     "preview.png",
+    "preview-observability.png",
     "README.md"
   ],
   "pi": {
-    "image": "https://raw.githubusercontent.com/TGYD-helige/pi/master/packages/pi-telemetry/preview.png",
+    "image": "https://raw.githubusercontent.com/TGYD-helige/pi/master/packages/pi-telemetry/preview-observability.png",
     "extensions": [
       "./dist/index.js"
     ]

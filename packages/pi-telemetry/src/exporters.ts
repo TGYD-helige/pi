@@ -1,6 +1,14 @@
 import type { RuntimeEventExporter, RuntimeTelemetryEvent } from './index.js';
 
 export class NoopRuntimeEventExporter implements RuntimeEventExporter {
+  constructor(private readonly configurationError?: string) {}
+  getStatus() {
+    return {
+      enabled: false,
+      state: this.configurationError ? 'missing-configuration' : 'disabled',
+      ...(this.configurationError ? { error: this.configurationError } : {}),
+    };
+  }
   async publish(_event: RuntimeTelemetryEvent): Promise<void> {}
   async flush(): Promise<void> {}
   async close(): Promise<void> {}

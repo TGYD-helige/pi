@@ -17,7 +17,7 @@ export type RuntimeModelConfig = {
   provider: string;
   model: string;
   reasoning?: boolean;
-  thinkingLevel?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+  thinkingLevel?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   authProfileId?: string;
 };
 
@@ -356,10 +356,16 @@ export type RuntimeToolEvent = {
 export type RuntimeLlmGenerationEventStatus = 'started' | 'completed' | 'failed';
 
 export type RuntimeLlmUsage = {
+  /** Unknown SDK default costs must not override backend price inference. */
+  costSource?: 'unknown' | 'provided' | 'model-pricing';
   input?: number;
   output?: number;
   cacheRead?: number;
   cacheWrite?: number;
+  /** Subset of output, never additional output tokens. */
+  reasoning?: number;
+  /** Subset of cacheWrite with one-hour retention. */
+  cacheWrite1h?: number;
   totalTokens?: number;
   cost?: {
     input?: number;
@@ -388,6 +394,15 @@ export type RuntimeLlmGenerationEvent = {
   createdAt: string;
   durationMs?: number;
   model: RuntimeModelConfig;
+  requestedModel?: string;
+  api?: string;
+  modelParameters?: JsonObject;
+  completionStartTime?: string;
+  displayInput?: JsonValue;
+  displayOutput?: JsonValue;
+  source?: 'agent' | 'compaction' | 'branch_summary' | 'tool';
+  observationName?: string;
+  parentToolCallId?: string;
   input?: JsonValue;
   output?: JsonValue;
   usage?: RuntimeLlmUsage;
@@ -421,6 +436,7 @@ export type RuntimeLifecycleEvent = {
   runId?: string;
   spawnBatchId?: string;
   taskRunId?: string;
+  promptNumber?: number;
   parentToolCallId?: string;
   childIndex?: number;
   createdAt: string;

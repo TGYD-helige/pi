@@ -13,6 +13,7 @@ export type OtelExporterConfig = {
   enabled: boolean;
   endpoint: string;
   headers?: Record<string, string>;
+  configurationWarnings?: string[];
   flushAt: number;
   flushIntervalMs: number;
   // Langfuse credentials: when present, the provider gets a
@@ -38,6 +39,7 @@ export const MAX_CLOSE_MS = 30_000;
 // the largest values in the trace onto every span.
 export const FILTERABLE_METADATA_KEYS = [
   'eventType',
+  'promptNumber',
   'sessionId',
   'conversationId',
   'parentSessionId',
@@ -51,13 +53,19 @@ export const FILTERABLE_METADATA_KEYS = [
   'model',
   'thinkingLevel',
   'stopReason',
+  'requestedModel',
+  'api',
+  'source',
+  'costSource',
+  'reasoning',
+  'cacheWrite1h',
   'responseId',
   'durationMs',
   'toolPolicyProfile',
 ] as const;
 // Big LLM inputs/outputs otherwise multiply through the duplicated
 // observation/input.value keys into requests over Langfuse Cloud's ~5MB
-// limit; 1MB per attribute keeps a single span deliverable.
-export const MAX_ATTRIBUTE_VALUE_BYTES = 1_000_000;
+// limit; 750KB per attribute also leaves room for raw and normalized payloads.
+export const MAX_ATTRIBUTE_VALUE_BYTES = 750_000;
 // status.message carries raw error text; cap it like any other payload.
 export const MAX_STATUS_MESSAGE_CHARS = 4_096;

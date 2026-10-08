@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { setTimeout as delay } from 'node:timers/promises';
 import type {
   JsonObject,
@@ -116,11 +117,25 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
   private readonly idGenerator = new TelemetryIdGenerator();
   private readonly openSpans = new Map<string, LangfuseSpan>();
   private openSpanCapWarned = false;
+  private exportFailures = new Set<string>();
+  private flushFailed = false;
+  private state = 'ready';
 
   constructor(config: OtelExporterConfig, opts?: { provider?: BasicTracerProvider }) {
     this.config = normalizeExporterConfig(config);
-    this.provider = opts?.provider ?? buildTracerProvider(this.config, this.idGenerator);
-    this.tracer = this.provider.getTracer('@amaster.ai/pi-telemetry', '0.1.0');
+    this.provider =
+      opts?.provider ??
+      buildTracerProvider(this.config, this.idGenerator, (destination, succeeded) => {
+        if (succeeded) this.exportFailures.delete(destination);
+        else {
+          this.exportFailures.add(destination);
+          console.error(`[pi-telemetry] ${destination} export failed`);
+        }
+      });
+    this.tracer = this.provider.getTracer(
+      '@amaster.ai/pi-telemetry',
+      (createRequire(import.meta.url)('../../package.json') as { version: string }).version,
+    );
   }
 
   async publish(event: RuntimeTelemetryEvent): Promise<void> {
@@ -146,14 +161,33 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
     }
   }
 
+  getStatus() {
+    const failed = this.flushFailed || this.exportFailures.size > 0;
+    return {
+      enabled: this.config.enabled,
+      state: failed
+        ? 'error'
+        : this.config.configurationWarnings?.length
+          ? 'configuration-warning'
+          : this.state,
+      ...(failed
+        ? { error: 'Telemetry export failed or timed out' }
+        : this.config.configurationWarnings?.length
+          ? { error: this.config.configurationWarnings.join('; ') }
+          : {}),
+    };
+  }
+
   async flush(): Promise<void> {
-    await waitForExport(
-      this.provider.forceFlush().catch((error: unknown) => {
-        console.error(
-          `[pi-telemetry] export flush failed: ${error instanceof Error ? error.message : String(error)}`,
-        );
+    this.flushFailed = false;
+    const finished = await waitForExport(
+      this.provider.forceFlush().catch(() => {
+        this.flushFailed = true;
+        console.error('[pi-telemetry] export flush failed');
       }),
     );
+    if (!finished) this.flushFailed = true;
+    if (!this.flushFailed) this.state = 'flushed';
   }
 
   async close(): Promise<void> {
@@ -171,13 +205,14 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
       console.error(`[pi-telemetry] ended ${this.openSpans.size} open span(s) at session shutdown`);
     }
     this.openSpans.clear();
-    await waitForExport(
-      this.provider.shutdown().catch((error: unknown) => {
-        console.error(
-          `[pi-telemetry] exporter shutdown failed: ${error instanceof Error ? error.message : String(error)}`,
-        );
+    const finished = await waitForExport(
+      this.provider.shutdown().catch(() => {
+        this.flushFailed = true;
+        console.error('[pi-telemetry] exporter shutdown failed');
       }),
     );
+    if (!finished) this.flushFailed = true;
+    this.state = 'closed';
   }
 
   private publishLifecycleEvent(event: RuntimeLifecycleEvent, createdAtMs: number): void {
@@ -258,7 +293,7 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
             },
             event,
           ),
-          parentContextOf(this.openSpans.get(chatSpanKey(event))),
+          this.telemetryParentContext(event),
         );
         span.end(createdAtMs);
         return;
@@ -340,7 +375,7 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
           {
             ...toolMetadata(event),
             ...(event.args ? { args: event.args } : {}),
-            ...langfuseObservationAttributes({ input: event.args, level: 'DEFAULT' }),
+            ...langfuseObservationAttributes({ type: 'tool', input: event.args, level: 'DEFAULT' }),
           },
           event,
         ),
@@ -353,7 +388,10 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
       {
         ...toolMetadata(event),
         ...langfuseObservationAttributes({
-          output: event.error ? { error: event.error } : event.details,
+          type: 'tool',
+          output: event.error
+            ? { error: event.error }
+            : (event.details?.displayOutput ?? event.details),
           level: event.error ? 'ERROR' : 'DEFAULT',
         }),
       },
@@ -374,6 +412,9 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
     const key = llmGenerationKey(event);
     const terminalAttributes: JsonObject = {
       ...llmGenerationMetadata(event),
+      ...(event.output !== undefined && event.displayOutput !== undefined
+        ? { 'langfuse.observation.metadata.rawOutput': event.output }
+        : {}),
       // The langfuse-namespaced key is the first-priority mapping source for a
       // generation's model on the OTEL path; a bare `model` key risks sinking
       // into the unfilterable catch-all.
@@ -381,25 +422,33 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
       'langfuse.observation.model.parameters': JSON.stringify({
         provider: event.model.provider,
         ...(event.model.thinkingLevel ? { thinkingLevel: event.model.thinkingLevel } : {}),
+        ...event.modelParameters,
       }),
       ...langfuseObservationAttributes({
         type: 'generation',
-        output: event.output ?? (event.error ? { error: event.error } : undefined),
-        level: event.error ? 'ERROR' : 'DEFAULT',
+        output:
+          event.displayOutput ?? event.output ?? (event.error ? { error: event.error } : undefined),
+        level: event.stopReason === 'superseded' ? 'WARNING' : event.error ? 'ERROR' : 'DEFAULT',
       }),
       ...(event.usage ? langfuseUsageAttributes(event.usage) : {}),
+      ...(event.completionStartTime
+        ? { 'langfuse.observation.completion_start_time': event.completionStartTime }
+        : {}),
     };
     if (event.status === 'started') {
       const span = this.startSpan(
-        llmGenerationObservationName(event),
+        event.observationName ?? llmGenerationObservationName(event),
         event,
         createdAtMs,
         this.enrichSpanAttributes(
           {
             ...terminalAttributes,
+            ...(event.input !== undefined && event.displayInput !== undefined
+              ? { 'langfuse.observation.metadata.rawInput': event.input }
+              : {}),
             ...langfuseObservationAttributes({
               type: 'generation',
-              input: event.input,
+              input: event.displayInput ?? event.input,
               level: 'DEFAULT',
             }),
           },
@@ -413,7 +462,7 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
     const attributes = this.enrichSpanAttributes(terminalAttributes, event);
     if (!this.endOpenSpan(key, attributes, event.error, createdAtMs)) {
       this.emitTerminalSpan(
-        llmGenerationObservationName(event),
+        event.observationName ?? llmGenerationObservationName(event),
         event,
         createdAtMs,
         attributes,
@@ -535,11 +584,16 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
     return parentContextOf(local) ?? remoteParentContext();
   }
 
-  private telemetryParentContext(
-    event: RuntimeToolEvent | RuntimeLlmGenerationEvent,
-  ): Context | undefined {
+  private telemetryParentContext(event: RuntimeTelemetryEvent): Context | undefined {
     const subagentKey = telemetryEventSubagentSpanKey(event);
+    const toolParent =
+      'parentToolCallId' in event && event.parentToolCallId
+        ? [...this.openSpans.entries()].find(([key]) =>
+            key.startsWith(`tool:${event.sessionId}:${event.parentToolCallId}:`),
+          )?.[1]
+        : undefined;
     const local =
+      toolParent ??
       (subagentKey ? this.openSpans.get(subagentKey) : undefined) ??
       this.openSpans.get(chatSpanKey(event));
     return parentContextOf(local) ?? remoteParentContext();
@@ -551,6 +605,10 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
   // trace-level attributes from any span in the trace.
   private enrichSpanAttributes(base: JsonObject, event: RuntimeTelemetryEvent): Attributes {
     const enriched: JsonObject = { ...base, 'langfuse.trace.name': 'chat-turn' };
+    const userId = 'userId' in event ? event.userId : this.config.userId;
+    if (userId) enriched['user.id'] = userId;
+    if (this.config.environment) enriched['langfuse.environment'] = this.config.environment;
+    if (this.config.release) enriched['langfuse.release'] = this.config.release;
     if (this.config.serviceName) {
       enriched['langfuse.trace.metadata.serviceName'] = this.config.serviceName;
       enriched['langfuse.observation.metadata.serviceName'] = this.config.serviceName;
@@ -581,11 +639,33 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
 function buildTracerProvider(
   config: OtelExporterConfig,
   idGenerator: IdGenerator,
+  onExport: (destination: string, succeeded: boolean) => void,
 ): BasicTracerProvider {
   const spanProcessors: SpanProcessor[] = [];
+  function trackedExporter(
+    destination: string,
+    options: ConstructorParameters<typeof OTLPTraceExporter>[0],
+  ) {
+    const exporter = new OTLPTraceExporter(options);
+    const originalExport = exporter.export.bind(exporter);
+    exporter.export = (spans, callback) =>
+      originalExport(spans, (result) => {
+        onExport(destination, result.code === 0);
+        callback(result);
+      });
+    return exporter;
+  }
   if (config.langfuse) {
     spanProcessors.push(
       new LangfuseSpanProcessor({
+        exporter: trackedExporter('langfuse', {
+          url: `${config.langfuse.baseUrl.replace(/\/+$/, '')}/api/public/otel/v1/traces`,
+          headers: {
+            Authorization: `Basic ${Buffer.from(`${config.langfuse.publicKey}:${config.langfuse.secretKey}`).toString('base64')}`,
+            'x-langfuse-ingestion-version': '4',
+          },
+          timeoutMillis: EXPORT_TIMEOUT_MS,
+        }),
         publicKey: config.langfuse.publicKey,
         secretKey: config.langfuse.secretKey,
         baseUrl: config.langfuse.baseUrl,
@@ -594,7 +674,7 @@ function buildTracerProvider(
         flushInterval: config.langfuse.flushIntervalMs / 1000,
         timeout: EXPORT_TIMEOUT_MS / 1000,
         shouldExportSpan: () => true,
-        mediaUploadEnabled: false,
+        mediaUploadEnabled: config.includePayloads === true && config.mediaUploadEnabled === true,
         // Opt into real-time v4 ingestion — @langfuse/otel does not set this
         // itself, and without it data can lag the v2 read APIs.
         additionalHeaders: { 'x-langfuse-ingestion-version': '4' },
@@ -604,7 +684,7 @@ function buildTracerProvider(
   if (config.endpoint) {
     spanProcessors.push(
       new BatchSpanProcessor(
-        new OTLPTraceExporter({
+        trackedExporter('otel', {
           url: normalizeOtelTracesEndpoint(config.endpoint),
           ...(config.headers ? { headers: config.headers } : {}),
           timeoutMillis: EXPORT_TIMEOUT_MS,
@@ -631,6 +711,8 @@ function buildTracerProvider(
 function normalizeExporterConfig(config: OtelExporterConfig): OtelExporterConfig {
   return {
     ...config,
+    includePayloads: config.includePayloads === true,
+    mediaUploadEnabled: config.includePayloads === true && config.mediaUploadEnabled === true,
     flushAt: parsePositiveInteger(config.flushAt, DEFAULT_FLUSH_AT),
     flushIntervalMs: parsePositiveInteger(config.flushIntervalMs, DEFAULT_FLUSH_INTERVAL_MS),
     ...(config.langfuse
@@ -685,8 +767,11 @@ function statusFor(error: string | undefined): { code: SpanStatusCode; message?:
   return { code: SpanStatusCode.ERROR, message };
 }
 
-async function waitForExport(operation: Promise<void>): Promise<void> {
-  await Promise.race([operation, delay(MAX_CLOSE_MS, undefined, { ref: false })]);
+async function waitForExport(operation: Promise<void>): Promise<boolean> {
+  return Promise.race([
+    operation.then(() => true),
+    delay(MAX_CLOSE_MS, undefined, { ref: false }).then(() => false),
+  ]);
 }
 
 // OTEL attribute values are scalar (or homogeneous string arrays); objects

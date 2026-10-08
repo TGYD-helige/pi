@@ -13,12 +13,12 @@ const SERVICE_NAME = 'pi-telemetry-ci';
 function fullTrace() {
   return withSemantics([
     { id: 'root', traceId: 't1', type: 'SPAN', name: 'chat-turn', parentObservationId: null, startTime: 'a', endTime: 'b', input: `echo ${CODEWORD} parent` },
-    { id: 'b1', traceId: 't1', type: 'SPAN', name: `bash [echo ${CODEWORD} parent]`, parentObservationId: 'root', startTime: 'a', endTime: 'b' },
-    { id: 'b2', traceId: 't1', type: 'SPAN', name: 'bash [bash .github/scripts/telemetry-subagent.sh]', parentObservationId: 'root', startTime: 'a', endTime: 'b' },
+    { id: 'b1', traceId: 't1', type: 'TOOL', name: `bash [echo ${CODEWORD} parent]`, parentObservationId: 'root', startTime: 'a', endTime: 'b' },
+    { id: 'b2', traceId: 't1', type: 'TOOL', name: 'bash [bash .github/scripts/telemetry-subagent.sh]', parentObservationId: 'root', startTime: 'a', endTime: 'b' },
     { id: 'g1', traceId: 't1', type: 'GENERATION', name: 'llm-generation [main] [request]', parentObservationId: 'root', startTime: 'a', endTime: 'b' },
     { id: 's1', traceId: 't1', type: 'SPAN', name: 'llm-stream', parentObservationId: 'g1', startTime: 'a', endTime: 'b' },
     { id: 'sub', traceId: 't1', type: 'SPAN', name: 'subagent [ci-probe]', parentObservationId: 'root', startTime: 'a', endTime: 'b' },
-    { id: 'b3', traceId: 't1', type: 'SPAN', name: `bash [echo ${CODEWORD} child]`, parentObservationId: 'sub', startTime: 'a', endTime: 'b' },
+    { id: 'b3', traceId: 't1', type: 'TOOL', name: `bash [echo ${CODEWORD} child]`, parentObservationId: 'sub', startTime: 'a', endTime: 'b' },
     { id: 'g2', traceId: 't1', type: 'GENERATION', name: 'llm-generation [subagent] [request]', parentObservationId: 'sub', startTime: 'a', endTime: 'b' },
     { id: 's2', traceId: 't1', type: 'SPAN', name: 'llm-stream', parentObservationId: 'g2', startTime: 'a', endTime: 'b' },
   ]);
@@ -27,15 +27,15 @@ function fullTrace() {
 function hierarchyTrace() {
   return withSemantics([
     { id: 'root', traceId: 't2', type: 'SPAN', name: 'chat-turn', parentObservationId: null, startTime: 'a', endTime: 'b', input: `hierarchy probe ${CODEWORD}` },
-    { id: 'launch', traceId: 't2', type: 'SPAN', name: 'bash [bash .github/scripts/telemetry-subagent.sh hierarchy]', parentObservationId: 'root', startTime: 'a', endTime: 'b' },
+    { id: 'launch', traceId: 't2', type: 'TOOL', name: 'bash [bash .github/scripts/telemetry-subagent.sh hierarchy]', parentObservationId: 'root', startTime: 'a', endTime: 'b' },
     { id: 'main-gen', traceId: 't2', type: 'GENERATION', name: 'llm-generation [main] [request]', parentObservationId: 'root', startTime: 'a', endTime: 'b' },
     { id: 'main-stream', traceId: 't2', type: 'SPAN', name: 'llm-stream', parentObservationId: 'main-gen', startTime: 'a', endTime: 'b' },
     { id: 'outer', traceId: 't2', type: 'SPAN', name: 'subagent [ci-hierarchy]', parentObservationId: 'root', startTime: 'a', endTime: 'b' },
-    { id: 'nested-launch', traceId: 't2', type: 'SPAN', name: 'bash [bash .github/scripts/telemetry-subagent.sh]', parentObservationId: 'outer', startTime: 'a', endTime: 'b' },
+    { id: 'nested-launch', traceId: 't2', type: 'TOOL', name: 'bash [bash .github/scripts/telemetry-subagent.sh]', parentObservationId: 'outer', startTime: 'a', endTime: 'b' },
     { id: 'outer-gen', traceId: 't2', type: 'GENERATION', name: 'llm-generation [subagent] [request]', parentObservationId: 'outer', startTime: 'a', endTime: 'b' },
     { id: 'outer-stream', traceId: 't2', type: 'SPAN', name: 'llm-stream', parentObservationId: 'outer-gen', startTime: 'a', endTime: 'b' },
     { id: 'inner', traceId: 't2', type: 'SPAN', name: 'subagent [ci-probe]', parentObservationId: 'outer', startTime: 'a', endTime: 'b' },
-    { id: 'inner-bash', traceId: 't2', type: 'SPAN', name: `bash [echo ${CODEWORD} child]`, parentObservationId: 'inner', startTime: 'a', endTime: 'b' },
+    { id: 'inner-bash', traceId: 't2', type: 'TOOL', name: `bash [echo ${CODEWORD} child]`, parentObservationId: 'inner', startTime: 'a', endTime: 'b' },
     { id: 'inner-gen', traceId: 't2', type: 'GENERATION', name: 'llm-generation [subagent] [request]', parentObservationId: 'inner', startTime: 'a', endTime: 'b' },
     { id: 'inner-stream', traceId: 't2', type: 'SPAN', name: 'llm-stream', parentObservationId: 'inner-gen', startTime: 'a', endTime: 'b' },
   ]);
@@ -47,13 +47,13 @@ function hierarchyTrace() {
 function redactedTrace() {
   return withSemantics([
     { id: 'root', traceId: 't3', type: 'SPAN', name: 'chat-turn', parentObservationId: null, startTime: 'a', endTime: 'b' },
-    { id: 'b1', traceId: 't3', type: 'SPAN', name: 'bash', parentObservationId: 'root', startTime: 'a', endTime: 'b' },
+    { id: 'b1', traceId: 't3', type: 'TOOL', name: 'bash', parentObservationId: 'root', startTime: 'a', endTime: 'b' },
     { id: 'g1', traceId: 't3', type: 'GENERATION', name: 'llm-generation [main] [request]', parentObservationId: 'root', startTime: 'a', endTime: 'b' },
     { id: 's1', traceId: 't3', type: 'SPAN', name: 'llm-stream', parentObservationId: 'g1', startTime: 'a', endTime: 'b' },
-  ]);
+  ], false);
 }
 
-function withSemantics(observations) {
+function withSemantics(observations, includePayloads = true) {
   return observations.map((observation) => ({
     ...observation,
     sessionId: 'session-1',
@@ -65,6 +65,11 @@ function withSemantics(observations) {
           modelParameters: { provider: 'deepseek-integration' },
           usageDetails: { input: 10, output: 2, total: 12 },
           costDetails: { total: 0.001 },
+          completionStartTime: '2026-10-08T00:00:00.250Z',
+          ...(includePayloads ? {
+            input: [{ role: 'system', content: 'actual system', tools: [{ name: 'bash' }] }, { role: 'user', content: CODEWORD }],
+            output: { role: 'assistant', content: 'done', thinking: [{ type: 'thinking', content: 'reason' }] },
+          } : {}),
         }
       : {}),
   }));
@@ -89,6 +94,7 @@ const baseArgs = {
   fromStartTime: '2026-01-01T00:00:00Z',
   codeword: CODEWORD,
   traceId: 't1',
+  deadlineMs: 250,
   sleep: () => Promise.resolve(),
 };
 
@@ -419,4 +425,42 @@ it('verifies the configured integration model instead of a fixed DeepSeek name',
     if (previous === undefined) delete process.env.PI_INTEGRATION_MODEL;
     else process.env.PI_INTEGRATION_MODEL = previous;
   }
+});
+
+it('accepts correctly classified TOOL observations and rejects tools misclassified as SPAN', () => {
+  const typed = fullTrace().map((observation) => observation.name?.startsWith('bash')
+    ? { ...observation, type: 'TOOL' } : observation);
+  assert.deepEqual(evaluateTrace(typed, CODEWORD), []);
+  const wrong = typed.map((observation) => observation.type === 'TOOL' ? { ...observation, type: 'SPAN' } : observation);
+  assert.ok(evaluateTrace(wrong, CODEWORD).length > 0);
+});
+
+it('rejects incomplete system input and invalid thinking instead of accepting JSON fallback', () => {
+  const incomplete = fullTrace().map((row) => row.type === 'GENERATION' ? {
+    ...row,
+    metadata: { ...row.metadata, rawInput: { messages: [{ role: 'system', content: 'actual system with complete rules' }] } },
+  } : row);
+  assert.ok(evaluateTrace(incomplete, CODEWORD).some((problem) => problem.includes('complete system')));
+  const serialized = incomplete.map((row) => row.type === 'GENERATION' ? {
+    ...row, metadata: { ...row.metadata, rawInput: JSON.stringify(row.metadata.rawInput) },
+  } : row);
+  assert.ok(evaluateTrace(serialized, CODEWORD).some((problem) => problem.includes('complete system')));
+  const complete = serialized.map((row) => row.type === 'GENERATION' ? {
+    ...row, input: [{ role: 'system', content: 'actual system with complete rules' }],
+  } : row);
+  assert.deepEqual(evaluateTrace(complete, CODEWORD), []);
+  const trace = fullTrace();
+  const missingSystem = trace.map((row) => row.type === 'GENERATION' ? { ...row, input: [{ role: 'user', content: CODEWORD }] } : row);
+  assert.ok(evaluateTrace(missingSystem, CODEWORD).some((problem) => problem.includes('system')));
+  const malformedThinking = trace.map((row) => row.type === 'GENERATION' ? { ...row, output: { ...row.output, thinking: ['reason'] } } : row);
+  assert.ok(evaluateTrace(malformedThinking, CODEWORD).some((problem) => problem.includes('thinking')));
+});
+
+it('accepts missing unpriced costs only with explicit unknown provenance', () => {
+  const trace = fullTrace().map((row) => row.type === 'GENERATION' ? {
+    ...row, costDetails: {}, metadata: { ...row.metadata, costSource: 'unknown' },
+  } : row);
+  assert.deepEqual(evaluateTrace(trace, CODEWORD), []);
+  const unlabeled = trace.map((row) => ({ ...row, metadata: { serviceName: SERVICE_NAME } }));
+  assert.ok(evaluateTrace(unlabeled, CODEWORD).some((problem) => problem.includes('cost')));
 });
