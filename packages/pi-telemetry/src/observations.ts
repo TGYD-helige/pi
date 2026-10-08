@@ -158,6 +158,15 @@ export function displayMessage(message: unknown, systemUpdate = false): JsonObje
     result.content = [typeof content === 'string' ? content : '', ...sections]
       .filter(Boolean)
       .join('\n\n');
+    const removed = Array.isArray(msg.toolsRemoved)
+      ? msg.toolsRemoved
+          .filter((tool) => typeof tool?.name === 'string' && tool.name.trim())
+          .map((tool) => tool.name)
+      : [];
+    if (removed.length)
+      result.content = [result.content, `[Tools removed: ${removed.join(', ')}]`]
+        .filter(Boolean)
+        .join('\n\n');
     if (Array.isArray(msg.toolsAdded)) result.tools = toTelemetryValue(msg.toolsAdded);
   }
   if (typeof msg.toolCallId === 'string') result.tool_call_id = msg.toolCallId;

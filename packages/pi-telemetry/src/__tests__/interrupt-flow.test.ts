@@ -137,6 +137,33 @@ describe('interrupt flow', () => {
     );
   });
 
+  it('displays tool removals in the system transcript without changing the provider request', async () => {
+    await fireEvent('session_start', {});
+    recordExports();
+    await fireEvent('input', { text: 'continue' });
+    await fireEvent('context_with_system', {
+      messages: [
+        { role: 'system', content: 'instructions', toolsAdded: [{ name: 'bash', parameters: {} }] },
+        { role: 'user', content: 'continue' },
+        { role: 'system', content: '', toolsRemoved: [{ name: 'bash' }, { name: 'read' }] },
+        { role: 'system', content: 'unchanged', toolsRemoved: [] },
+      ],
+    });
+    const payload = { messages: [{ role: 'system', content: 'actual provider prompt' }] };
+    await fireEvent('before_provider_request', { payload });
+    await fireEvent('message_end', { message: assistantMessage('done') });
+    const generation = exported.find(
+      (span) => span.attributes['langfuse.observation.type'] === 'generation',
+    )!;
+    const input = JSON.parse(String(generation.attributes['langfuse.observation.input']));
+    expect(input[2]).toEqual({ role: 'system', content: '[Tools removed: bash, read]' });
+    expect(input[3]).toEqual({ role: 'system', content: 'unchanged' });
+    expect(payload).toEqual({ messages: [{ role: 'system', content: 'actual provider prompt' }] });
+    expect(
+      JSON.parse(String(generation.attributes['langfuse.observation.metadata.rawInput'])),
+    ).toEqual(payload);
+  });
+
   it('exports thinking and redacted thinking in the backend ChatML shape', async () => {
     await fireEvent('session_start', {});
     recordExports();
