@@ -8,17 +8,151 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { resolveFfmpeg } from '../ffmpeg.js';
+import { resolveFfmpeg, runFfmpegCommand } from '../ffmpeg.js';
 import { ActiveJobs } from '../jobs/store.js';
-import { preflightRemotion, runRemotion } from '../remotion.js';
+import { parseRemotionSpec, preflightRemotion, runRemotion } from '../remotion.js';
 
 const root = join(tmpdir(), 'pi-video-gen-remotion');
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 describe('runRemotion', () => {
+  it('rejects unbounded or invalid review timestamps before rendering', () => {
+    const spec = { projectDir: root, compositionId: 'Promo' };
+    for (const qcTimesSec of [[-1], [null], ['1'], Array(33).fill(1), '1']) {
+      expect(() => parseRemotionSpec(JSON.stringify({ ...spec, qcTimesSec }))).toThrow(
+        /qcTimesSec/,
+      );
+    }
+    expect(
+      parseRemotionSpec(JSON.stringify({ ...spec, qcTimesSec: [0, 1.25] })).qcTimesSec,
+    ).toEqual([0, 1.25]);
+  });
+
+  it.each([
+    false,
+    true,
+  ])('records and verifies exported review frames (audio tail: %s)', async (audioTail) => {
+    const fps = audioTail ? 10 : 25;
+    const project = join(root, 'review-project');
+    const job = join(root, '.video-gen', 'review-job');
+    // This bundle has no sibling ffprobe, so automatic probe discovery must retain its fallback.
+    const ffmpegPath = createRequire(import.meta.url)('ffmpeg-static') as string;
+    for (const dir of [join(project, 'src'), join(project, 'public'), job])
+      mkdirSync(dir, { recursive: true });
+    writeFileSync(join(project, 'package.json'), '{}');
+    writeFileSync(join(project, 'src', 'index.ts'), 'root');
+    for (const name of [
+      'remotion',
+      '@remotion/bundler',
+      '@remotion/renderer',
+      'react',
+      'react-dom',
+    ]) {
+      const dir = join(project, 'node_modules', name);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'package.json'), '{"version":"1.0.0"}');
+    }
+    await runFfmpegCommand(ffmpegPath, [
+      '-f',
+      'lavfi',
+      '-i',
+      `testsrc2=s=160x90:r=${fps}:d=${audioTail ? 0.1 : 2}`,
+      ...(audioTail ? ['-f', 'lavfi', '-i', 'sine=frequency=440:duration=0.5', '-c:a', 'aac'] : []),
+      '-c:v',
+      'mpeg4',
+      '-y',
+      join(project, 'public', 'source.mp4'),
+    ]);
+    writeFileSync(
+      join(project, 'node_modules', '@remotion', 'bundler', 'index.js'),
+      'exports.bundle = async ({publicDir}) => publicDir;',
+    );
+    writeFileSync(
+      join(project, 'node_modules', '@remotion', 'renderer', 'index.js'),
+      `
+      const fs = require('node:fs'); const path = require('node:path');
+      exports.selectComposition = async () => ({fps: ${fps}, durationInFrames: ${audioTail ? 1 : 50}, props: {}});
+      exports.renderStill = async ({output}) => fs.writeFileSync(output, 'frame');
+      exports.renderMedia = async ({serveUrl, outputLocation}) => fs.copyFileSync(path.join(serveUrl, 'source.mp4'), outputLocation);
+    `,
+    );
+    const spec = {
+      projectDir: project,
+      compositionId: 'Promo',
+      qcTimesSec: audioTail ? [0.09] : [0.9, 1, 1.16, 1.99, 1.9999999999999998],
+    };
+    writeFileSync(join(job, 'remotion-input.json'), JSON.stringify(spec));
+    const opts = {
+      specPath: join(job, 'remotion-input.json'),
+      cwd: root,
+      settings: {},
+      activeJobs: new ActiveJobs(),
+      trusted: true,
+      ffmpegPath,
+    };
+    const first = await runRemotion(opts);
+    expect(first.qcFrames).toHaveLength(audioTail ? 4 : 7);
+    expect(readFileSync(first.qcFrames![0]!).subarray(1, 4).toString()).toBe('PNG');
+    const report = JSON.parse(readFileSync(first.qcReportPath!, 'utf8'));
+    const expectedTimes = audioTail
+      ? [0.025, 0.05, 0.075, 0.09]
+      : [0.5, 0.9, 1, 1.16, 1.5, 1.99, 1.9999999999999998];
+    report.samples.forEach((sample: { timeSec: number }, index: number) => {
+      expect(sample.timeSec).toBeCloseTo(expectedTimes[index]!);
+    });
+    expect(report.finalVideoHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(report.samples.at(-1).frameTimeSec).toBe(audioTail ? 0 : 1.96);
+    if (!audioTail) {
+      const expectedFrame = join(root, 'boundary.png');
+      await runFfmpegCommand(ffmpegPath, [
+        '-ss',
+        '1.16',
+        '-i',
+        first.finalVideoPath,
+        '-frames:v',
+        '1',
+        '-y',
+        expectedFrame,
+      ]);
+      const boundary = report.samples.find(
+        (sample: { timeSec: number }) => sample.timeSec === 1.16,
+      );
+      expect(readFileSync(join(job, boundary.path)).equals(readFileSync(expectedFrame))).toBe(true);
+      expect(boundary.frameTimeSec).toBe(1.16);
+    }
+    const resumed = await runRemotion(opts);
+    expect(resumed.resumed).toBe(true);
+    expect(resumed.qcFrames).toEqual(first.qcFrames);
+    writeFileSync(first.qcFrames![0]!, 'tampered');
+    await expect(runRemotion(opts)).rejects.toThrow(/QC/);
+    const manifestPath = join(job, 'remotion-manifest.json');
+    const legacy = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    const removed = Object.keys(legacy.qcHashes).find((path) => path.endsWith('frame_00.png'))!;
+    rmSync(first.qcFrames![0]!);
+    delete legacy.qcHashes[removed];
+    writeFileSync(manifestPath, JSON.stringify(legacy));
+    await expect(runRemotion(opts)).rejects.toThrow(/QC/);
+    legacy.qcHashes = {};
+    writeFileSync(manifestPath, JSON.stringify(legacy));
+    await expect(runRemotion(opts)).rejects.toThrow(/QC/);
+    delete legacy.qcHashes;
+    writeFileSync(manifestPath, JSON.stringify(legacy));
+    expect((await runRemotion(opts)).qcFrames).toEqual([]);
+    await expect(
+      preflightRemotion({
+        spec: { ...spec, qcTimesSec: [2] },
+        cwd: root,
+        jobDir: job,
+        assets: {},
+        ffmpegPath,
+      }),
+    ).rejects.toThrow(/qcTimesSec/);
+  });
+
   it('holds the job lock until cancellation stops a detached browser launched before Remotion cleanup', async () => {
     const project = join(root, 'cancel-project');
     const job = join(root, '.video-gen', 'cancel-job');

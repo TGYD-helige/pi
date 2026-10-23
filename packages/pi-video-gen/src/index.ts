@@ -878,8 +878,8 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
           finalVideoPath: result.finalVideoPath,
         });
         return okResult(
-          `Remotion video ready: ${result.finalVideoPath}. Editable project: ${result.projectDir}. Job: ${result.jobId}.`,
-          result as unknown as Record<string, unknown>,
+          `Remotion video ready: ${result.finalVideoPath}. Editable project: ${result.projectDir}. QC frames: ${result.qcFrames.join(', ') || 'not recorded'}. Job: ${result.jobId}.`,
+          { ...result, qcStatus: result.qcFrames.length ? 'recorded' : 'not_performed' },
         );
       }
       // C0: lossless concat of existing clips.
@@ -1061,9 +1061,10 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
       promptGuidelines: [
         'Read the video-gen skill and follow its concat or timeline workflow before writing the spec. Local composition skips video_capabilities and paid-model gates.',
         'Choose compose-input.json for lossless concat, timeline-input.json for FFmpeg overlays and narration, or remotion-input.json for precise graphics and an editable React project. Remotion requires a trusted local project and installed Remotion/Chrome; optional narration sends text to Microsoft Edge TTS.',
+        'For Remotion, use optional qcTimesSec (up to 32 seconds-based timestamps) to inspect important handoffs before, during and after the transition. Review returned QC frames; recorded evidence does not establish motion or audio acceptance.',
         'For C0: every ordered stream across all clips must match (codec/resolution/fps/timebase/pix_fmt/sample-rate/audio layout) — mismatches are reported via ffprobe, never silently transcoded. Do NOT use for AI video generation (use video_generate/video_render).',
         'For timeline: each segment contains exactly one image or video. Video uses numeric durationSec with optional trimStartSec, fit, and sourceAudio; image may use auto duration and motion.',
-        'Reuse existing images/screenshots/clips first and generate only missing visuals with image_generate. Put Chinese titles in overlay and use subtitles.mode "burn" when narration subtitles must appear directly in the frames.',
+        'Reuse suitable existing images/screenshots/clips first; use image_generate for missing visuals or explicitly requested replacements. Put Chinese titles in overlay and use subtitles.mode "burn" when narration subtitles must appear directly in the frames.',
         'Timeline TTS failures stop by default. Set ttsFailureMode "silent-subtitles" in timeline-input.json only after the user explicitly accepts silent audio with preserved subtitles.',
         'Narration is not fully local: require an explicit voice such as "edge-tts:zh-CN-YunyangNeural" only after disclosing that narration text is sent to Microsoft Edge TTS.',
         'Local compute — no paid-model confirmation needed, but tell the user the segment/clip count and planned duration before calling.',

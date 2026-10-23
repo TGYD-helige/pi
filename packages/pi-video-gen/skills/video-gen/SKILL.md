@@ -1,229 +1,52 @@
 ---
 name: video-gen
-description: "Create video from existing clips, direct video-model calls, batch render scripts, FFmpeg timelines, or Remotion projects. Use when the deliverable is a video; use pi-image-gen for still images."
+description: "Create or edit videos using existing media, video models, FFmpeg timelines or Remotion. Use for clips, video assembly, product films and animated explainers; use image-gen for still-image deliverables."
 ---
 
 # Video generation
 
-Choose each shot's source independently: existing video, a model-generated clip, or graphics in a Remotion project. In a proposed workflow, name the actual tool at each handoff, including `image_generate` for missing portraits or reference frames; a package or skill name alone does not specify the executable tool. Then choose the assembly path:
+Choose each shot's source independently: existing media, a model-generated clip, or graphics in an editable Remotion project. Name the executable tool at each handoff. The video model comes from `pi-video-gen.defaultModel`; image generation uses pi-image-gen's active model. `<outputDir>` is the configured `pi-video-gen.outputDir`, defaulting to `<cwd>/.video-gen`; `/video-gen doctor` reports its resolved path.
 
-- **C0 local concat** — `video_compose` joins compatible existing MP4 clips.
-- **Timeline render** — `video_compose` locally turns images/screenshots and existing video clips into a video with overlays, motion, transitions, soft or burned subtitles, source audio, and optional BGM. Narration is an optional network feature.
-- **Remotion compose** — `video_compose` renders a trusted editable React project with existing media and optional generated clips; read [the Remotion handoff](references/remotion-handoff.md) when using this path.
-- **Direct model calls** — `video_generate` creates each missing model clip; use `video_compose` afterwards if the clips need assembly.
-- **Batch render script** — `video_render` runs a prepared `render-input.json` with existing and generated shots, durable remote-task recovery and optional assembly; read [the render script reference](references/video-render-workflow.md) when using this path.
+## Route the task
 
-The AI video model is fixed by `pi-video-gen.defaultModel`; generated images use pi-image-gen's active model.
+Honor the user's specified method and existing usable material. Read only the relevant assembly guide:
 
-## A. Workflow rules
+| Goal | Tool and reference |
+|---|---|
+| Join compatible MP4 clips without re-encoding | `video_compose`; follow Compatible clip concat below |
+| Create one or several model clips under direct control | `video_generate`; follow Direct model clips below; use `video_compose` if assembly is needed |
+| Assemble images/screenshots and clips with overlays, transitions or narration | `video_compose`; read [Timeline composition](references/timeline-compose.md) |
+| Animate exact UI, charts, typography or editable graphics | `video_compose`; read [Remotion handoff](references/remotion-handoff.md) |
+| Execute a prepared batch with saved remote tasks and optional assembly | `video_render`; read [render script and recovery](references/video-render-workflow.md), plus the selected assembly guide |
 
-0. **Route first.** Choose the right flow before anything:
+For a product film, demonstration, capability showcase or authored explainer, read [film direction](references/film-direction.md) before designing scenes. An explicitly supplied edit, single clip or straightforward assembly follows its supplied instructions without that planning stage. For continuous UI/graphic handoffs, film direction routes to the motion-authoring guide. Read [shot planning and frame preparation](references/shot-planning.md) only when recurring identities, narrative continuity or missing reference frames require it.
 
-   | User goal | Flow |
-   |---|---|
-   | Existing local mp4 clips to join | `video_compose` (C0 — lossless, local, no paid models) |
-   | One or several model clips under direct control | `video_generate` for each missing clip; `video_compose` if assembly is needed |
-   | Prepared script with generated and existing shots, recovery and assembly | `video_render` |
-   | Promo/explainer from images, screenshots & clips | `video_compose` (TimelineSpec — local mixed-media render; optional network TTS) |
-   | Precise UI, charts, typography or editable frame animation | `video_compose` with a trusted Remotion project, or `video_render` with Remotion assembly when the script also generates shots |
+## Execution rules
 
-   **Creative planning.** For a product launch film, product demo, or authored explainer, read [film direction](references/film-direction.md) before designing scenes, including when all media is local. Follow its direction, rhythm, sound and review workflow alongside the selected assembly path. A single requested clip or a straightforward assembly follows its supplied instructions without this planning stage.
+- **Preserve scope.** Reuse suitable assets; generate or replace images when needed or explicitly requested. Use `image_generate` for those images and read the installed image-gen skill before using it. If it is unavailable, disclose the gap and continue only with suitable existing material or an agreed alternative. Any user restriction on generation charges also applies to image calls.
+- **Model preflight.** Before preparing new generated-video requests, call `video_capabilities` and respect the active model's durations, ratios, audio, frame and trusted-asset support. Local-only work needs no video-model credentials or capability call. For Seedance recognizable portraits or provider-managed portrait/material choices, read [Seedance assets](references/seedance-assets.md) before selecting inputs or preparing a paid call.
+- **Paid scope.** Before the first paid video call, state the generated shot count and durations, provider/account, model and exact asset choices. Obtain approval unless that exact scope is already authorized; reuse approval for unchanged resumes using the saved job identity. A material scope change needs agreement. A prepared batch uses one initial `video_render` call per requested version; resume the same spec after interruption. Additional prototypes or versions must serve the requested task.
+- **Cost.** State call counts and durations. If the user requests prices, verify current provider pricing and state the assumptions; if pricing cannot be verified, say so rather than guessing. Do not promise a fixed completion time.
+- **Immutable jobs.** Revised inputs or frozen project source require a NEW job directory. Rerunning the SAME spec resumes completed shots without resubmitting them. Preserve saved clips and remote handles; never delete shot outputs to force a retry. Missing or changed committed artifacts fail integrity checks rather than being silently regenerated.
+- **Degradation.** When a capability or preflight check fails, explain supported alternatives and obtain agreement for a materially changed result. Omit unsupported native-audio cues; if requested audio would be lost, resolve that gap before generation. Narration uploads and silent-subtitle fallbacks follow the Timeline guide's disclosure and agreement rules.
+- **Cancellation.** Stopping local polling/rendering may leave a remote task running and billable; Ark remote cancellation is unverified. Report that limitation.
 
-1. **Local flows use their assembly guide.** For C0 follow §A0; for Timeline follow §A1; for Remotion read its handoff. All-local scripts need no video-model credentials or paid-model confirmation. Use `image_generate` only when source images are missing.
-2. **AI preflight only for generated shots.** Call `video_capabilities` and respect the active model's duration, audio, frame and trusted-asset support. Confirm `image_generate` is available only when source frames need to be generated (`/video-gen doctor` checks; config health is `/image-gen list`).
-3. **Pick direct or scripted generation.** Use `video_generate` directly for each model clip when the agent is controlling the calls. Use `video_render` for a prepared script that automates per-shot generation, persistence, recovery and assembly. A project may mix generated shots with existing footage without generating it again.
-4. **Plan only what the film needs.** For a story with recurring characters or shot-to-shot continuity, write a shot book in conversation using §B. For other clips, work from the supplied media or shot instructions. Existing frames can be reused; generate missing portraits or first/last frames with `image_generate` using §C when they improve consistency.
-5. **Confirm paid scope.** Before the first paid video call, state the generated shot count and durations, provider/account, model and asset choices. Reuse an existing approval for the same scope; get agreement when the scope changes. For a scripted film, write one render spec and call `video_render` once; a resumed job reruns the same spec.
-6. **Cost honesty.** AI video calls are paid and take minutes each. Never state amounts (prices change); state call counts and durations.
-7. **Revisions.** The render spec is immutable per job directory. Text-stage revisions happen in chat (regenerate frames as needed); a revised film goes in a NEW job directory. NEVER suggest "delete shots/<id>/ and rerender" — that breaks downstream dependencies. Rerunning the SAME spec path resumes an interrupted job (finished shots don't re-bill).
-8. **Degradation negotiation.** If generation preflight fails (e.g. last frame unsupported), present the options (switch model / edit spec / `allowDegradations`) and let the user choose. Never degrade silently. When the model's `nativeAudio` is false, omit audio cues and obtain acceptance of silence if audio was requested.
-9. **Cancellation honesty.** Interrupting stops local polling only — remote tasks may keep running and billable (Ark cancellation is unverified). Say so.
-
-## A0. C0 — composing existing clips (`video_compose`)
+## Compatible clip concat
 
 1. **Tell the user first**: clip count, order, output location (`<jobDir>/final_video.mp4`), `mode: "copy"`. This is LOCAL compute — do not use the paid-model confirmation script for it.
 2. Write `<jobDir>/compose-input.json` (`{"clips":[{"id":"c1","path":"/abs/a.mp4"},…],"output":{"mode":"copy"}}`) under the video-gen output dir, then call `video_compose` ONCE. Keep source clips outside `<jobDir>/clips/`; that directory and `final_video.mp4` are reserved pipeline outputs, and a fresh job refuses either conflict.
-3. **Only promise** lossless concat of compatible MP4s (C0). **Never promise** trimming, transitions, overlays, subtitles, TTS, BGM, or re-encoding **for the C0 path** — those live in the Timeline path (A1 below), not here; do not hint at them for `compose-input.json`.
+3. **Only promise** lossless concat of compatible MP4s (C0). **Never promise** trimming, transitions, overlays, subtitles, TTS, BGM, or re-encoding **for the C0 path** — those live in [Timeline composition](references/timeline-compose.md), not here; do not hint at them for `compose-input.json`.
 4. On any ordered stream incompatibility across all tracks (codec/resolution/fps/timebase/pix_fmt/sample-rate/audio layout), hand the exact ffprobe differences back to the user/agent: re-encode the odd clips first. NEVER silently transcode, and NEVER fall back to `video_generate`/`video_render` as a workaround.
 5. Interrupted? Rerun the SAME path (fingerprint-verified resume / cached). Changed clips or order? NEW job directory. A completed final video is hash-bound; if it is missing or changed, restore the exact artifact or start a NEW job.
 
-## A1. Timeline compose (`video_compose` with `timeline-input.json`)
+## Direct model clips
 
-Use for promos/explainers from still images and existing clips. Media rendering is local and uses no paid video model. If narration is requested, disclose that the explicit `edge-tts:<voice>` option sends narration text to Microsoft before using it.
+1. Complete model preflight and any applicable Seedance asset checks above. Use the active tool schema.
+2. Fill structured prompt fields: `visuals` describes camera/framing, `action` in-frame movement, `scene` the setting, `effects` time-varying appearance, and `audio` sound/dialogue. `visuals` and `action` are required; without `firstFrame`, `style` and `scene` are also required. The tool assembles the prompt.
+3. Generate requested/missing source frames through `image_generate`, recording its returned paths. Confirm the exact paid-video scope if not already authorized.
+4. Call `video_generate` for each missing clip. Resume an interrupted clip with its returned `jobId`; `prompt` is not needed on resume. An ambiguous submit requires checking the provider console and `/video-gen recover <jobId>`: `reset` only a confirmed-absent task or `adopt` its existing task ID. Do not blindly resubmit. Choose the appropriate local assembly path if needed.
+5. Inspect the returned saved video or available QC evidence and report its path, accepted degradation and any verification limitation.
 
-1. **Collect existing images/screenshots/clips first**, and use `image_generate` only for missing visual material. Keep all source media outside the job directory, then author `<jobDir>/timeline-input.json`. `assets/`, `overlays/`, `audio/`, `segments/`, `qc/`, generated tracks, subtitles, and `final_video.mp4` are reserved pipeline outputs; a fresh job refuses any conflicts rather than deleting them.
-   ```jsonc
-   {
-     "title": "产品宣传片",
-     "output": { "resolution": "1920x1080", "fps": 25, "codec": "h264" },
-     "voice": "edge-tts:zh-CN-YunyangNeural",   // explicit opt-in: narration text is sent to Microsoft
-     "ttsFailureMode": "fail",                  // or "silent-subtitles" only after the user accepts that degradation
-     "subtitles": { "mode": "burn", "fontSize": 36,
-       "textColor": "#ffffff", "backgroundColor": "#000000", "backgroundOpacity": 0.55 },
-     "segments": [
-       {
-         "id": "intro",
-         "image": "/abs/frame-1.png",
-         "durationSec": 5,                      // image only: may be "auto" from narration
-         "motion": "kenburns-in",               // image only
-         "transitionTo": { "type": "xfade", "style": "fade", "durationSec": 0.8 },
-         "overlay": { "title": "标题", "subtitle": "副标题", "position": "bottom-left" },
-         "narration": "这一段的中文旁白文本"
-       },
-       {
-         "id": "demo",
-         "video": "/abs/demo.mp4",
-         "trimStartSec": 2.5,
-         "durationSec": 6,                      // video always uses a numeric duration
-         "fit": "contain",                      // contain | cover
-         "sourceAudio": { "muted": false, "volume": 0.25 }
-       }
-     ]
-   }
-   ```
-2. **Chinese text NEVER comes from an image model** — titles/subtitles go in `overlay` and are rendered locally via SVG (no garbled CJK).
-3. **Paid-model confirmation is unnecessary** for the local media render, but still show the segment count and total planned duration before calling `video_compose`. Obtain explicit agreement before sending narration text to Edge TTS.
-4. Every segment contains exactly one of `image` or `video`. Video segments are normalized to the output resolution/fps, may be trimmed/scaled, and mix their source audio with narration before optional BGM. Video source audio without a stream degrades to silence; `sourceAudio.muted: true` or `volume: 0` disables it. A video's numeric `durationSec` is its fixed trim window; narration that does not fit is rejected instead of extending it.
-5. Narration uses Edge TTS only with an explicit `edge-tts:<voice>` selection; its text is sent to Microsoft. Measured audio duration drives image `durationSec: "auto"`; subtitles use each segment's actual video timing. `subtitles.mode` defaults to `"soft"` (`mov_text`); `"burn"` renders the configured font/color/background directly into each narrated segment. TTS failures stop the job by default. Use `ttsFailureMode: "silent-subtitles"` only as an explicit degradation choice; it keeps the subtitle track and fills that segment with silence. Once accepted, that degradation is cached for the immutable job; create a NEW job to retry real narration.
-6. On completion, review the QC frames in `<jobDir>/qc/` yourself (Read the PNGs) before showing the result — flipped/overlapping text only shows up visually. Soft `mov_text` subtitles are not burned into those PNGs; the pipeline separately verifies that the subtitle stream exists and that the SRT cues match the resolved segment timeline.
-7. The spec is immutable per job: rerunning the same path resumes only regular job-local artifacts whose manifest hashes still match; changes require a NEW job directory. A committed artifact that is missing or changed is rejected rather than regenerated underneath cached downstream outputs. A completed manifest with any missing artifact hash is rejected; an interrupted manifest invalidates unverified downstream hashes before rebuilding an uncommitted upstream artifact.
+## Completion
 
-## A2. Seedance trusted portraits and provider-managed assets
-
-Before any paid Seedance call that may contain a recognizable human face:
-
-1. **Classify the source.** Ordinary uploaded or generated images/videos of a recognizable real person may be rejected by Seedance's privacy checks. Do not treat a local file path or public URL as an authorized portrait.
-2. **Search preset personas when needed.** If the user has not already chosen an identity, run this skill's `scripts/search-seedance-personas.mjs` with `--query "<space-separated traits>" --framing half|full --limit 5`. Use `half` for close/medium portrait shots and `full` when the whole body or body movement must be visible. Present the bounded matches with label, short bio, framing, and Asset ID; let the user choose before a paid call. The script is the access path; do not load the entire 3.6 MB JSON catalog into context.
-3. **Use the exact trusted asset.** For a catalog choice, copy the returned `selectedAssetId`. Otherwise ask the user for a preset-avatar or Active authorized-person `asset-...` ID from the current Ark account/project. Catalog IDs were observed on 2026-08-24 and are not documented as permanent or cross-account. If the active account rejects one, ask the user to copy the current ID from that account's virtual-avatar library.
-4. **Preserve modality order.** Put provider assets in `referenceAssets` as `{ "modality": "image|video|audio", "assetId": "asset-..." }`. Order is significant within each modality. In the prompt say `Image 1`, `Video 1`, or `Audio 1`; never expose or cite the Asset ID in prompt prose. For the built-in Seedance 2.0 models, keep each request within 9 image references total (local frames plus image assets), 3 video assets, and 3 audio assets.
-5. **Reconfirm the paid context.** Approval is scoped to the exact asset list, provider/account context, model, clip count, and duration. An unchanged resumed job retains its existing approval. A changed asset, account/project, provider, model, or job requires a new confirmation.
-6. **Keep onboarding out of scope.** This package submits already-created assets. It does not perform identity verification, authorization H5 flows, asset activation, upload, or asset-library management.
-
-Official references: [preset avatars](https://docs.volcengine.com/docs/82379/2608626?lang=zh#preset-avatar), [authorized-person assets](https://docs.volcengine.com/docs/82379/2223965?lang=zh), and [Seedance asset request format](https://console.volcengine.com/ark/region:cn-beijing/docs/82379/2333589?projectName=default&lang=zh#d9a7d853).
-
-## A3. Seedance public image/video/audio materials
-
-When the user asks for built-in Seedance materials, action references, camera references, visual styles, environments, characters, or sample voices, read [`references/seedance-public-material-library.md`](references/seedance-public-material-library.md) completely before proposing choices. Use the exact Chinese display labels from that catalog, copy its exact Asset IDs into `referenceAssets`, and keep the selected media in modality order. These IDs were read from the public material cards, not from the separate virtual-avatar library. If the active account rejects a listed ID, re-open the experience center and copy the current card ID instead of guessing or substituting a media URL.
-
-## A4. Direct AI clips (`video_generate`)
-
-1. Complete the AI preflight in §A and resolve any Seedance asset requirements in §A2–A3. Use the active tool schema for parameters.
-2. Fill structured prompt fields: `visuals` is camera/framing, `action` is in-frame movement, `scene` is setting, `effects` is time-varying appearance, and `audio` is sound/dialogue. `visuals` and `action` are required; without `firstFrame`, `style` and `scene` are also required. The tool assembles the prompt.
-3. If source frames must be generated, read the image-gen skill first, generate them and record the returned paths. Show the prepared clip, duration, exact assets and provider/account/model context. Obtain explicit approval for this paid request unless already authorized unchanged.
-4. Call `video_generate` for each missing clip. If interrupted, resume that clip with its returned `jobId`; `prompt` is not needed on resume. For an ambiguous submission, check the provider console and use `/video-gen recover <jobId>` before any retry: `reset` only a confirmed-absent task or `adopt` its existing task ID. If the clips need assembly, choose the C0, Timeline or Remotion `video_compose` path after generation.
-5. Finish after the saved video is returned and reviewed. Report its path and any accepted degradation; if visual verification is unavailable, state that limitation.
-
-## B. Shot book (VideoProject) — authoring reference
-
-Use a shot book when narrative continuity benefits from one. Author it in conversation; save to `<jobDir>/project.json` when the project needs an editable planning record.
-
-```jsonc
-{
-  "title": "...", "style": "Cartoon",
-  "characters": [{ "id": "alice", "visible": true,
-    "appearance": "long blonde hair, blue eyes, slender",   // static features
-    "outfit": "red scarf, black leather jacket" }],          // dynamic features
-  "shots": [{
-    "id": "s1",
-    "intent": "Wide shot, rainy alley. <Alice> enters from the left, stops under the streetlamp…",
-    "scene": "Rainy alley at night, neon signs, wet pavement",   // optional: the shot's setting
-    "firstFrame": "…pure static description of the FIRST frame…",
-    "lastFrame": "…(optional) pure static description of the LAST frame…",
-    "visuals": "Static camera, wide shot from across the street…",   // camera + framing only
-    "action": "A woman with long blonde hair and a red scarf walks in from the left…",
-    "effects": "…(optional) time-varying visuals: rain picks up, neon reflections intensify…",
-    "audio": "[Sound Effect] rain, distant traffic. [Speaker] Alice (soft): \"We're here.\"",
-    "visibleCharacters": ["alice"],
-    "durationSec": 5,
-    "continuityGroup": "alley",
-    "startFrameFromShotId": "s0",   // optional: this shot's frame builds on s0's frame
-    "continuityNote": "In s0's frame Alice faces away; front view missing"
-  }]
-}
-```
-
-Field rules:
-
-- **Give each story shot a purpose** (establish / emotion / reaction). Choose framing to serve that purpose; use close-ups for emotion and wide shots for context when appropriate.
-- **Keep dialogue within the selected model's duration and audio support.** Character names in `intent` may be wrapped in angle brackets: `<Alice>`.
-- **firstFrame / lastFrame are pure static snapshots** — no ongoing actions ("he is sitting, leaning forward", NOT "he is about to stand"). Include shot size, angle, composition, who is where and facing which way.
-- **visuals = camera + framing only** (movement, shot size, angle, focus); **action = in-frame movement only**. Split them — they become separate labeled sections in the assembled prompt. Refer to characters by visible traits ("the woman in the red scarf"), never by name.
-- **scene is the shot's setting**, copied verbatim into the render spec's `prompt.scene`. Optional when the first frame fully anchors the setting; write it when the setting carries mood/lighting the frame may not convey.
-- **effects is for what a static frame cannot carry**: transformations, lighting/atmosphere shifts, particles, slow motion. Omit when the shot is visually static.
-- **lastFrame needed when**: composition/focus changes drastically, a character enters or turns to face camera, a major reveal happens. Otherwise omit it.
-- **Use `continuityGroup` where shots share a space or visual base.** Start a new group when the setting or camera relationship warrants it.
-- **continuityGroup** = shots sharing a space/base image; **startFrameFromShotId** pins a specific parent frame for composition; **continuityNote** says what the parent frame lacks (the frame prompt must then keep the background and replace those elements). Self-check: parent shot EXISTS, comes EARLIER, same continuityGroup, no cycles.
-- **audio** uses `[Sound Effect] …` / `[Speaker] Name (Emotion): "line"` format.
-- **durationSec and all capability values come from `video_capabilities`** — never from memory or this document. Durations, resolutions, ratios, audio and frame support differ per model and change over time.
-- **Behavioral quirks worth knowing** (still verify with `video_capabilities`): some models have no native audio (omit audio cues or the render is silent); some cannot do last-frame interpolation (never pass lastFrame to them); HappyHorse takes a first frame OR reference images in one call, not both — cite references in the prompt as `[Image 1]`, `[Image 2]`, …
-
-## C. Image operation manual (via `image_generate`)
-
-When a shot book needs missing character portraits or first/last frames, call `image_generate` to create those images before `video_render`. Follow the **pi-image-gen skill** for parameters, sizes, `n`, and edit labeling; it is the single authority. Two video-specific handoff rules:
-
-- **Never assume a saved filename**: the actual extension follows the MIME type and collisions get `-v2`. **The returned absolute path is the only truth** — record it immediately in `assets.json` (see below) and reference it in the render spec.
-- `assets.json` in the job dir: `{ "assets": { "<shotId>/<part>": { "sourcePath": "…" } } }` mapping semantic assets (e.g. `s1/firstFrame`, `alice/front`) to real paths.
-
-**Character portrait views (generate only those the planned frames need)**:
-
-- front (text-to-image): `Generate a full-body, front-view portrait of character {identifier} based on the following description, with a pure white background. Use a wide 16:9 landscape canvas, not a vertical portrait canvas. The character should be centered in the image, occupying the middle of the wide frame with enough horizontal empty space. Gazing straight ahead. Standing with arms relaxed at sides. Natural expression. Features: {appearance}; {outfit}. Style: {style}`
-- side (edit with front as reference): `Generate a full-body, side-view portrait of character {identifier} based on the provided front-view portrait, with a pure white background. Use a wide 16:9 landscape canvas, not a vertical portrait canvas. The character should be centered in the image, occupying the middle of the wide frame with enough horizontal empty space. Facing left. Standing with arms relaxed at sides.`
-- back (edit with front as reference): `Generate a full-body, back-view portrait of character {identifier} based on the provided front-view portrait, with a pure white background. Use a wide 16:9 landscape canvas, not a vertical portrait canvas. The character should be centered in the image, occupying the middle of the wide frame with enough horizontal empty space. No facial features should be visible.`
-
-If an optional side/back view fails after one retry, reuse an existing suitable view. Characters with `visible: false` get no portraits.
-
-**Reference selection for frames**: candidates = portraits of visible characters (ONE view each, chosen by facing) + continuity frames. Pick a SMALL set of the most relevant ones — same camera/group first, most recent frames first, drop redundant near-duplicates, prefer the portrait when a character newly appears. How many images a call accepts is pi-image-gen's authority (its skill/tool description), not this document's.
-
-**Frame prompt assembly**: prefix each reference image with its role, then the frame description mapping elements to images:
-
-```
-Image 1: A front view portrait of Alice.
-Image 2: [alley] Wide shot of the rainy alley from shot s1.
-Create an image based on the following description: <firstFrame text>. The alley background should reference Image 2; Alice's appearance should reference Image 1.
-```
-
-## D. Assemble a batch render spec when using `video_render`
-
-Write `<outputDir>/<jobId>/render-input.json` (jobId: letters/digits/dash/underscore). This is a generated-shot example; for local `videoPath` shots and optional Timeline or Remotion assembly, read [the render script reference](references/video-render-workflow.md):
-
-```jsonc
-{
-  "title": "…", "aspectRatio": "16:9",
-  "style": "Cartoon, warm palette, soft shading",        // film-level look — from the shot book's style
-  "characters": [                                        // film-level registry — id + appearance/outfit merged
-    { "id": "alice", "description": "long blonde hair, blue eyes, slender; red scarf, black leather jacket" }
-  ],
-  "consistency": "Faces, hair and outfits stay identical across the shot, no morphing or drift.",
-  "negative": "no text, watermarks, or subtitles",
-  "shots": [{
-    "id": "s1",
-    "prompt": {                                          // from the shot book's fields, verbatim
-      "scene": "Rainy alley at night, neon signs, wet pavement",   // omit when the first frame says it all
-      "visuals": "Static camera, wide shot from across the street",
-      "action": "The woman in the red scarf walks in from the left, stops under the streetlamp",
-      "effects": "Rain picks up halfway through; neon reflections ripple in puddles",
-      "audio": "[Sound Effect] rain, distant traffic. [Speaker] Alice (soft): \"We're here.\"",
-      "visibleCharacters": ["alice"]
-    },
-    "firstFramePath": "<project>/path/from/assets.json.png", // optional for asset-only shots
-    "lastFramePath": "<project>/optional.png",
-    "referenceAssets": [
-      { "modality": "image", "assetId": "asset-avatar-from-current-account" },
-      { "modality": "audio", "assetId": "asset-voice-from-current-account" }
-    ],
-    "durationSec": 5
-  }]
-}
-```
-
-The plugin assembles each shot's labeled prompt (`[Style]` / `[Character]` / `[Scene]` / `[Visuals]` / `[Action]` / `[Effects]` / `[Audio]` + consistency and negative directives) — never pre-join a prompt string yourself. Validation fails before any paid call when: a generated shot has neither `firstFramePath` nor `referenceAssets`, `visuals`/`action` are empty, `visibleCharacters` references an id missing from `characters`, or a shot without `firstFramePath` lacks `style`/`scene`. Film-level `style`/`consistency`/`negative` apply to every shot — write them once; shot-level `scene` repeats per shot even when consecutive shots share a location (each shot is submitted independently).
-
-Every reference-frame path that is present must resolve to a regular png/jpg/webp file inside the session cwd. Absolute paths are accepted only when they remain inside that approved project directory; symlinks and outside paths are rejected. `referenceAssets` are provider-managed and are not local files. Keep their order stable: changing an asset, modality, or order changes the request and requires a new job directory and paid confirmation.
-
-Then call `video_render` with that path. Interrupted? Call it again with the same path — it resumes. If an ambiguous submit is reported, do not delete a shot or call render again blindly: run `/video-gen recover <jobId>`, check the provider console, then explicitly `reset` a confirmed-absent task or `adopt` its task id. Revisions? New job directory.
-
-## E. Completion
-
-Before reporting success, verify the requested clip/segment count and order, inspect the final video or available QC evidence, and report the returned absolute path and any accepted degradation. For Timeline, perform the QC-frame and subtitle checks in §A1. A successful tool call alone does not establish visual acceptance; state any verification limitation.
-
-For films using [film direction](references/film-direction.md), complete its delivery review and revision checks against the actual exported version. Report separately what was checked in stills, in motion and in audio.
+Before reporting success, verify the requested clip/segment count and order, review the actual exported version or available QC evidence, and return the absolute output path plus any editable project and accepted limitations. Complete the selected assembly guide's checks. For creative films, apply film direction's delivery review and revision rules and report separately what was checked in stills, motion and audio. A successful render or recorded QC is evidence, not visual or user acceptance.

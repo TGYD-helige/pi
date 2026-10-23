@@ -18,4 +18,16 @@ For batch `video_render`, the selected composition must expose `props.videoGenSh
 
 The final MP4 and assembly manifest live under `<jobDir>/assembly/` for `video_render`; direct `video_compose` writes them in its own job directory. Preserve the Remotion project as an editable deliverable. Inspect actual frames after rendering; a successful bundle and media probe do not establish visual correctness.
 
+## Review moments and sound
+
+`remotion-input.json` and `assembly.type: "remotion"` accept optional `qcTimesSec`, an array of at most 32 finite, non-negative times in seconds. Each must be strictly less than the selected composition duration; batch preflight checks this before model submission, and the export is checked again. For a handoff at 4 seconds, for example, use `"qcTimesSec": [3.8, 4, 4.2]`. See [motion authoring](motion-authoring.md) for how to select these times.
+
+New renders automatically extract beginning, middle and ending samples from the encoded MP4, plus the requested times, sorted and deduplicated. They return `qcFrames` and `qcReportPath`; the report records video-track duration, sample times and final video SHA-256. Batch `video_render` includes these frames alongside its shot samples; its QC report links the Remotion frame list and SHA-bound report under `remotion`. Frame/report hashes join the Remotion manifest and are verified on resume. Missing or changed evidence fails instead of silently regenerating it. Historical manifests without QC hashes resume with no recorded QC; create a new job to obtain evidence. `qcStatus: "recorded"` means evidence exists, not that the film passed visual, motion or audio review.
+
+Keep `videoGenShotTimesSec` for the existing batch shot-visibility contract. `qcTimesSec` supplements that contract with handoff and reading checks and does not replace it. The plugin does not inspect object identity or automatically assign a continuity score.
+
+For frame-derived animation, persistent carriers and shared picture/sound timing, follow [motion authoring](motion-authoring.md). Existing audio can be passed through `assets` and read with `staticFile(videoGenAssets[id])`; author gain changes and clip placement in the project. This does not add timed audio or dynamic ducking to FFmpeg Timeline.
+
+The [continuous motion film](../examples/continuous-demo/README.md) is an editable 26-second project: one persistent preview travels through material collection, a full-frame shot, an editing timeline, separated picture/text/audio planes, a review view and a closing play mark. Shared event times drive both motion landings and the locally synthesized score. Its UI illustrates the workflow rather than an editor supplied by the plugin.
+
 Remotion has its own [license terms and FAQ](https://www.remotion.dev/docs/license/faq). The project owner should check the applicable terms before using this path in commercial automation. The plugin does not bundle Remotion code.

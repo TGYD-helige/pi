@@ -1,0 +1,19 @@
+{
+  "name": "pi-video-gen-continuous-demo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prepare-audio": "node prepare-audio.mjs",
+    "studio": "remotion studio src/index.tsx"
+  },
+  "dependencies": {
+    "@remotion/bundler": "4.0.527",
+    "@remotion/renderer": "4.0.527",
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "remotion": "4.0.527"
+  },
+  "devDependencies": {
+    "@remotion/cli": "4.0.527"
+  }
+}

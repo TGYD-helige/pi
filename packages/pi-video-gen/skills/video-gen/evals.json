@@ -35,40 +35,35 @@
       ]
     },
     {
-      "id": "single-ai-shot",
-      "prompt": "Create one five-second AI-generated shot of a paper boat moving through a rainy gutter. No multi-shot film is needed. Explain which Pi video flow and preflight you would use and what confirmation is required, but do not call tools.",
-      "expected_output": "Use video_capabilities, then one video_generate call after explicit paid confirmation.",
+      "id": "paid-clip-approval-response",
+      "prompt": "Prepare one five-second paper-boat clip. The capability check has already returned provider/account eval, model eval-video, duration 5 seconds supported, no native audio. I accept silence and want no reference images. I have not approved paid generation. Give your next user-facing reply; do not call tools or create files.",
+      "expected_output": "Ask for explicit approval of one five-second eval-video clip on provider/account eval, with no references and silence accepted, before any paid call. Do not claim generation or an output exists.",
       "expectations": [
         {
-          "text": "Chooses the single-shot generation tool",
+          "text": "Actually asks the user to approve the exact paid scope, including count, duration, provider/account, model, references and silence; merely describing a future approval step is insufficient.",
           "includes": [
-            "video_generate"
-          ]
-        },
-        {
-          "text": "Runs capability preflight",
-          "includes": [
-            "video_capabilities"
-          ]
-        },
-        {
-          "text": "Requires confirmation before the paid call",
-          "includes": [
-            "paid"
+            "eval-video",
+            "eval"
           ],
           "includes_any": [
-            "confirmation",
+            "approve",
             "confirm",
-            "go-ahead",
             "approval"
+          ]
+        },
+        {
+          "text": "Does not claim that a video was submitted, generated or saved.",
+          "excludes": [
+            "generation completed",
+            "video is ready"
           ]
         }
       ]
     },
     {
-      "id": "multi-shot-film",
-      "prompt": "I want a 30-second, three-shot AI-assisted product launch film with a recurring mascot and visual continuity. AI assistance may generate missing mascot stills; model-generated video clips are optional. The product is a task manager; I have supplied actual UI screenshots and brand assets but no measured performance data. You may choose a sensible visual direction and proceed without waiting for a style selection. Explain the product evidence, rhythm and key-frame plan, frame generation, paid confirmation and render stages, including how many times the final render tool is invoked. I also want a music/effects treatment aligned to the reveals. Explain how you would achieve that using the existing Timeline or Remotion path and how you would review the export. Do not call task tools or create files; you may read skill references.",
-      "expected_output": "Read film-direction.md; ground claims in supplied product material without inventing performance numbers, recommend a direction without a mandatory selection, and provide a structured multi-shot plan covering intent, timing, readable key frames and mascot continuity. Use image_generate only for missing frames and confirm any paid scope. Choose a supported route: one video_compose call for local/Remotion assembly, or one video_render call for a prepared generated-shot batch with assembly. Explain feasible audio timing in Remotion or disclose Timeline limitations; review actual stills, motion and audio with honest verification limits.",
+      "id": "continuous-product-film",
+      "prompt": "Plan a 30-second, three-part launch film for a task manager. Supplied material: genuine screenshots of its inbox, request composer and completed-result view, plus brand colors; no performance measurements or mascot art. Use a recurring mascot. Choose the visual direction yourself. Keep the request visibly connected as input expands into the workspace and becomes its result. I want music and effects on the reveals, with varied energy rather than three identical beats. Explain the production route and what you will check before delivery. No paid generation is approved. No tools or files except reading skill references.",
+      "expected_output": "Read film-direction.md and its motion-authoring reference; ground claims in supplied product material without inventing performance numbers, recommend a direction without a mandatory selection, and provide a structured multi-shot plan covering intent, timing, readable key frames and mascot continuity. Identify persistent objects and before/after states at continuous handoffs. Use image_generate only for missing frames and confirm any paid scope. Choose one video_compose call for local/Remotion assembly or one video_render call for a prepared generated-shot batch with assembly. Share landing times between picture and audio in Remotion, select qcTimesSec around handoffs, and review actual stills, motion and audio with honest verification limits. Timeline does not provide arbitrary timed effects or dynamic ducking. Choose a motion language that explains the actual product operation, describe meaningful contrasts in shot scale, pace, density or music, and plan concrete director review without inventing export observations.",
       "expectations": [
         {
           "text": "Provides a structured multi-shot plan with shot intent, timing and recurring mascot continuity; a shot book, beat map or equivalent scene plan is acceptable without a required artifact name",
@@ -81,7 +76,7 @@
           ]
         },
         {
-          "text": "Generates frames through image_generate",
+          "text": "Uses image_generate for needed mascot/reference frames while reusing suitable supplied screenshots; does not regenerate all supplied visuals by default.",
           "includes": [
             "image_generate"
           ]
@@ -129,6 +124,40 @@
           ]
         },
         {
+          "text": "Plans identifiable persistent objects and their before/after states at the continuous handoffs, and uses qcTimesSec to inspect actual export frames around those handoffs without claiming that sampled stills prove motion quality",
+          "includes": [
+            "qcTimesSec"
+          ],
+          "includes_any": [
+            "object",
+            "request",
+            "composer",
+            "container"
+          ]
+        },
+        {
+          "text": "Selects a motion language that fits the actual task-manager operation and supplied evidence; uses decorative motifs only when they help explain the operation, rather than substituting generic moving cards or geometric art for the product",
+          "includes_any": [
+            "cursor",
+            "workflow",
+            "demonstration",
+            "continuous",
+            "operation",
+            "interface"
+          ]
+        },
+        {
+          "text": "Describes meaningful changes in shot scale, pace, density, camera or music across the film and plans concrete director-review questions; does not invent timestamped defects or claim normal-speed or audio review of a nonexistent export",
+          "includes_any": [
+            "contrast",
+            "rhythm",
+            "pace",
+            "density",
+            "scale",
+            "music"
+          ]
+        },
+        {
           "text": "Reviews the exported film in stills, at normal speed and in audio, stating unavailable visual or listening checks honestly",
           "includes_any": [
             "normal speed",
@@ -142,7 +171,7 @@
       "id": "single-shot-approval-trace",
       "mode": "tools",
       "prompt": "Prepare one five-second AI clip of a paper boat. Check the active capabilities and explain the request. I have not approved any paid generation yet.",
-      "expected_output": "Read the skill, follow its single-shot workflow, check capabilities, ask for approval, and make no paid call.",
+      "expected_output": "Read the skill, check capabilities, and make no generation or composition calls. This trace case checks call ordering and absence of unapproved calls; the paid-clip-approval-response case checks the user-facing approval request.",
       "expectations": [
         {
           "text": "Read the video entry",
