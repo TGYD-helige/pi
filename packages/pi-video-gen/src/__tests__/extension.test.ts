@@ -129,9 +129,31 @@ describe('pi-video-gen extension', () => {
     expect(compose).toContain('Local composition skips video_capabilities');
     expect(compose).toContain('optional narration sends text to Microsoft Edge TTS');
     expect(compose).not.toContain('all local');
+    expect(compose).toContain('qcTimesSec');
     expect(tools.get('video_generate')!.promptGuidelines!.join('\n')).toContain(
       'read the video-gen skill',
     );
+  });
+
+  it('returns a typed error for invalid Remotion review times through video_compose', async () => {
+    const job = join(cwd, '.video-gen', 'invalid-review');
+    mkdirSync(job, { recursive: true });
+    const specPath = join(job, 'remotion-input.json');
+    writeFileSync(
+      specPath,
+      JSON.stringify({ projectDir: cwd, compositionId: 'Promo', qcTimesSec: [-1] }),
+    );
+    const tool = tools.get('video_compose')!;
+    const result = await tool.execute(
+      'review',
+      { composeSpecPath: specPath },
+      undefined,
+      undefined,
+      fakeCtx(cwd, true),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent?.error).toContain('qcTimesSec');
+    expect(Value.Check(tool.outputSchema as never, result.structuredContent)).toBe(true);
   });
 
   it('exposes lastFrame in the schema for Seedance 2.0 (supportsFirstLastFrame)', () => {
@@ -165,10 +187,12 @@ describe('pi-video-gen extension', () => {
     expect(Object.keys(params)).toEqual(['composeSpecPath']);
   });
 
-  it('guides timeline compose to reuse existing media before generating missing sources', () => {
+  it('guides timeline compose to reuse suitable media and honor requested replacements', () => {
     const guidance = tools.get('video_compose')!.promptGuidelines?.join('\n') ?? '';
-    expect(guidance).toMatch(/reuse existing images\/screenshots\/clips first/i);
-    expect(guidance).toMatch(/generate only missing visuals/i);
+    expect(guidance).toMatch(/reuse suitable existing images\/screenshots\/clips first/i);
+    expect(guidance).toMatch(
+      /image_generate for missing visuals or explicitly requested replacements/i,
+    );
     expect(guidance).toMatch(/exactly one image or video/i);
     expect(guidance).toMatch(/subtitles\.mode "burn"/i);
     expect(guidance).not.toMatch(/generate images first/i);

@@ -108,6 +108,7 @@ export type RenderInput = FilmPrompt & {
         inputProps?: Record<string, unknown>;
         assets?: Record<string, string>;
         browserExecutable?: string;
+        qcTimesSec?: number[];
       }
     | { type: 'timeline'; timeline: TimelineSpec };
 };
@@ -524,6 +525,7 @@ export async function runRender(opts: {
     }
     const fingerprint = specFingerprint(specRaw, generated.length ? resolved : undefined);
     let manifest = loadRenderJob(jobDir);
+    let remotionQc: Pick<RenderRunResult, 'qcFrames' | 'qcReportPath'> | undefined;
 
     if (manifest) {
       // 3a. resume: verify the whole input fingerprint before trusting anything
@@ -727,7 +729,7 @@ export async function runRender(opts: {
               spec.shots.map((shot) => [shot.id, join(realShotsDir, shot.id, 'video.mp4')]),
             ),
           };
-          await runRemotion({
+          const child = await runRemotion({
             specPath: join(jobDir, 'assembly', 'remotion-input.json'),
             cwd,
             settings,
@@ -737,7 +739,9 @@ export async function runRender(opts: {
             assets,
             ffmpegPath: opts.ffmpegPath,
             verifyOnly: true,
+            signal: opts.signal,
           });
+          remotionQc = { qcFrames: child.qcFrames, qcReportPath: child.qcReportPath };
         }
         if (spec.assembly) {
           if (spec.assembly.type === 'timeline')
@@ -774,9 +778,12 @@ export async function runRender(opts: {
           finalVideoPath: manifest.finalVideoPath!,
           shotsDone: spec.shots.length,
           degraded,
-          qcFrames: Object.keys(manifest.qcHashes ?? {})
-            .filter((name) => name.endsWith('.png'))
-            .map((name) => join(jobDir, name)),
+          qcFrames: [
+            ...Object.keys(manifest.qcHashes ?? {})
+              .filter((name) => name.endsWith('.png'))
+              .map((name) => join(jobDir, name)),
+            ...(remotionQc?.qcFrames ?? []),
+          ],
           qcReportPath: manifest.qcHashes?.[join('qc', 'report.json')]
             ? join(jobDir, 'qc', 'report.json')
             : undefined,
@@ -1257,6 +1264,7 @@ export async function runRender(opts: {
         });
         finalVideoPath = child.finalVideoPath;
         remotionShotTimes = child.shotTimesSec;
+        remotionQc = { qcFrames: child.qcFrames, qcReportPath: child.qcReportPath };
       } else if (spec.assembly?.type === 'timeline') {
         const assemblyDir = join(jobDir, 'assembly');
         await mkdir(assemblyDir, { recursive: true });
@@ -1388,6 +1396,7 @@ export async function runRender(opts: {
       const reportPath = join(qcDir, 'report.json');
       writeJsonAtomic(reportPath, {
         shots: shotMedia,
+        ...(remotionQc ? { remotion: remotionQc } : {}),
         final: {
           durationSec: finalDurationSec,
           videoCodec: finalStreams.videoCodec,
@@ -1407,9 +1416,12 @@ export async function runRender(opts: {
       finalVideoPath,
       shotsDone: spec.shots.length,
       degraded,
-      qcFrames: Object.keys(manifest.qcHashes ?? {})
-        .filter((name) => name.endsWith('.png'))
-        .map((name) => join(jobDir, name)),
+      qcFrames: [
+        ...Object.keys(manifest.qcHashes ?? {})
+          .filter((name) => name.endsWith('.png'))
+          .map((name) => join(jobDir, name)),
+        ...(remotionQc?.qcFrames ?? []),
+      ],
       qcReportPath: manifest.qcHashes?.[join('qc', 'report.json')]
         ? join(jobDir, 'qc', 'report.json')
         : undefined,

@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resolveModel } from '../config.js';
 import { httpStatusError } from '../errors.js';
-import { resolveFfmpeg } from '../ffmpeg.js';
+import { resolveFfmpeg, runFfmpegCommand } from '../ffmpeg.js';
 import { ActiveJobs, loadRenderJob, loadTimelineJob, saveRenderJob } from '../jobs/store.js';
 import { BUILT_IN_VIDEO_MODELS } from '../providers/models.js';
 import { requestFingerprint } from '../providers/request.js';
@@ -454,6 +454,84 @@ describe('runRender', () => {
     expect(report.final.samples.map((sample: { timeSec: number }) => sample.timeSec)).toEqual([
       0.5, 3,
     ]);
+  });
+
+  it('returns requested Remotion review moments in fresh and resumed batches', async () => {
+    const project = join(cwd, 'review-project');
+    for (const dir of [join(project, 'src'), join(project, 'public')])
+      mkdirSync(dir, { recursive: true });
+    writeFileSync(join(project, 'package.json'), '{}');
+    writeFileSync(join(project, 'src', 'index.ts'), 'root');
+    for (const name of [
+      'remotion',
+      '@remotion/bundler',
+      '@remotion/renderer',
+      'react',
+      'react-dom',
+    ]) {
+      const dir = join(project, 'node_modules', name);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'package.json'), '{"version":"1.0.0"}');
+    }
+    const source = join(project, 'public', 'source.mp4');
+    const ffmpegPath = resolveFfmpeg().path;
+    await runFfmpegCommand(ffmpegPath, [
+      '-f',
+      'lavfi',
+      '-i',
+      'color=c=blue:s=160x90:r=10',
+      '-t',
+      '2',
+      '-c:v',
+      'mpeg4',
+      '-y',
+      source,
+    ]);
+    writeFileSync(
+      join(project, 'node_modules', '@remotion', 'bundler', 'index.js'),
+      'exports.bundle = async ({publicDir}) => publicDir;',
+    );
+    writeFileSync(
+      join(project, 'node_modules', '@remotion', 'renderer', 'index.js'),
+      `
+      const fs = require('node:fs'); const path = require('node:path');
+      exports.selectComposition = async () => ({fps: 10, durationInFrames: 20, props: {videoGenShotTimesSec: {opening: 0.5}}});
+      exports.renderStill = async ({output}) => fs.writeFileSync(output, 'frame');
+      exports.renderMedia = async ({serveUrl, outputLocation}) => fs.copyFileSync(path.join(serveUrl, 'source.mp4'), outputLocation);
+    `,
+    );
+    const jobDir = makeJob(cwd, {
+      shots: [{ id: 'opening', videoPath: source }],
+      assembly: {
+        type: 'remotion',
+        projectDir: project,
+        compositionId: 'Promo',
+        qcTimesSec: [0.9, 1.1],
+      },
+    });
+    const opts = {
+      ...baseOpts(cwd, mockAdapter(calls), concatCalls),
+      renderSpecPath: join(jobDir, 'render-input.json'),
+      trusted: true,
+      resolved: undefined,
+      adapter: undefined,
+      ffmpegPath,
+      verifyMedia: true,
+    };
+    const first = await runRender(opts);
+    const report = JSON.parse(readFileSync(first.qcReportPath!, 'utf8'));
+    const review = JSON.parse(readFileSync(report.remotion.qcReportPath, 'utf8'));
+    expect(review.samples.map((sample: { timeSec: number }) => sample.timeSec)).toEqual([
+      0.5, 0.9, 1, 1.1, 1.5,
+    ]);
+    expect(first.qcFrames).toEqual(expect.arrayContaining(report.remotion.qcFrames));
+    expect(report.remotion.qcFrames).toHaveLength(5);
+    const resumed = await runRender(opts);
+    expect(resumed.qcFrames).toEqual(first.qcFrames);
+    expect(resumed.qcReportPath).toBe(first.qcReportPath);
+    writeFileSync(report.remotion.qcFrames[0], 'tampered');
+    await expect(runRender(opts)).rejects.toThrow(/QC/);
+    expect(calls.submit).toBe(0);
   });
 
   it('checks Remotion before submitting any paid shot', async () => {

@@ -18,8 +18,8 @@ import { promisify } from 'node:util';
 import { resolveOutputDir } from './config.js';
 import { VideoGenError } from './errors.js';
 import {
-  probeDuration,
   probeStreams,
+  probeVideoDuration,
   resolveFfprobe,
   resolveGplFfmpeg,
   runFfmpegCommand,
@@ -40,6 +40,7 @@ export type RemotionSpec = {
   assets?: Record<string, string>;
   inputProps?: Record<string, unknown>;
   browserExecutable?: string;
+  qcTimesSec?: number[];
 };
 
 type RemotionManifest = {
@@ -48,6 +49,7 @@ type RemotionManifest = {
   finalVideoPath: string;
   finalVideoHash: string;
   shotTimesSec?: Record<string, number> | undefined;
+  qcHashes?: Record<string, string> | undefined;
 };
 class RemotionCleanupError extends VideoGenError {}
 const namespace = '__pi_video_gen__';
@@ -117,6 +119,18 @@ export function parseRemotionSpec(raw: string): RemotionSpec {
         'remotion: asset path',
       );
   }
+  if (
+    spec.qcTimesSec !== undefined &&
+    (!Array.isArray(spec.qcTimesSec) ||
+      spec.qcTimesSec.length > 32 ||
+      spec.qcTimesSec.some(
+        (time) => typeof time !== 'number' || !Number.isFinite(time) || time < 0,
+      ))
+  )
+    throw new VideoGenError(
+      'qcTimesSec must contain at most 32 finite, non-negative timestamps in seconds.',
+      'remotion: qc times',
+    );
   if (
     spec.inputProps !== undefined &&
     (!spec.inputProps ||
@@ -325,6 +339,9 @@ let stage = 19;
   const serveUrl = await bundle({entryPoint: x.entryPoint, rootDir: x.projectDir, publicDir: x.publicDir});
   stage = 21;
   const composition = await selectComposition({serveUrl, id: x.compositionId, inputProps: x.inputProps, browserExecutable: x.browserExecutable});
+  stage = 24;
+  if (x.qcTimesSec && x.qcTimesSec.some((t) => t >= composition.durationInFrames / composition.fps)) throw new Error('qcTimesSec outside composition');
+  stage = 21;
   if (x.shotIds) {
     const times = composition.props.videoGenShotTimesSec;
     if (!times || typeof times !== 'object' || Array.isArray(times) || x.shotIds.some((id) => !Number.isFinite(times[id]) || times[id] < 0 || times[id] >= composition.durationInFrames / composition.fps)) {
@@ -447,6 +464,7 @@ function runRunner(input: Record<string, unknown>, signal?: AbortSignal): Promis
               21: 'Remotion composition could not be selected; check its ID, videoGenShotTimesSec metadata and browser.',
               22: 'Remotion frame preflight failed; check browser access and static assets.',
               23: 'Remotion video rendering failed; check media compatibility and project code.',
+              24: 'Remotion qcTimesSec must be within the composition duration.',
             } as Record<number, string>
           )[code ?? -1] ?? 'Remotion process failed.';
         throw new VideoGenError(reason, `remotion: process stage ${code}`);
@@ -521,6 +539,7 @@ export async function preflightRemotion(opts: {
         publicDir: join(dir, 'public'),
         compositionId: opts.spec.compositionId,
         shotIds: opts.shotIds,
+        qcTimesSec: opts.spec.qcTimesSec,
         inputProps: { ...opts.spec.inputProps, videoGenAssets: mapped },
         output: join(dir, 'frame.png'),
         mode: 'preflight',
@@ -593,6 +612,8 @@ export async function runRemotion(opts: {
         projectHash,
         finalVideoPath: '',
         resumed: false,
+        qcFrames: [],
+        qcReportPath: undefined,
       };
     const hashes: Record<string, string> = {};
     for (const [id, path] of Object.entries(assets)) {
@@ -634,6 +655,61 @@ export async function runRemotion(opts: {
           'Remotion shot timing metadata is missing.',
           'remotion: shot timings',
         );
+      const qcPaths: string[] = [];
+      if (manifest.qcHashes !== undefined) {
+        if (
+          !manifest.qcHashes ||
+          typeof manifest.qcHashes !== 'object' ||
+          Array.isArray(manifest.qcHashes) ||
+          Object.keys(manifest.qcHashes).length > 36
+        )
+          throw new VideoGenError('Remotion QC manifest is invalid.', 'remotion: qc manifest');
+        for (const [rel, expected] of Object.entries(manifest.qcHashes)) {
+          if (!/^qc-[a-f0-9-]{36}[/\\](frame_\d{2}\.png|report\.json)$/.test(rel))
+            throw new VideoGenError('Remotion QC path is invalid.', 'remotion: qc path');
+          const path = join(jobDir, rel);
+          const entry = await lstat(path).catch(() => null);
+          if (
+            !entry?.isFile() ||
+            entry.isSymbolicLink() ||
+            !(await realpath(path)).startsWith(`${jobDir}${sep}`) ||
+            (await hashFileSha256(path, opts.signal)) !== expected
+          )
+            throw new VideoGenError(
+              'Remotion QC artifact is missing or changed.',
+              'remotion: qc drift',
+            );
+          qcPaths.push(path);
+        }
+        const reportPath = qcPaths.find((path) => path.endsWith('report.json'));
+        const report = reportPath
+          ? readJsonFile<{
+              finalVideoPath?: string;
+              finalVideoHash?: string;
+              samples?: { path?: string }[];
+            }>(reportPath)
+          : undefined;
+        if (
+          !reportPath ||
+          report?.finalVideoPath !== manifest.finalVideoPath ||
+          report?.finalVideoHash !== manifest.finalVideoHash ||
+          !Array.isArray(report.samples) ||
+          report.samples.length === 0 ||
+          report.samples.length !== qcPaths.length - 1 ||
+          report.samples.some(
+            (sample, index) =>
+              sample?.path !==
+                join(
+                  basename(dirname(reportPath)),
+                  `frame_${String(index).padStart(2, '0')}.png`,
+                ) || !Object.hasOwn(manifest.qcHashes!, sample.path),
+          )
+        )
+          throw new VideoGenError(
+            'Remotion QC evidence is incomplete or inconsistent.',
+            'remotion: qc completeness',
+          );
+      }
       return {
         jobId: basename(jobDir),
         projectDir: project.projectDir,
@@ -641,6 +717,8 @@ export async function runRemotion(opts: {
         finalVideoPath: manifest.finalVideoPath,
         resumed: true,
         shotTimesSec: manifest.shotTimesSec,
+        qcFrames: qcPaths.filter((path) => path.endsWith('.png')),
+        qcReportPath: qcPaths.find((path) => path.endsWith('report.json')),
       };
     }
     if (opts.verifyOnly)
@@ -651,9 +729,11 @@ export async function runRemotion(opts: {
     const publicDir = join(jobDir, `public-snapshot-${randomUUID()}`);
     const temp = join(jobDir, `final_video.${randomUUID()}.tmp.mp4`);
     const metadataPath = join(jobDir, `shot-times.${randomUUID()}.json`);
+    const qcDir = join(jobDir, `qc-${randomUUID()}`);
     let ownsSnapshot = false;
     let retainSnapshot = false;
     let cleanupSafe = true;
+    let ownsQc = false;
     try {
       const mapped = await snapshotPublic(project.projectDir, publicDir, assets, undefined);
       ownsSnapshot = true;
@@ -669,6 +749,7 @@ export async function runRemotion(opts: {
           publicDir,
           compositionId: spec.compositionId,
           shotIds: opts.shotIds,
+          qcTimesSec: spec.qcTimesSec,
           metadataPath,
           inputProps: { ...spec.inputProps, videoGenAssets: mapped },
           output: temp,
@@ -682,6 +763,11 @@ export async function runRemotion(opts: {
       const shotTimesSec = opts.shotIds
         ? (JSON.parse(await readFile(metadataPath, 'utf8')) as Record<string, number>)
         : undefined;
+      const finalVideoPath = join(jobDir, 'final_video.mp4');
+      const finalVideoHash = await hashFileSha256(temp, opts.signal);
+      const qcHashes: Record<string, string> = {};
+      const qcFrames: string[] = [];
+      let qcReportPath: string | undefined;
       if (opts.verifyMedia !== false) {
         const ffprobe = resolveFfprobe(opts.ffmpegPath);
         if (!ffprobe.runnable)
@@ -689,22 +775,68 @@ export async function runRemotion(opts: {
             'ffprobe is required to verify Remotion output.',
             'remotion: ffprobe missing',
           );
-        await probeStreams(ffprobe.path, temp, opts.signal);
-        await probeDuration(ffprobe.path, temp, opts.signal);
+        const streams = await probeStreams(ffprobe.path, temp, opts.signal);
+        const [numerator, denominator = 1] = streams.fps.split('/').map(Number);
+        const fps = numerator! / denominator;
+        if (!Number.isFinite(fps) || fps <= 0)
+          throw new VideoGenError(
+            'Remotion QC needs a valid video frame rate.',
+            'remotion: qc fps',
+          );
+        const durationSec = await probeVideoDuration(ffprobe.path, temp, opts.signal);
+        if (spec.qcTimesSec?.some((time) => time >= durationSec))
+          throw new VideoGenError(
+            'qcTimesSec exceeds the exported video duration.',
+            'remotion: qc duration',
+          );
+        const lastFrame = Math.max(0, Math.round(durationSec * fps) - 1);
+        const edge = Math.min(0.5, durationSec / 4);
+        const times = [
+          ...new Set([edge, durationSec / 2, durationSec - edge, ...(spec.qcTimesSec ?? [])]),
+        ].sort((a, b) => a - b);
+        await mkdir(qcDir);
+        ownsQc = true;
+        const samples: { timeSec: number; frameTimeSec: number; path: string }[] = [];
+        for (const [index, timeSec] of times.entries()) {
+          const name = `frame_${String(index).padStart(2, '0')}.png`;
+          const path = join(qcDir, name);
+          const framePosition = timeSec * fps;
+          // Preserve exact decimal frame boundaries despite floating-point roundoff.
+          const frameTimeSec =
+            Math.min(
+              lastFrame,
+              Math.floor(framePosition + 4 * Number.EPSILON * Math.max(1, framePosition)),
+            ) / fps;
+          await runFfmpegCommand(
+            opts.ffmpegPath,
+            ['-ss', frameTimeSec.toFixed(6), '-i', temp, '-frames:v', '1', '-y', path],
+            opts.signal,
+          );
+          const rel = join(basename(qcDir), name);
+          qcHashes[rel] = await hashFileSha256(path, opts.signal);
+          qcFrames.push(path);
+          samples.push({ timeSec, frameTimeSec, path: rel });
+        }
+        qcReportPath = join(qcDir, 'report.json');
+        writeJsonAtomic(qcReportPath, { finalVideoPath, finalVideoHash, durationSec, samples });
+        qcHashes[join(basename(qcDir), 'report.json')] = await hashFileSha256(
+          qcReportPath,
+          opts.signal,
+        );
       }
       if ((await projectFingerprint(project.projectDir, output)) !== projectHash)
         throw new VideoGenError(
           'Remotion project changed during rendering; refusing to commit output.',
           'remotion: project render race',
         );
-      const finalVideoPath = join(jobDir, 'final_video.mp4');
       await rename(temp, finalVideoPath);
       writeJsonAtomic(manifestPath, {
         kind: 'remotion',
         fingerprint,
         finalVideoPath,
-        finalVideoHash: await hashFileSha256(finalVideoPath),
+        finalVideoHash,
         shotTimesSec,
+        ...(ownsQc ? { qcHashes } : {}),
       } satisfies RemotionManifest);
       retainSnapshot = true;
       return {
@@ -714,6 +846,8 @@ export async function runRemotion(opts: {
         finalVideoPath,
         resumed: false,
         shotTimesSec,
+        qcFrames,
+        qcReportPath,
       };
     } catch (error) {
       if (error instanceof RemotionCleanupError) cleanupSafe = false;
@@ -723,6 +857,7 @@ export async function runRemotion(opts: {
         await rm(temp, { force: true });
         await rm(metadataPath, { force: true });
         if (ownsSnapshot && !retainSnapshot) await rm(publicDir, { recursive: true, force: true });
+        if (ownsQc && !retainSnapshot) await rm(qcDir, { recursive: true, force: true });
       }
     }
   } catch (error) {
