@@ -769,7 +769,7 @@ export async function runRemotion(opts: {
       const qcFrames: string[] = [];
       let qcReportPath: string | undefined;
       if (opts.verifyMedia !== false) {
-        const ffprobe = resolveFfprobe(opts.ffmpegPath);
+        const ffprobe = resolveFfprobe(opts.settings.ffmpegPath);
         if (!ffprobe.runnable)
           throw new VideoGenError(
             'ffprobe is required to verify Remotion output.',

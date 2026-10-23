@@ -39,7 +39,8 @@ describe('runRemotion', () => {
     const fps = audioTail ? 10 : 25;
     const project = join(root, 'review-project');
     const job = join(root, '.video-gen', 'review-job');
-    const ffmpegPath = resolveFfmpeg().path;
+    // This bundle has no sibling ffprobe, so automatic probe discovery must retain its fallback.
+    const ffmpegPath = createRequire(import.meta.url)('ffmpeg-static') as string;
     for (const dir of [join(project, 'src'), join(project, 'public'), job])
       mkdirSync(dir, { recursive: true });
     writeFileSync(join(project, 'package.json'), '{}');
@@ -55,7 +56,7 @@ describe('runRemotion', () => {
       mkdirSync(dir, { recursive: true });
       writeFileSync(join(dir, 'package.json'), '{"version":"1.0.0"}');
     }
-    await runFfmpegCommand(createRequire(import.meta.url)('ffmpeg-static') as string, [
+    await runFfmpegCommand(ffmpegPath, [
       '-f',
       'lavfi',
       '-i',

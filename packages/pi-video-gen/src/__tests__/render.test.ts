@@ -8,6 +8,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -474,7 +475,7 @@ describe('runRender', () => {
       writeFileSync(join(dir, 'package.json'), '{"version":"1.0.0"}');
     }
     const source = join(project, 'public', 'source.mp4');
-    const ffmpegPath = resolveFfmpeg().path;
+    const ffmpegPath = createRequire(import.meta.url)('ffmpeg-static') as string;
     await runFfmpegCommand(ffmpegPath, [
       '-f',
       'lavfi',
