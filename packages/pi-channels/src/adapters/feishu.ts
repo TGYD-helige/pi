@@ -2,7 +2,7 @@ import { createWriteStream } from 'node:fs';
 import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import * as lark from '@larksuiteoapi/node-sdk';
@@ -62,11 +62,6 @@ type ParsedTextContent = {
 type ParsedMessageContent = {
   text?: unknown;
   image_key?: unknown;
-};
-
-type FeishuImageResource = {
-  type: 'image';
-  fileKey: string;
 };
 
 const MAX_FEISHU_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -171,28 +166,6 @@ async function downloadFeishuImage(
     };
   } catch (error) {
     await rm(directory, { recursive: true, force: true });
-    throw error;
-  }
-}
-
-async function downloadFeishuImageResources(
-  client: lark.Client,
-  messageId: string,
-  resources: FeishuImageResource[] | undefined,
-): Promise<IncomingAttachment[]> {
-  if (!resources?.length) return [];
-  const downloaded: IncomingAttachment[] = [];
-  try {
-    for (const resource of resources) {
-      downloaded.push(await downloadFeishuImage(client, messageId, resource.fileKey));
-    }
-    return downloaded;
-  } catch (error) {
-    await Promise.all(
-      downloaded.map((attachment) =>
-        rm(dirname(attachment.path), { recursive: true, force: true }).catch(() => undefined),
-      ),
-    );
     throw error;
   }
 }
@@ -522,6 +495,30 @@ export function createFeishuAdapter(
     }
   }
 
+  async function downloadIncomingImages(
+    messageId: string,
+    text: string,
+    resources: lark.ResourceDescriptor[],
+  ): Promise<{ text: string; attachments: IncomingAttachment[] }> {
+    const attachments: IncomingAttachment[] = [];
+    let failed = false;
+    for (const resource of resources) {
+      if (resource.type !== 'image' || !resource.fileKey) continue;
+      try {
+        attachments.push(await downloadFeishuImage(client, messageId, resource.fileKey));
+      } catch {
+        failed = true;
+        context.log?.('feishu-image-download-failed', { messageId }, 'ERROR');
+      }
+    }
+    return {
+      text: failed
+        ? `${text}\n[Some images could not be downloaded. Ask the sender to resend them.]`.trim()
+        : text,
+      attachments,
+    };
+  }
+
   async function handleNormalizedMessage(
     msg: lark.NormalizedMessage,
     onMessage: OnIncomingMessage,
@@ -545,32 +542,20 @@ export function createFeishuAdapter(
       msg.rawContentType !== 'post' &&
       msg.rawContentType !== 'image'
     ) {
+      context.log?.('feishu-message-type-unsupported', { messageId: msg.messageId }, 'ERROR');
       return;
     }
-    let attachments: IncomingAttachment[];
-    try {
-      attachments = await downloadFeishuImageResources(
-        client,
-        msg.messageId,
-        msg.rawContentType === 'image'
-          ? msg.resources.filter(
-              (resource): resource is FeishuImageResource =>
-                resource.type === 'image' && Boolean(resource.fileKey),
-            )
-          : [],
-      );
-    } catch (error) {
-      context.log?.(
-        'feishu-image-download-failed',
-        {
-          messageId: msg.messageId,
-          error: error instanceof Error ? error.message : String(error),
-        },
-        'WARN',
-      );
-      return;
-    }
-    const text = normalizeFeishuIncomingText(msg.content, msg.mentions, cfg, msg.mentionedBot);
+    const incomingText = normalizeFeishuIncomingText(
+      msg.content,
+      msg.mentions,
+      cfg,
+      msg.mentionedBot,
+    );
+    const { text, attachments } = await downloadIncomingImages(
+      msg.messageId,
+      incomingText,
+      msg.resources,
+    );
     if (!text && attachments.length === 0) return;
     void addAckReaction(msg.messageId);
     const chatName = await resolveChatName(msg.chatId);
@@ -600,7 +585,6 @@ export function createFeishuAdapter(
     data: RawFeishuMessageEvent,
     onMessage: OnIncomingMessage,
   ): Promise<void> {
-    if (data.message.message_type !== 'text' && data.message.message_type !== 'image') return;
     const parsed = parseTextContent(data.message.content);
     const imageKey =
       data.message.message_type === 'image' ? imageKeyFromContent(data.message.content) : undefined;
@@ -632,26 +616,37 @@ export function createFeishuAdapter(
       return;
     }
 
-    const rawText = imageKey ? `![image](${imageKey})` : parsed.text;
-    let attachments: IncomingAttachment[] = [];
-    if (imageKey) {
-      try {
-        attachments = await downloadFeishuImageResources(client, data.message.message_id, [
-          { type: 'image', fileKey: imageKey },
-        ]);
-      } catch (error) {
-        context.log?.(
-          'feishu-image-download-failed',
-          {
-            messageId: data.message.message_id,
-            error: error instanceof Error ? error.message : String(error),
-          },
-          'WARN',
-        );
-        return;
-      }
+    if (
+      data.message.message_type !== 'text' &&
+      data.message.message_type !== 'image' &&
+      data.message.message_type !== 'post'
+    ) {
+      context.log?.(
+        'feishu-message-type-unsupported',
+        { messageId: data.message.message_id },
+        'ERROR',
+      );
+      return;
     }
-    const text = normalizeFeishuIncomingText(rawText, data.message.mentions, cfg, mentionedBot);
+    const post =
+      data.message.message_type === 'post'
+        ? await lark.normalize(
+            {
+              sender: { ...data.sender, sender_id: data.sender.sender_id ?? {} },
+              message: {
+                ...data.message,
+                chat_type: data.message.chat_type === 'group' ? 'group' : 'p2p',
+              },
+            },
+            { botIdentity: { openId: cfg.botOpenId ?? '', name: '' } },
+          )
+        : undefined;
+    const rawText = post?.content ?? (imageKey ? `![image](${imageKey})` : parsed.text);
+    const { text, attachments } = await downloadIncomingImages(
+      data.message.message_id,
+      normalizeFeishuIncomingText(rawText, data.message.mentions, cfg, mentionedBot),
+      post?.resources ?? (imageKey ? [{ type: 'image', fileKey: imageKey }] : []),
+    );
     if (!text && attachments.length === 0) return;
 
     void addAckReaction(data.message.message_id);
