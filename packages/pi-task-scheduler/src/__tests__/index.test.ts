@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   matchesScheduledTaskScope,
   PersistentTaskScheduler,
@@ -245,6 +245,106 @@ describe('task scheduler', () => {
     });
     await scheduler.stop();
   });
+
+  // Node's timer limit: a longer delay fires after 1 ms.
+  const maxTimerDelayMs = 2_147_483_647;
+  const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+
+  it.each([
+    ['just under the timer limit', maxTimerDelayMs - 1],
+    ['at the timer limit', maxTimerDelayMs],
+    ['just over the timer limit', maxTimerDelayMs + 1],
+    ['thirty days away', thirtyDaysMs],
+  ])('runs a once task %s at its advertised time, not before', async (_label, delayMs) => {
+    await withFakeClock(async (now) => {
+      const runs: number[] = [];
+      const scheduler = await startedScheduler(runs, {
+        type: 'once',
+        schedule: new Date(now + delayMs).toISOString(),
+        intervalSeconds: 0,
+      });
+      const [task] = await scheduler.list();
+      expect(task?.nextRunAt).toBe(new Date(now + delayMs).toISOString());
+
+      await vi.advanceTimersByTimeAsync(delayMs - 1);
+      expect(runs).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(runs).toEqual([now + delayMs]);
+      await scheduler.stop();
+    });
+  });
+
+  it.each([
+    ['just under the timer limit', Math.floor(maxTimerDelayMs / 1000)],
+    ['just over the timer limit', Math.ceil(maxTimerDelayMs / 1000)],
+    ['of thirty days', thirtyDaysMs / 1000],
+  ])('runs an interval task %s at each advertised time, not before', async (_label, seconds) => {
+    await withFakeClock(async (now) => {
+      const intervalMs = seconds * 1000;
+      const runs: number[] = [];
+      const scheduler = await startedScheduler(runs, {
+        type: 'interval',
+        schedule: `${seconds}s`,
+        intervalSeconds: seconds,
+      });
+      const [task] = await scheduler.list();
+      expect(task?.nextRunAt).toBe(new Date(now + intervalMs).toISOString());
+
+      await vi.advanceTimersByTimeAsync(intervalMs - 1);
+      expect(runs).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(runs).toEqual([now + intervalMs]);
+      expect((await scheduler.list())[0]?.nextRunAt).toBe(
+        new Date(now + 2 * intervalMs).toISOString(),
+      );
+      await vi.advanceTimersByTimeAsync(intervalMs - 1);
+      expect(runs).toEqual([now + intervalMs]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(runs).toEqual([now + intervalMs, now + 2 * intervalMs]);
+      await scheduler.stop();
+    });
+  });
+
+  it('does not replay missed intervals after a forward clock adjustment', async () => {
+    await withFakeClock(async (now) => {
+      const runs: number[] = [];
+      const scheduler = await startedScheduler(runs, {
+        type: 'interval',
+        schedule: '30d',
+        intervalSeconds: thirtyDaysMs / 1000,
+      });
+      try {
+        vi.setSystemTime(now + 3 * thirtyDaysMs);
+        await vi.advanceTimersByTimeAsync(maxTimerDelayMs + 10);
+        expect(runs).toHaveLength(1);
+        const nextRunAt = Date.parse((await scheduler.list())[0]?.nextRunAt ?? '');
+        await vi.advanceTimersByTimeAsync(nextRunAt - Date.now() - 1);
+        expect(runs).toHaveLength(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(runs).toHaveLength(2);
+        expect(runs[1]! - runs[0]!).toBe(thirtyDaysMs);
+      } finally {
+        await scheduler.stop();
+      }
+    });
+  });
+
+  it('leaves a cron task a year away to croner, which waits in short steps', async () => {
+    await withFakeClock(async (now) => {
+      const runs: number[] = [];
+      const scheduler = await startedScheduler(runs, {
+        type: 'cron',
+        schedule: '0 0 1 1 *',
+        intervalSeconds: 0,
+      });
+      const nextRunAt = Date.parse((await scheduler.list())[0]?.nextRunAt ?? '');
+      expect(nextRunAt - now).toBeGreaterThan(maxTimerDelayMs);
+
+      await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+      expect(runs).toEqual([]);
+      await scheduler.stop();
+    });
+  });
 });
 
 class MemoryScheduledTaskStore implements ScheduledTaskStore {
@@ -307,6 +407,39 @@ class MemorySchedulerLock implements SchedulerLock {
   holderPid(): number | undefined {
     return this.locked ? process.pid : undefined;
   }
+}
+
+async function withFakeClock(test: (now: number) => Promise<void>): Promise<void> {
+  const now = Date.parse('2026-01-02T00:00:00.000Z');
+  vi.useFakeTimers({ now });
+  try {
+    await test(now);
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
+async function startedScheduler(
+  runs: number[],
+  schedule: Pick<ScheduledTask, 'type' | 'schedule' | 'intervalSeconds'>,
+): Promise<PersistentTaskScheduler> {
+  const scheduler = new PersistentTaskScheduler({
+    store: new MemoryScheduledTaskStore(),
+    lock: new MemorySchedulerLock(),
+    runner: async () => {
+      runs.push(Date.now());
+    },
+  });
+  await scheduler.create({
+    sessionId: 'scheduled-1',
+    prompt: 'long wait',
+    ...schedule,
+    enabled: true,
+    model,
+    toolPolicyProfile: 'scheduled',
+  });
+  await scheduler.start();
+  return scheduler;
 }
 
 async function waitFor(assertion: () => boolean | Promise<boolean>): Promise<void> {

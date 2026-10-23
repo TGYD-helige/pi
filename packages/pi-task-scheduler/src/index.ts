@@ -184,6 +184,9 @@ export type PersistentTaskSchedulerOptions = {
   lockHeartbeatMs?: number;
 };
 
+// Node runs a timer whose delay is over this at once, so a longer wait is held in steps.
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
 export class PersistentTaskScheduler implements TaskScheduler {
   private readonly timers = new Map<string, NodeJS.Timeout>();
   private readonly crons = new Map<string, Cron>();
@@ -409,24 +412,45 @@ export class PersistentTaskScheduler implements TaskScheduler {
         void this.markScheduleError(task.id, `Scheduled time ${task.schedule} is in the past`);
         return;
       }
-      const timer = setTimeout(() => {
+      this.setTimerAt(task.id, target.getTime(), () => {
         void this.execute(task.id);
-      }, delayMs);
-      timer.unref();
-      this.timers.set(task.id, timer);
+      });
       void this.refreshNextRun(task.id, target.toISOString(), task);
       return;
     }
-    const timer = setInterval(() => {
-      void this.execute(task.id);
-    }, task.intervalSeconds * 1000);
-    timer.unref();
-    this.timers.set(task.id, timer);
-    void this.refreshNextRun(
-      task.id,
-      new Date(Date.now() + task.intervalSeconds * 1000).toISOString(),
-      task,
+    const intervalMs = task.intervalSeconds * 1000;
+    if (intervalMs > MAX_TIMER_DELAY_MS) {
+      const runAt = (at: number): void => {
+        this.setTimerAt(task.id, at, () => {
+          runAt(Date.now() + intervalMs);
+          void this.execute(task.id);
+        });
+      };
+      runAt(Date.now() + intervalMs);
+    } else {
+      const timer = setInterval(() => {
+        void this.execute(task.id);
+      }, intervalMs);
+      timer.unref();
+      this.timers.set(task.id, timer);
+    }
+    void this.refreshNextRun(task.id, new Date(Date.now() + intervalMs).toISOString(), task);
+  }
+
+  private setTimerAt(taskId: string, at: number, onDue: () => void): void {
+    const delayMs = at - Date.now();
+    const timer = setTimeout(
+      () => {
+        if (delayMs > MAX_TIMER_DELAY_MS) {
+          this.setTimerAt(taskId, at, onDue);
+        } else {
+          onDue();
+        }
+      },
+      Math.min(delayMs, MAX_TIMER_DELAY_MS),
     );
+    timer.unref();
+    this.timers.set(taskId, timer);
   }
 
   private async execute(taskId: string): Promise<void> {
