@@ -93,6 +93,22 @@ offline, `npm:` / `git:` entries are loaded from the user-scope install instead
 of being fetched — install the package first (`pi install npm:@example/pi-memory`),
 or the entry is skipped. Omit the key to keep child sessions free of extensions.
 
+### Bridge commands
+
+With `bridge.commands` enabled (the default), a chat can control its own
+conversation with these messages:
+
+- `/status` — bridge activity counters.
+- `/abort` — stop the prompt that is currently running for this chat.
+- `/new` — start a clean conversation: abort the running prompt, discard queued
+  messages (their temporary attachments are cleaned up), and delete the persisted
+  session file at `.pi/channel-sessions/<adapter>-<hash>.jsonl`, so the next
+  message does not resume the old history.
+
+`/new` waits for the aborted child process to exit before deleting the file,
+because Pi rewrites the whole session file when it saves. Bridge turns mirrored to
+the local pi-agent API by `bridge.persistSessions` are not removed by `/new`.
+
 ### Feishu modes
 
 WebSocket is the default and recommended mode because it does not require a public callback URL:

@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { getPackageDir } from '@earendil-works/pi-coding-agent';
 import { afterEach, beforeEach, describe, expect, it, test, vi } from 'vitest';
 
@@ -717,5 +717,125 @@ describe('ChatBridge', () => {
       recipient: 'oc_chat',
       text: expect.stringContaining('Channel bridge status'),
     });
+  });
+
+  it('handles /new before any prompt without creating session storage', async () => {
+    const cwd = createTemporaryDirectory('pi-channels-bridge-reset-empty-');
+    const registry = {
+      getAdapter: vi.fn(() => ({ sendTyping: vi.fn(() => Promise.resolve()) })),
+      send: vi.fn(() => Promise.resolve({ ok: true })),
+    };
+    const bridge = new ChatBridge({ enabled: true }, cwd, registry as never);
+    bridge.start();
+
+    await bridge.handleMessage({ adapter: 'feishu', sender: 'oc_chat', text: '/new' });
+
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(existsSync(join(cwd, '.pi'))).toBe(false);
+    expect(registry.send).toHaveBeenCalledWith(expect.objectContaining({ text: 'Session reset.' }));
+  });
+
+  it('deletes the persisted session file when /new resets a session', async () => {
+    const cwd = createTemporaryDirectory('pi-channels-bridge-reset-');
+    mockSpawn.mockReturnValue(createChild('pong'));
+    const registry = {
+      getAdapter: vi.fn(() => ({ sendTyping: vi.fn(() => Promise.resolve()) })),
+      send: vi.fn(() => Promise.resolve({ ok: true })),
+    };
+    const bridge = new ChatBridge({ enabled: true }, cwd, registry as never);
+    bridge.start();
+
+    await bridge.handleMessage({ adapter: 'feishu', sender: 'oc_chat', text: 'ping' });
+    await vi.waitFor(() =>
+      expect(registry.send).toHaveBeenCalledWith(expect.objectContaining({ text: 'pong' })),
+    );
+    const sessionFile = sessionFileArg(mockSpawn.mock.calls[0]);
+    const sessionDir = join(cwd, '.pi', 'channel-sessions');
+    expect(sessionFile.startsWith(`${sessionDir}${sep}`)).toBe(true);
+    writeFileSync(sessionFile, '{"type":"session"}\n');
+
+    await bridge.handleMessage({ adapter: 'feishu', sender: 'oc_chat', text: '/new' });
+
+    expect(existsSync(sessionFile)).toBe(false);
+    expect(registry.send).toHaveBeenCalledWith(expect.objectContaining({ text: 'Session reset.' }));
+  });
+
+  it('waits for the aborted child to exit before deleting the session file', async () => {
+    const cwd = createTemporaryDirectory('pi-channels-bridge-reset-race-');
+    const pendingChild = createPendingChild();
+    mockSpawn.mockReturnValue(pendingChild);
+    const registry = {
+      getAdapter: vi.fn(() => ({ sendTyping: vi.fn(() => Promise.resolve()) })),
+      send: vi.fn(() => Promise.resolve({ ok: true })),
+    };
+    const bridge = new ChatBridge({ enabled: true }, cwd, registry as never);
+    bridge.start();
+
+    await bridge.handleMessage({ adapter: 'feishu', sender: 'oc_chat', text: 'ping' });
+    await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalled());
+    const sessionFile = sessionFileArg(mockSpawn.mock.calls[0]);
+    writeFileSync(sessionFile, '{"type":"session"}\n');
+
+    const reset = bridge.handleMessage({ adapter: 'feishu', sender: 'oc_chat', text: '/new' });
+
+    expect(pendingChild.kill).toHaveBeenCalledTimes(1);
+    expect(existsSync(sessionFile)).toBe(true);
+
+    await reset;
+
+    expect(existsSync(sessionFile)).toBe(false);
+  });
+
+  it('drops queued messages and cleans their attachments when /new resets a session', async () => {
+    const cwd = createTemporaryDirectory('pi-channels-bridge-reset-queue-');
+    const pendingChild = createPendingChild();
+    mockSpawn.mockReturnValue(pendingChild);
+    const registry = {
+      getAdapter: vi.fn(() => ({ sendTyping: vi.fn(() => Promise.resolve()) })),
+      send: vi.fn(() => Promise.resolve({ ok: true })),
+    };
+    const bridge = new ChatBridge({ enabled: true, maxConcurrent: 1 }, cwd, registry as never);
+    bridge.start();
+
+    await bridge.handleMessage({ adapter: 'feishu', sender: 'oc_chat', text: 'first' });
+    const { directory, path } = createTemporaryImage();
+    await bridge.handleMessage({
+      adapter: 'feishu',
+      sender: 'oc_chat',
+      text: 'queued',
+      attachments: [{ type: 'image', path }],
+    });
+
+    await bridge.handleMessage({ adapter: 'feishu', sender: 'oc_chat', text: '/new' });
+
+    expect(existsSync(directory)).toBe(false);
+    expect(registry.send).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'Session reset. Dropped 1 queued message(s).' }),
+    );
+  });
+
+  it('keeps other channel sessions when /new resets one', async () => {
+    const cwd = createTemporaryDirectory('pi-channels-bridge-reset-scope-');
+    mockSpawn.mockReturnValue(createChild('pong'));
+    const registry = {
+      getAdapter: vi.fn(() => ({ sendTyping: vi.fn(() => Promise.resolve()) })),
+      send: vi.fn(() => Promise.resolve({ ok: true })),
+    };
+    const bridge = new ChatBridge({ enabled: true }, cwd, registry as never);
+    bridge.start();
+
+    await bridge.handleMessage({ adapter: 'feishu', sender: 'oc_one', text: 'ping' });
+    await bridge.handleMessage({ adapter: 'feishu', sender: 'oc_two', text: 'ping' });
+    await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalledTimes(2));
+    const firstFile = sessionFileArg(mockSpawn.mock.calls[0]);
+    const secondFile = sessionFileArg(mockSpawn.mock.calls[1]);
+    expect(firstFile).not.toBe(secondFile);
+    writeFileSync(firstFile, '{"type":"session"}\n');
+    writeFileSync(secondFile, '{"type":"session"}\n');
+
+    await bridge.handleMessage({ adapter: 'feishu', sender: 'oc_one', text: '/new' });
+
+    expect(existsSync(firstFile)).toBe(false);
+    expect(existsSync(secondFile)).toBe(true);
   });
 });
