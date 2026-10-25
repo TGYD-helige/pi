@@ -104,7 +104,7 @@ export class ChatBridge {
       return;
     }
 
-    const senderKey = `${message.adapter}:${message.sender}`;
+    const senderKey = channelSessionKey(message);
     const builtInReply = await this.handleBuiltInCommand(message, text);
     if (builtInReply !== null) {
       try {
@@ -186,7 +186,7 @@ export class ChatBridge {
     if (!this.config.commands || !text.startsWith('/')) return null;
     const [command] = text.slice(1).trim().split(/\s+/);
     if (!command) return null;
-    const senderKey = `${message.adapter}:${message.sender}`;
+    const senderKey = channelSessionKey(message);
 
     if (command === 'status') {
       const stats = this.stats();
@@ -224,7 +224,7 @@ export class ChatBridge {
    * history `/new` is meant to clear.
    */
   private async resetSession(message: IncomingMessage): Promise<string> {
-    const senderKey = `${message.adapter}:${message.sender}`;
+    const senderKey = channelSessionKey(message);
     const session = this.sessions.get(senderKey);
     const previous = this.resets.get(senderKey);
     const dropped = session?.queue.length ?? 0;
@@ -246,19 +246,21 @@ export class ChatBridge {
     this.sessions.delete(senderKey);
     try {
       await reset;
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      console.error(`[pi-channels] failed to reset channel session: ${reason}`);
-      return `Session reset failed: ${reason}`;
+    } catch {
+      console.error('[pi-channels] failed to reset channel session');
+      return 'Session reset failed. Please try again.';
     } finally {
-      this.resets.delete(senderKey);
+      if (this.resets.get(senderKey) === reset) this.resets.delete(senderKey);
     }
     return dropped > 0 ? `Session reset. Dropped ${dropped} queued message(s).` : 'Session reset.';
   }
 
   private async processNext(senderKey: string): Promise<void> {
-    const pendingReset = this.resets.get(senderKey);
-    if (pendingReset) await pendingReset.catch(() => undefined);
+    let pendingReset = this.resets.get(senderKey);
+    while (pendingReset) {
+      await pendingReset.catch(() => undefined);
+      pendingReset = this.resets.get(senderKey);
+    }
     const session = this.sessions.get(senderKey);
     if (!session || session.processing || session.queue.length === 0) return;
     if (this.activeCount >= this.config.maxConcurrent) return;
@@ -440,6 +442,10 @@ async function persistChannelTurnStarted(input: {
       error: error instanceof Error ? error.message : String(error),
     });
   }
+}
+
+function channelSessionKey(message: IncomingMessage): string {
+  return `${message.adapter}:${channelSessionId(message) ?? message.sender}`;
 }
 
 function channelSessionId(message: IncomingMessage): string | undefined {

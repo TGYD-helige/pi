@@ -6,12 +6,19 @@ import { getPackageDir } from '@earendil-works/pi-coding-agent';
 import { afterEach, beforeEach, describe, expect, it, test, vi } from 'vitest';
 
 const mockSpawn = vi.fn();
+const mockRm = vi.fn<typeof remove>();
+const { rm: remove } = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
 const trustedRuntime = realpathSync.native(process.execPath);
 const trustedCli = realpathSync.native(join(getPackageDir(), 'dist', 'cli.js'));
 const temporaryDirectories = new Set<string>();
 
 vi.mock('node:child_process', () => ({
   spawn: (...args: unknown[]) => mockSpawn(...args),
+}));
+
+vi.mock('node:fs/promises', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:fs/promises')>()),
+  rm: (...args: Parameters<typeof remove>) => mockRm(...args),
 }));
 
 const { ChatBridge } = await import('../bridge.js');
@@ -69,6 +76,7 @@ function sessionFileArg(call: unknown[] | undefined): string {
 describe('ChatBridge', () => {
   beforeEach(() => {
     mockSpawn.mockReset();
+    mockRm.mockReset().mockImplementation(remove);
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
     for (const key of [
@@ -837,5 +845,122 @@ describe('ChatBridge', () => {
 
     expect(existsSync(firstFile)).toBe(false);
     expect(existsSync(secondFile)).toBe(true);
+  });
+
+  it('resets running and queued Feishu threads that share the chat session file', async () => {
+    const cwd = createTemporaryDirectory('pi-channels-bridge-reset-threads-');
+    const child = createPendingChild();
+    mockSpawn.mockReturnValue(child);
+    const registry = {
+      getAdapter: vi.fn(),
+      send: vi.fn(() => Promise.resolve({ ok: true })),
+    };
+    const bridge = new ChatBridge(
+      { enabled: true, persistSessions: false, maxConcurrent: 1 },
+      cwd,
+      registry as never,
+    );
+    bridge.start();
+
+    await bridge.handleMessage({ adapter: 'feishu', sender: 'oc_chat:thread_one', text: 'first' });
+    const sessionFile = sessionFileArg(mockSpawn.mock.calls[0]);
+    writeFileSync(sessionFile, 'old history');
+    const { directory, path } = createTemporaryImage();
+    await bridge.handleMessage({
+      adapter: 'feishu',
+      sender: 'oc_chat:thread_two',
+      text: 'queued',
+      attachments: [{ type: 'image', path }],
+    });
+
+    await bridge.handleMessage({ adapter: 'feishu', sender: 'oc_chat', text: '/new' });
+
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    expect(existsSync(sessionFile)).toBe(false);
+    expect(existsSync(directory)).toBe(false);
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    expect(registry.send).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'Session reset. Dropped 1 queued message(s).' }),
+    );
+  });
+
+  it('blocks new prompts until all overlapping resets have finished', async () => {
+    const cwd = createTemporaryDirectory('pi-channels-bridge-reset-overlap-');
+    mockSpawn.mockImplementation(() => createChild('pong'));
+    const registry = {
+      getAdapter: vi.fn(),
+      send: vi.fn(() => Promise.resolve({ ok: true })),
+    };
+    const bridge = new ChatBridge(
+      { enabled: true, persistSessions: false },
+      cwd,
+      registry as never,
+    );
+    bridge.start();
+    const msg = { adapter: 'feishu', sender: 'oc_chat', text: '/new' };
+    let finishFirstDeletion = () => {};
+    const firstDeletion = new Promise<void>((resolve) => {
+      finishFirstDeletion = resolve;
+    });
+    let finishDeletion = () => {};
+    const deletion = new Promise<void>((resolve) => {
+      finishDeletion = resolve;
+    });
+    mockRm
+      .mockImplementationOnce(async (...args) => {
+        await firstDeletion;
+        await remove(...args);
+      })
+      .mockImplementationOnce(async (...args) => {
+        await deletion;
+        await remove(...args);
+      });
+    const first = bridge.handleMessage(msg);
+    await vi.waitFor(() => expect(mockRm).toHaveBeenCalledTimes(1));
+    await bridge.handleMessage({ ...msg, text: 'discarded by the second reset' });
+    const second = bridge.handleMessage(msg);
+    await bridge.handleMessage({ ...msg, text: 'new conversation' });
+    finishFirstDeletion();
+    await first;
+    await vi.waitFor(() => expect(mockRm).toHaveBeenCalledTimes(2));
+
+    await bridge.handleMessage({ ...msg, text: 'follow-up' });
+    try {
+      expect(mockSpawn.mock.calls.length).toBe(0);
+    } finally {
+      finishDeletion();
+      await second;
+    }
+    await vi.waitFor(() => expect(bridge.stats().activePrompts).toBe(0));
+    expect(mockSpawn.mock.calls.length).toBe(2);
+    expect(registry.send).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'Session reset. Dropped 1 queued message(s).' }),
+    );
+  });
+
+  it('does not expose filesystem error messages when /new fails', async () => {
+    const cwd = createTemporaryDirectory('pi-channels-bridge-reset-error-');
+    const registry = {
+      getAdapter: vi.fn(),
+      send: vi.fn(() => Promise.resolve({ ok: true })),
+    };
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockRm.mockRejectedValueOnce(
+      Object.assign(new Error(`EACCES: permission denied, unlink '${cwd}/private-session.jsonl'`), {
+        code: 'EACCES',
+      }),
+    );
+    const bridge = new ChatBridge({ enabled: true }, cwd, registry as never);
+    bridge.start();
+    try {
+      await bridge.handleMessage({ adapter: 'feishu', sender: 'oc_chat', text: '/new' });
+
+      expect(registry.send).toHaveBeenCalledWith(
+        expect.objectContaining({ text: 'Session reset failed. Please try again.' }),
+      );
+      expect(log).toHaveBeenCalledWith('[pi-channels] failed to reset channel session');
+    } finally {
+      log.mockRestore();
+    }
   });
 });
