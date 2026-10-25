@@ -29,6 +29,7 @@ type SessionState = {
   queue: QueuedMessage[];
   processing: boolean;
   abortController: AbortController | undefined;
+  runDone: Promise<void> | undefined;
 };
 
 const DEFAULTS: Required<BridgeConfig> = {
@@ -55,6 +56,7 @@ export class ChatBridge {
   private running = false;
   private activeCount = 0;
   private sessions = new Map<string, SessionState>();
+  private resets = new Map<string, Promise<void>>();
 
   constructor(config: BridgeConfig | undefined, cwd: string, registry: ChannelRegistry) {
     this.config = { ...DEFAULTS, ...(config ?? {}) };
@@ -102,8 +104,8 @@ export class ChatBridge {
       return;
     }
 
-    const senderKey = `${message.adapter}:${message.sender}`;
-    const builtInReply = this.handleBuiltInCommand(senderKey, text);
+    const senderKey = channelSessionKey(message);
+    const builtInReply = await this.handleBuiltInCommand(message, text);
     if (builtInReply !== null) {
       try {
         await this.registry.send({
@@ -166,16 +168,25 @@ export class ChatBridge {
   private getSession(senderKey: string): SessionState {
     let session = this.sessions.get(senderKey);
     if (!session) {
-      session = { queue: [], processing: false, abortController: undefined };
+      session = {
+        queue: [],
+        processing: false,
+        abortController: undefined,
+        runDone: undefined,
+      };
       this.sessions.set(senderKey, session);
     }
     return session;
   }
 
-  private handleBuiltInCommand(senderKey: string, text: string): string | null {
+  private async handleBuiltInCommand(
+    message: IncomingMessage,
+    text: string,
+  ): Promise<string | null> {
     if (!this.config.commands || !text.startsWith('/')) return null;
     const [command] = text.slice(1).trim().split(/\s+/);
     if (!command) return null;
+    const senderKey = channelSessionKey(message);
 
     if (command === 'status') {
       const stats = this.stats();
@@ -196,10 +207,7 @@ export class ChatBridge {
     }
 
     if (command === 'new') {
-      const session = this.sessions.get(senderKey);
-      session?.abortController?.abort();
-      this.sessions.delete(senderKey);
-      return 'Session reset.';
+      return this.resetSession(message);
     }
 
     if (command === 'help' || command === 'start') {
@@ -209,7 +217,50 @@ export class ChatBridge {
     return null;
   }
 
+  /**
+   * Reset one channel conversation. Aborting is asynchronous, and Pi rewrites
+   * the whole session file when it saves, so the file is only unlinked after
+   * the in-flight child has exited — otherwise that child can recreate the
+   * history `/new` is meant to clear.
+   */
+  private async resetSession(message: IncomingMessage): Promise<string> {
+    const senderKey = channelSessionKey(message);
+    const session = this.sessions.get(senderKey);
+    const previous = this.resets.get(senderKey);
+    const dropped = session?.queue.length ?? 0;
+    session?.abortController?.abort();
+    const reset = (async () => {
+      await previous?.catch(() => undefined);
+      if (session) {
+        for (const queued of session.queue) {
+          await cleanupBridgeAttachments(queued.message.attachments);
+        }
+        session.queue.length = 0;
+        await session.runDone;
+      }
+      const sessionId = channelSessionId(message);
+      if (!sessionId) return;
+      await rm(channelSessionFilePath(this.cwd, message, sessionId), { force: true });
+    })();
+    this.resets.set(senderKey, reset);
+    this.sessions.delete(senderKey);
+    try {
+      await reset;
+    } catch {
+      console.error('[pi-channels] failed to reset channel session');
+      return 'Session reset failed. Please try again.';
+    } finally {
+      if (this.resets.get(senderKey) === reset) this.resets.delete(senderKey);
+    }
+    return dropped > 0 ? `Session reset. Dropped ${dropped} queued message(s).` : 'Session reset.';
+  }
+
   private async processNext(senderKey: string): Promise<void> {
+    let pendingReset = this.resets.get(senderKey);
+    while (pendingReset) {
+      await pendingReset.catch(() => undefined);
+      pendingReset = this.resets.get(senderKey);
+    }
     const session = this.sessions.get(senderKey);
     if (!session || session.processing || session.queue.length === 0) return;
     if (this.activeCount >= this.config.maxConcurrent) return;
@@ -229,7 +280,7 @@ export class ChatBridge {
     const sessionId = channelSessionId(queued.message);
     let result: BridgeRunResult;
     try {
-      result = await runPrompt({
+      const run = runPrompt({
         cwd: this.cwd,
         prompt: queued.message.text,
         ...(queued.message.attachments ? { attachments: queued.message.attachments } : {}),
@@ -244,6 +295,11 @@ export class ChatBridge {
         env: this.config.env,
         extensions: this.config.extensions,
       });
+      session.runDone = run.then(
+        () => undefined,
+        () => undefined,
+      );
+      result = await run;
     } finally {
       await cleanupBridgeAttachments(queued.message.attachments);
     }
@@ -386,6 +442,10 @@ async function persistChannelTurnStarted(input: {
       error: error instanceof Error ? error.message : String(error),
     });
   }
+}
+
+function channelSessionKey(message: IncomingMessage): string {
+  return `${message.adapter}:${channelSessionId(message) ?? message.sender}`;
 }
 
 function channelSessionId(message: IncomingMessage): string | undefined {
@@ -579,13 +639,18 @@ function channelPromptSessionFile(
   message: IncomingMessage,
   sessionId: string,
 ): string {
-  const sessionDir = join(cwd, '.pi', 'channel-sessions');
-  if (existsSync(cwd)) mkdirSync(sessionDir, { recursive: true });
+  const sessionFile = channelSessionFilePath(cwd, message, sessionId);
+  if (existsSync(cwd)) mkdirSync(dirname(sessionFile), { recursive: true });
+  return sessionFile;
+}
+
+/** Deterministic per-conversation session path; `/new` deletes exactly this file. */
+function channelSessionFilePath(cwd: string, message: IncomingMessage, sessionId: string): string {
   const fingerprint = createHash('sha256')
     .update(`${message.adapter}:${sessionId}`)
     .digest('hex')
     .slice(0, 24);
-  return join(sessionDir, `${message.adapter}-${fingerprint}.jsonl`);
+  return join(cwd, '.pi', 'channel-sessions', `${message.adapter}-${fingerprint}.jsonl`);
 }
 
 function formatBridgeErrorReply(error: string | undefined): string {
