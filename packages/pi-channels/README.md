@@ -70,6 +70,8 @@ The `${...}` placeholders below assume this section is stored in user or agent s
 
 ### Bridge extensions
 
+The bridge uses the installed Pi package CLI when available. If that CLI is missing (for example, with the standalone Scoop install), it resolves `pi.exe` from `PATH` on Windows or `pi` on other platforms. Set `bridge.piBin` or `PI_CHANNELS_PI_BIN` to an absolute path or executable name on `PATH` to override; binaries inside the workspace are rejected.
+
 The bridge answers each incoming message from a child Pi process started with
 `--offline --no-extensions`, so installed extensions never load implicitly (the
 channel extension itself included, which keeps a child from opening a second

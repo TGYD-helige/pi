@@ -1,9 +1,9 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, realpathSync } from 'node:fs';
+import { accessSync, constants, existsSync, mkdirSync, realpathSync, statSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveConfigDir } from '@amaster.ai/pi-shared/settings';
 import {
@@ -704,32 +704,79 @@ function resolveBridgeProviderExtensionPath(): string {
   return join(dirname(fileURLToPath(import.meta.url)), 'bridge-provider.js');
 }
 
-function resolvePiCommand(
+export function resolvePiCommand(
   configured: string,
   cwd: string,
+  packageDir = getPackageDir(),
 ): { command: string; argsPrefix: string[] } {
   const explicit = trimToNull(configured) ?? trimToNull(process.env.PI_CHANNELS_PI_BIN);
   if (explicit) {
-    if (!isAbsolute(explicit)) {
-      throw new Error('Channel bridge Pi binary must be an absolute path.');
+    if (isAbsolute(explicit)) {
+      const command = realpathSync.native(explicit);
+      if (isInsideWorkspace(command, cwd)) {
+        throw new Error('Channel bridge Pi binary must be outside the workspace.');
+      }
+      return { command, argsPrefix: [] };
     }
-    const command = realpathSync.native(explicit);
-    const canonicalCwd = existsSync(cwd) ? realpathSync.native(cwd) : resolve(cwd);
-    const pathFromCwd = relative(canonicalCwd, command);
-    const insideWorkspace =
-      pathFromCwd === '' ||
-      (pathFromCwd !== '..' && !pathFromCwd.startsWith(`..${sep}`) && !isAbsolute(pathFromCwd));
-    if (insideWorkspace) {
-      throw new Error('Channel bridge Pi binary must be outside the workspace.');
+    if (explicit.includes('/') || explicit.includes('\\')) {
+      throw new Error(
+        'Channel bridge Pi binary must be an absolute path or executable name on PATH.',
+      );
     }
-    return { command, argsPrefix: [] };
+    const command = resolvePiBinaryOnPath(explicit, cwd);
+    if (command) return { command, argsPrefix: [] };
+    throw new Error(`Channel bridge Pi binary "${explicit}" was not found on PATH.`);
   }
 
-  const cliPath = realpathSync.native(join(getPackageDir(), 'dist', 'cli.js'));
-  return {
-    command: realpathSync.native(process.execPath),
-    argsPrefix: [cliPath],
-  };
+  const cliPath = join(packageDir, 'dist', 'cli.js');
+  if (existsSync(cliPath)) {
+    return {
+      command: realpathSync.native(process.execPath),
+      argsPrefix: [realpathSync.native(cliPath)],
+    };
+  }
+
+  const command = resolvePiBinaryOnPath('pi', cwd);
+  if (command) return { command, argsPrefix: [] };
+  throw new Error(
+    `Channel bridge could not find Pi CLI at "${cliPath}" or on PATH; set ` +
+      'pi-channels.bridge.piBin or PI_CHANNELS_PI_BIN to an absolute path or executable name on PATH.',
+  );
+}
+
+function resolvePiBinaryOnPath(name: string, cwd: string): string | null {
+  const executableNames =
+    process.platform === 'win32' && !name.toLowerCase().endsWith('.exe')
+      ? [`${name}.exe`, name]
+      : [name];
+  for (const rawEntry of (process.env.PATH ?? '').split(delimiter)) {
+    const entry = rawEntry.trim().replace(/^"(.*)"$/, '$1');
+    if (!entry || !isAbsolute(entry)) continue;
+    for (const executableName of executableNames) {
+      const candidate = join(entry, executableName);
+      if (!existsSync(candidate) || !statSync(candidate).isFile()) continue;
+      const command = realpathSync.native(candidate);
+      if (isInsideWorkspace(command, cwd)) continue;
+      if (process.platform !== 'win32') {
+        try {
+          accessSync(command, constants.X_OK);
+        } catch {
+          continue;
+        }
+      }
+      return command;
+    }
+  }
+  return null;
+}
+
+function isInsideWorkspace(command: string, cwd: string): boolean {
+  const canonicalCwd = existsSync(cwd) ? realpathSync.native(cwd) : resolve(cwd);
+  const pathFromCwd = relative(canonicalCwd, command);
+  return (
+    pathFromCwd === '' ||
+    (pathFromCwd !== '..' && !pathFromCwd.startsWith(`..${sep}`) && !isAbsolute(pathFromCwd))
+  );
 }
 
 function trimToNull(value: string | undefined): string | null {
