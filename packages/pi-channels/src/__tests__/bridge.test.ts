@@ -1,5 +1,13 @@
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join, sep } from 'node:path';
 import { getPackageDir } from '@earendil-works/pi-coding-agent';
@@ -10,6 +18,7 @@ const mockRm = vi.fn<typeof remove>();
 const { rm: remove } = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
 const trustedRuntime = realpathSync.native(process.execPath);
 const trustedCli = realpathSync.native(join(getPackageDir(), 'dist', 'cli.js'));
+const piExecutableName = process.platform === 'win32' ? 'pi.exe' : 'pi';
 const temporaryDirectories = new Set<string>();
 
 vi.mock('node:child_process', () => ({
@@ -57,6 +66,11 @@ function createTemporaryDirectory(prefix: string): string {
   const directory = mkdtempSync(join(tmpdir(), prefix));
   temporaryDirectories.add(directory);
   return directory;
+}
+
+function writeExecutable(path: string): void {
+  writeFileSync(path, '');
+  chmodSync(path, 0o755);
 }
 
 function createTemporaryImage(): { directory: string; path: string } {
@@ -421,12 +435,37 @@ describe('ChatBridge', () => {
     const packageDir = createTemporaryDirectory('pi-channels-package-without-cli-');
     const binDir = createTemporaryDirectory('pi-channels-path-bin-');
     const cwd = createTemporaryDirectory('pi-channels-workspace-');
-    const binary = join(binDir, process.platform === 'win32' ? 'pi.exe' : 'pi');
-    writeFileSync(binary, '');
+    const binary = join(binDir, piExecutableName);
+    writeExecutable(binary);
     vi.stubEnv('PATH', binDir);
 
     expect(resolvePiCommand('', cwd, packageDir)).toEqual({
       command: realpathSync.native(binary),
+      argsPrefix: [],
+    });
+  });
+
+  it('skips non-executable PATH candidates', () => {
+    const packageDir = createTemporaryDirectory('pi-channels-package-without-cli-');
+    const directoryBinDir = createTemporaryDirectory('pi-channels-directory-bin-');
+    const executableBinDir = createTemporaryDirectory('pi-channels-executable-path-bin-');
+    const cwd = createTemporaryDirectory('pi-channels-workspace-');
+    mkdirSync(join(directoryBinDir, piExecutableName));
+    const executableBinary = join(executableBinDir, piExecutableName);
+    writeExecutable(executableBinary);
+    const pathEntries = [directoryBinDir];
+    if (process.platform !== 'win32') {
+      const nonExecutableBinDir = createTemporaryDirectory('pi-channels-non-executable-bin-');
+      const nonExecutableBinary = join(nonExecutableBinDir, piExecutableName);
+      writeFileSync(nonExecutableBinary, '');
+      chmodSync(nonExecutableBinary, 0o644);
+      pathEntries.push(nonExecutableBinDir);
+    }
+    pathEntries.push(executableBinDir);
+    vi.stubEnv('PATH', pathEntries.join(delimiter));
+
+    expect(resolvePiCommand('', cwd, packageDir)).toEqual({
+      command: realpathSync.native(executableBinary),
       argsPrefix: [],
     });
   });
@@ -436,11 +475,10 @@ describe('ChatBridge', () => {
     const localBinDir = join(cwd, 'node_modules', '.bin');
     mkdirSync(localBinDir, { recursive: true });
     const externalBinDir = createTemporaryDirectory('pi-channels-external-path-bin-');
-    const executableName = process.platform === 'win32' ? 'pi.exe' : 'pi';
-    const localBinary = join(localBinDir, executableName);
-    const externalBinary = join(externalBinDir, executableName);
-    writeFileSync(localBinary, '');
-    writeFileSync(externalBinary, '');
+    const localBinary = join(localBinDir, piExecutableName);
+    const externalBinary = join(externalBinDir, piExecutableName);
+    writeExecutable(localBinary);
+    writeExecutable(externalBinary);
     vi.stubEnv('PATH', [localBinDir, externalBinDir].join(delimiter));
 
     expect(
@@ -454,11 +492,11 @@ describe('ChatBridge', () => {
   it('resolves an explicitly configured Pi executable name from PATH', () => {
     const binDir = createTemporaryDirectory('pi-channels-configured-path-bin-');
     const cwd = createTemporaryDirectory('pi-channels-configured-workspace-');
-    const binary = join(binDir, process.platform === 'win32' ? 'pi.exe' : 'pi');
-    writeFileSync(binary, '');
+    const binary = join(binDir, piExecutableName);
+    writeExecutable(binary);
     vi.stubEnv('PATH', binDir);
 
-    expect(resolvePiCommand(process.platform === 'win32' ? 'pi.exe' : 'pi', cwd)).toEqual({
+    expect(resolvePiCommand(piExecutableName, cwd)).toEqual({
       command: realpathSync.native(binary),
       argsPrefix: [],
     });

@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, realpathSync } from 'node:fs';
+import { accessSync, constants, existsSync, mkdirSync, realpathSync, statSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -754,9 +754,17 @@ function resolvePiBinaryOnPath(name: string, cwd: string): string | null {
     if (!entry || !isAbsolute(entry)) continue;
     for (const executableName of executableNames) {
       const candidate = join(entry, executableName);
-      if (!existsSync(candidate)) continue;
+      if (!existsSync(candidate) || !statSync(candidate).isFile()) continue;
       const command = realpathSync.native(candidate);
-      if (!isInsideWorkspace(command, cwd)) return command;
+      if (isInsideWorkspace(command, cwd)) continue;
+      if (process.platform !== 'win32') {
+        try {
+          accessSync(command, constants.X_OK);
+        } catch {
+          continue;
+        }
+      }
+      return command;
     }
   }
   return null;
