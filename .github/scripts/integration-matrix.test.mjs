@@ -30,7 +30,7 @@ test('requires environment approval for secret-backed fork integration', async (
   assert.equal(workflow.match(/allow-unsafe-pr-checkout:/g)?.length, 6);
   assert.equal(workflow.match(/persist-credentials: false/g)?.length, 6);
   assert.equal(workflow.match(/ref: \$\{\{ env\.INTEGRATION_CHECKOUT_REF \}\}/g)?.length, 6);
-  assert.match(workflow, /browserless-session-e2e:[\s\S]*?needs: \[detect-extension-matrix, integration-approval\]/);
+  assert.match(workflow, /browserless-session-e2e:[\s\S]*?needs: \[detect-extension-matrix, integration-approval, extension-tool-matrix\]/);
   assert.doesNotMatch(workflow, /integration-approved/);
   assert.match(workflow, /PI_INTEGRATION_BASE_URL and PI_INTEGRATION_API_KEY are required for Stage B/);
   assert.match(workflow, /PI_INTEGRATION_\* secrets are required for Stage C/);
@@ -181,7 +181,10 @@ test('can isolate manual Browserless session runs while preserving the shared ap
     assert.match(job, /!inputs\.browser_session_only/);
   }
   const job = workflow.slice(workflow.indexOf('  browserless-session-e2e:'), workflow.indexOf('  pi-runtime-smoke:'));
-  assert.match(job, /needs: \[detect-extension-matrix, integration-approval\]/);
+  assert.match(job, /needs: \[detect-extension-matrix, integration-approval, extension-tool-matrix\]/);
+  assert.match(job, /always\(\) && !cancelled\(\)/);
+  assert.match(job, /needs\.integration-approval\.result == 'success'/);
+  assert.match(job, /needs\.detect-extension-matrix\.result == 'success'/);
   assert.doesNotMatch(job, /!inputs\.browser_session_only/);
 });
 

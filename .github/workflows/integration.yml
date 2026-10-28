@@ -183,11 +183,15 @@ jobs:
     steps:
       - run: echo "Secret-backed Integration approved"
 
-  # Deterministic Browserless Cloud lifecycle checks, without model calls.
+  # Wait for Stage C to release its Browserless connections before lifecycle checks.
   browserless-session-e2e:
     name: Browserless Cloud session lifecycle
-    needs: [detect-extension-matrix, integration-approval]
-    if: contains(needs.detect-extension-matrix.outputs.matrix, 'pi-browser-use')
+    needs: [detect-extension-matrix, integration-approval, extension-tool-matrix]
+    if: >
+      always() && !cancelled() &&
+      needs.detect-extension-matrix.result == 'success' &&
+      needs.integration-approval.result == 'success' &&
+      contains(needs.detect-extension-matrix.outputs.matrix, 'pi-browser-use')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -210,7 +214,7 @@ jobs:
           BROWSERLESS_TOKEN: ${{ secrets.BROWSERLESS_TOKEN }}
         run: node .github/scripts/browserless-session-e2e.mjs
 
-  # Stage B runs in parallel with the browser lifecycle and Stage C jobs.
+  # Stage B runs in parallel with Stage C.
   pi-runtime-smoke:
     name: Pi runtime smoke (Stage B)
     needs: integration-approval
