@@ -173,6 +173,18 @@ test('routes browser lifecycle scripts and shared fixtures to browser integratio
   }
 });
 
+test('can isolate manual Browserless session runs while preserving the shared approval gate', async () => {
+  const workflow = await readFile(new URL('../workflows/integration.yml', import.meta.url), 'utf8');
+  assert.match(workflow, /workflow_dispatch:\s+inputs:\s+browser_session_only:[\s\S]*?type: boolean/);
+  for (const name of ['computer-use-platform-e2e', 'pi-runtime-smoke', 'extension-tool-matrix']) {
+    const job = workflow.slice(workflow.indexOf(`  ${name}:`)).split(/\n  [\w-]+:/)[0];
+    assert.match(job, /!inputs\.browser_session_only/);
+  }
+  const job = workflow.slice(workflow.indexOf('  browserless-session-e2e:'), workflow.indexOf('  pi-runtime-smoke:'));
+  assert.match(job, /needs: \[detect-extension-matrix, integration-approval\]/);
+  assert.doesNotMatch(job, /!inputs\.browser_session_only/);
+});
+
 test('checks screenshot tool results even when stderr diagnostics are mixed into the event stream', async () => {
   const workflow = await readFile(new URL('../workflows/integration.yml', import.meta.url), 'utf8');
   const scenario = fullMatrix.find(({ extension, scenario }) => extension === 'pi-browser-use' && scenario === 'screenshot');

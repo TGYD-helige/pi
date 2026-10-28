@@ -48,6 +48,11 @@ try {
         .join('\n');
       const status = /(?:HTTP|server response:)\s*(\d{3})/i.exec(message)?.[1];
       if (status) error.code = `HTTP_${status}`;
+      else if (/too many|concurren|quota|rate.limit/i.test(message)) error.code = 'PROVIDER_LIMIT';
+      else if (/target closed|connection closed|session closed|disconnected/i.test(message)) error.code = 'BROWSER_CLOSED';
+      else if (/timeout|timed out/i.test(message)) error.code = 'BROWSER_TIMEOUT';
+      const operation = /Protocol error \(([A-Za-z]+\.[A-Za-z]+)\)/.exec(message)?.[1];
+      if (operation) error.operation = operation;
       throw error;
     }
     return result;
@@ -146,6 +151,7 @@ try {
     name: /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(error?.name ?? '') ? error.name : 'Error',
   };
   if (/^[A-Z_0-9]{1,64}$/.test(error?.code ?? '')) diagnostic.code = error.code;
+  if (/^[A-Za-z]+\.[A-Za-z]+$/.test(error?.operation ?? '')) diagnostic.operation = error.operation;
   const property = /reading ['"]([A-Za-z_$][\w$]*)/.exec(error?.message ?? '')?.[1];
   if (property) diagnostic.property = property;
   const module = /Cannot find (?:module|package) ['"]([^'"]+)['"]/

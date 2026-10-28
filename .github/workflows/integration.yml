@@ -7,6 +7,11 @@ on:
     branches: [master, main]
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
+    inputs:
+      browser_session_only:
+        description: Run only Browserless session lifecycle checks after the shared approval gate
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
@@ -100,7 +105,7 @@ jobs:
   computer-use-platform-e2e:
     name: Computer use driver and perception E2E (${{ matrix.target }})
     needs: detect-extension-matrix
-    if: contains(needs.detect-extension-matrix.outputs.matrix, 'pi-computer-use')
+    if: contains(needs.detect-extension-matrix.outputs.matrix, 'pi-computer-use') && !inputs.browser_session_only
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -209,6 +214,7 @@ jobs:
   pi-runtime-smoke:
     name: Pi runtime smoke (Stage B)
     needs: integration-approval
+    if: ${{ !inputs.browser_session_only }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -343,6 +349,7 @@ jobs:
     needs: [detect-extension-matrix, integration-approval]
     if: >
       needs.detect-extension-matrix.outputs.has_extensions == 'true' &&
+      !inputs.browser_session_only &&
       vars.PI_INTEGRATION_SKIP_STAGE_C != 'true'
     runs-on: ${{ matrix.scenario == 'macos' && 'macos-15' || matrix.scenario == 'windows' && 'windows-2025' || 'ubuntu-latest' }}
     timeout-minutes: 15
