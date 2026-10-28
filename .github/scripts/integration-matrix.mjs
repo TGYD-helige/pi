@@ -222,6 +222,7 @@ export function selectIntegrationMatrix(changedFiles, { forceAll = false } = {})
     if (file.startsWith('tests/computer-use-') || file.startsWith('.github/scripts/computer-use-') || file.startsWith('.github/scripts/fixtures/computer-use-')) selected.add('pi-computer-use');
     if (file.startsWith('.github/scripts/telemetry-')) selected.add('pi-telemetry');
     if (file === '.github/scripts/pi-memory-snapshot-e2e.mjs') selected.add('pi-memory');
+    if (file === '.github/scripts/browserless-session-e2e.mjs' || file.startsWith('tests/browser-session-') || file.startsWith('tests/fixtures/browser-session-')) selected.add('pi-browser-use');
   }
   return fullMatrix.filter((entry) => selected.has(entry.extension));
 }

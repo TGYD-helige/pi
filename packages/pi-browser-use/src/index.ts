@@ -24,6 +24,10 @@ import {
   type VisionModelConfig,
 } from './config.js';
 import { prepareBrowserProfile } from './profile.js';
+import { type ManagedBrowser, readBrowserSessionBinding } from './session-backend.js';
+import { BrowserSessionClient } from './session-client.js';
+import type { SessionAction } from './session-control.js';
+import { SESSION_DESCRIPTION, sessionParameters, sessionToolResult } from './session-control.js';
 import {
   augmentToolDescription,
   extractTextContent,
@@ -31,6 +35,16 @@ import {
 } from './tool-augment.js';
 import { buildGroups, CORE_TOOLS, GROUP_SUMMARIES, loadCategoryMap } from './tool-groups.js';
 
+export type {
+  BrowserLifecycleAdapter,
+  BrowserSessionConfig,
+  HttpBrowserBackend,
+  ManagedBrowser,
+} from './session-backend.js';
+export { createHttpBrowserAdapter, readBrowserSessionBinding } from './session-backend.js';
+export { BrowserSessionClient } from './session-client.js';
+export { BrowserSessionError } from './session-control.js';
+export { serveBrowserSession } from './session-server.js';
 export type { BrowserSessionMode, BrowserUseConfig, VisionModelConfig };
 export { configToArgs, resolveConfig };
 
@@ -109,6 +123,7 @@ export type ConnectionState =
  * over stdio.  Owns the child-process lifecycle: connect() starts it, close() kills it.
  */
 export class DevToolsClient {
+  private sessionClient: BrowserSessionClient | undefined;
   private client: Client | null = null;
   private config: BrowserUseConfig;
   private state: ConnectionState = 'disconnected';
@@ -118,15 +133,21 @@ export class DevToolsClient {
   private explicitlyClosed = false;
   private lastHealthCheckAt = 0;
 
-  constructor(config?: BrowserUseConfig) {
+  constructor(config?: BrowserUseConfig, browser?: ManagedBrowser) {
     this.config = resolveConfig(config);
+    if (browser && !this.config.session?.enabled)
+      throw new Error('A runtime browser binding requires enabled browser sessions.');
+    if (this.config.session?.enabled)
+      this.sessionClient = new BrowserSessionClient(this.config, browser);
   }
 
   getState(): ConnectionState {
+    if (this.sessionClient) return this.sessionClient.getState();
     return this.state;
   }
 
   async connect(signal?: AbortSignal): Promise<void> {
+    if (this.sessionClient) return this.sessionClient.connect(signal);
     if (this.state === 'ready') return;
     if (this.connectPromise) return this.connectPromise;
 
@@ -232,6 +253,15 @@ export class DevToolsClient {
   }
 
   async ping(signal?: AbortSignal): Promise<boolean> {
+    if (this.sessionClient) {
+      try {
+        await this.sessionClient.control('status', signal);
+        return true;
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        return false;
+      }
+    }
     if (this.state !== 'ready' || !this.client) return false;
 
     const generation = this.generation;
@@ -248,6 +278,7 @@ export class DevToolsClient {
   }
 
   async ensureReady(signal?: AbortSignal): Promise<void> {
+    if (this.sessionClient) return this.sessionClient.connect(signal);
     if (this.explicitlyClosed) throw new Error('Client not connected');
 
     if (this.state === 'ready') {
@@ -259,6 +290,7 @@ export class DevToolsClient {
   }
 
   async listAllTools(signal?: AbortSignal): Promise<Tool[]> {
+    if (this.sessionClient) return this.sessionClient.listAllTools(signal);
     await this.ensureReady(signal);
     const client = this.client;
     if (!client) throw new Error('Client not connected');
@@ -290,6 +322,7 @@ export class DevToolsClient {
     }>;
     isError?: boolean;
   }> {
+    if (this.sessionClient) return this.sessionClient.callTool(name, args, signal);
     await this.ensureReady(signal);
     const client = this.client;
     if (!client) throw new Error('Client not connected');
@@ -320,6 +353,7 @@ export class DevToolsClient {
   }
 
   async close(): Promise<void> {
+    if (this.sessionClient) return this.sessionClient.close();
     if (this.explicitlyClosed) return;
     this.explicitlyClosed = true;
     this.state = 'closing';
@@ -332,13 +366,26 @@ export class DevToolsClient {
       this.state = 'disconnected';
     }
   }
+
+  async sessionControl(action: SessionAction, signal?: AbortSignal): Promise<object> {
+    if (!this.sessionClient) throw new Error('Browser session retention is not configured.');
+    return this.sessionClient.control(action, signal);
+  }
 }
 
 /** Read pi-browser-use settings, including the project layer only when trusted. */
 function loadConfigFromFile(options?: PiSettingsOptions): BrowserUseConfig {
-  return loadPiSettings<BrowserUseConfig>('pi-browser-use', {
+  const config = loadPiSettings<BrowserUseConfig>('pi-browser-use', {
     ...options,
   });
+  // Management credentials and executable adapters are host/user configuration only.
+  const session = loadPiSettings<BrowserUseConfig>('pi-browser-use', {
+    ...options,
+    projectTrusted: false,
+  }).session;
+  if (session) config.session = session;
+  else delete config.session;
+  return config;
 }
 
 /** Convert upstream MCP result into pi-agent content, applying text post-processing. */
@@ -713,6 +760,42 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
   }
 
   registerToolGroupSurface();
+  function registerSessionSurface() {
+    pi.registerTool({
+      name: 'browser_session',
+      label: 'Browser session',
+      description: SESSION_DESCRIPTION,
+      promptSnippet: 'Retain a live browser only when a human handoff needs the original page.',
+      promptGuidelines: [
+        'Retain before ending a turn that waits for browser interaction; release when complete.',
+      ],
+      parameters: sessionParameters,
+      prepareLoadout: () =>
+        config?.session?.enabled ? undefined : { hiddenDeclarations: ['browser_session'] },
+      async execute(_id, params, signal) {
+        return sessionToolResult(
+          params.action,
+          config?.session?.enabled && client
+            ? (action, callerSignal) => client!.sessionControl(action, callerSignal)
+            : undefined,
+          signal,
+        );
+      },
+    });
+    pi.registerCommand('browser-session', {
+      description: 'Retain, inspect, or release the current browser session',
+      async handler(args, ctx) {
+        const result = await sessionToolResult(
+          args.trim() || 'status',
+          config?.session?.enabled && client
+            ? (action, signal) => client!.sessionControl(action, signal)
+            : undefined,
+          ctx.signal,
+        );
+        ctx.ui.notify(result.content[0]!.text, result.isError ? 'warning' : 'info');
+      },
+    });
+  }
 
   pi.on('session_start', async (_event, ctx) => {
     config = resolveConfig(
@@ -722,7 +805,9 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
       }),
     );
     prepareBrowserProfile(config);
-    client = new DevToolsClient(config);
+    client = new DevToolsClient(config, readBrowserSessionBinding(config));
+    if (config.session?.enabled) registerSessionSurface();
+    else pi.setActiveTools(pi.getActiveTools().filter((name) => name !== 'browser_session'));
     upstreamToolNames.clear();
     toolGroups = new Map();
     await registerUpstreamTools();

@@ -6,6 +6,76 @@ import {
   resolveConfig,
 } from '../config.js';
 
+describe('browser session configuration', () => {
+  it('rejects provider instance IDs in persistent settings', () => {
+    const session = JSON.parse(
+      JSON.stringify({
+        enabled: true,
+        key: 'existing-cloud',
+        retentionMs: 1000,
+        backend: {
+          sessionId: 'supplied-id',
+          release: { url: 'http://localhost/stop/{sessionId}' },
+        },
+      }),
+    );
+    expect(() => resolveConfig({ session, wsEndpoint: 'ws://localhost:9222' })).toThrow(
+      'runtime binding',
+    );
+  });
+
+  it('defaults to direct connections and ignores disabled session options', () => {
+    expect(resolveConfig().session).toBeUndefined();
+    expect(resolveConfig({ session: { enabled: false }, slim: true }).slim).toBe(true);
+  });
+
+  it('requires a stable identity and bounded retention only when enabled', () => {
+    expect(() => resolveConfig({ session: { enabled: true, key: '', retentionMs: 1000 } })).toThrow(
+      'session.key',
+    );
+    for (const retentionMs of [0, -1, NaN, Infinity, 86_400_001]) {
+      expect(() =>
+        resolveConfig({ session: { enabled: true, key: 'conversation', retentionMs } }),
+      ).toThrow('retentionMs');
+    }
+    expect(
+      resolveConfig({ session: { enabled: true, key: 'conversation', retentionMs: 1000 } }).session
+        ?.enabled,
+    ).toBe(true);
+  });
+
+  it('rejects browser sessions when upstream page identity cannot be checked', () => {
+    expect(() =>
+      resolveConfig({
+        session: { enabled: true, key: 'conversation', retentionMs: 1000 },
+        slim: true,
+      }),
+    ).toThrow('page ID routing');
+  });
+  it('prevents extraArgs from bypassing the retained browser connection', () => {
+    for (const argument of [
+      '--ws-endpoint=wss://example.com',
+      '--browserUrl=https://example.com',
+      '--auto-connect',
+      '-u=http://example.test:9222',
+      '-w=ws://example.test/launch',
+      '-wws://example.test/launch',
+      '-e=/another/chrome',
+      '--experimental-page-id-routing=false',
+      '--no-experimental-page-id-routing',
+      '--slim',
+      '--no-ws-endpoint',
+    ]) {
+      expect(() =>
+        resolveConfig({
+          session: { enabled: true, key: 'conversation', retentionMs: 1000 },
+          extraArgs: [argument],
+        }),
+      ).toThrow('extraArgs');
+    }
+  });
+});
+
 describe('buildSubprocessEnv', () => {
   afterEach(() => vi.unstubAllGlobals());
 

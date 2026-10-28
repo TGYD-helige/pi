@@ -178,11 +178,34 @@ jobs:
     steps:
       - run: echo "Secret-backed Integration approved"
 
-  # Stage B: single-prompt LLM smoke test against the custom deepseek
-  # provider. This job runs in parallel with the Stage C matrix after the
-  # shared approval gate, so the LLM round-trip doesn't gate per-extension
-  # verification.
-  # ──────────────────────────────────────────────────────────────────────
+  # Deterministic Browserless Cloud lifecycle checks, without model calls.
+  browserless-session-e2e:
+    name: Browserless Cloud session lifecycle
+    needs: [detect-extension-matrix, integration-approval]
+    if: contains(needs.detect-extension-matrix.outputs.matrix, 'pi-browser-use')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ env.INTEGRATION_CHECKOUT_REPOSITORY }}
+          ref: ${{ env.INTEGRATION_CHECKOUT_REF }}
+          persist-credentials: false
+          allow-unsafe-pr-checkout: ${{ github.event_name == 'pull_request_target' }}
+      - name: Setup browser test build environment
+        uses: ./.github/actions/setup-pi-build
+        with:
+          build: 'false'
+      - name: Build browser extension
+        run: |
+          pnpm --filter @amaster.ai/pi-shared build
+          pnpm --filter @amaster.ai/pi-browser-use build
+      - name: Verify Browserless Cloud live sessions
+        env:
+          BROWSERLESS_TOKEN: ${{ secrets.BROWSERLESS_TOKEN }}
+        run: node .github/scripts/browserless-session-e2e.mjs
+
+  # Stage B runs in parallel with the browser lifecycle and Stage C jobs.
   pi-runtime-smoke:
     name: Pi runtime smoke (Stage B)
     needs: integration-approval

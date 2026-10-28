@@ -16,6 +16,8 @@ import { createFetchVisionCaller, handleAnalyzeScreenshot } from './analyze-scre
 import { type BrowserUseConfig, resolveConfig } from './config.js';
 import { DevToolsClient } from './index.js';
 import { prepareBrowserProfile } from './profile.js';
+import { readBrowserSessionBinding } from './session-backend.js';
+import { SESSION_DESCRIPTION, sessionParameters, sessionToolResult } from './session-control.js';
 import {
   augmentToolDescription,
   extractTextContent,
@@ -100,7 +102,7 @@ export function parseArgs(argv: string[]): BrowserUseConfig {
 async function main(): Promise<void> {
   const config = resolveConfig(parseArgs(process.argv.slice(2)));
   prepareBrowserProfile(config);
-  const client = new DevToolsClient(config);
+  const client = new DevToolsClient(config, readBrowserSessionBinding(config));
   await client.connect();
 
   const toolNameMap = new Map<string, string>();
@@ -114,6 +116,14 @@ async function main(): Promise<void> {
     const upstreamTools = await client.listAllTools(extra.signal);
     const tools = [];
     toolNameMap.clear();
+    if (config.session?.enabled) {
+      toolNameMap.set('browser_session', 'session');
+      tools.push({
+        name: 'browser_session',
+        description: SESSION_DESCRIPTION,
+        inputSchema: sessionParameters,
+      });
+    }
 
     for (const tool of upstreamTools) {
       if (EXCLUDED_TOOLS.has(tool.name)) continue;
@@ -161,6 +171,15 @@ async function main(): Promise<void> {
     const originalName = toolNameMap.get(name);
     if (!originalName) throw new Error(`Unknown tool: ${name}`);
 
+    if (originalName === 'session')
+      return sessionToolResult(
+        args?.action,
+        config.session?.enabled
+          ? (action, signal) => client.sessionControl(action, signal)
+          : undefined,
+        extra.signal,
+      );
+
     if (originalName === 'analyze_screenshot' && config.visionModel) {
       const callVision = createFetchVisionCaller(config.visionModel);
       return await handleAnalyzeScreenshot(client, callVision, args ?? {}, extra.signal);
@@ -184,10 +203,22 @@ async function main(): Promise<void> {
   });
 
   const transport = new StdioServerTransport();
+  server.onclose = () => {
+    void client
+      .close()
+      .catch(() => console.error('[pi-browser-use] browser session disconnect failed'));
+  };
+  for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    process.once(signal, () => {
+      void client.close().finally(() => process.exit());
+    });
+  }
   await server.connect(transport);
 }
 
-main().catch((error) => {
-  console.error(`[pi-browser-use] Fatal error: ${error}`);
+main().catch(() => {
+  console.error(
+    '[pi-browser-use] startup failed; check browser configuration and runtime availability',
+  );
   process.exit(1);
 });

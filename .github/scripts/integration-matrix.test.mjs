@@ -27,9 +27,10 @@ test('requires environment approval for secret-backed fork integration', async (
   assert.match(workflow, /integration-approval:\s+name: Approve secret-backed Integration/);
   assert.match(workflow, /pi-runtime-smoke:[\s\S]*?needs: integration-approval/);
   assert.match(workflow, /extension-tool-matrix:[\s\S]*?needs: \[detect-extension-matrix, integration-approval\]/);
-  assert.equal(workflow.match(/allow-unsafe-pr-checkout:/g)?.length, 5);
-  assert.equal(workflow.match(/persist-credentials: false/g)?.length, 5);
-  assert.equal(workflow.match(/ref: \$\{\{ env\.INTEGRATION_CHECKOUT_REF \}\}/g)?.length, 5);
+  assert.equal(workflow.match(/allow-unsafe-pr-checkout:/g)?.length, 6);
+  assert.equal(workflow.match(/persist-credentials: false/g)?.length, 6);
+  assert.equal(workflow.match(/ref: \$\{\{ env\.INTEGRATION_CHECKOUT_REF \}\}/g)?.length, 6);
+  assert.match(workflow, /browserless-session-e2e:[\s\S]*?needs: \[detect-extension-matrix, integration-approval\]/);
   assert.doesNotMatch(workflow, /integration-approved/);
   assert.match(workflow, /PI_INTEGRATION_BASE_URL and PI_INTEGRATION_API_KEY are required for Stage B/);
   assert.match(workflow, /PI_INTEGRATION_\* secrets are required for Stage C/);
@@ -164,6 +165,12 @@ test('selects every scenario for a changed extension', () => {
     ['pi-image-gen', undefined],
     ['pi-image-gen', 'seedream-lite'],
   ]);
+});
+
+test('routes browser lifecycle scripts and shared fixtures to browser integration', () => {
+  for (const file of ['.github/scripts/browserless-session-e2e.mjs', 'tests/browser-session-e2e.mjs', 'tests/fixtures/browser-session-harness.mjs']) {
+    assert.ok(selectIntegrationMatrix([file]).some(({ extension }) => extension === 'pi-browser-use'), file);
+  }
 });
 
 test('selects a separate Langfuse hierarchy scenario', () => {
