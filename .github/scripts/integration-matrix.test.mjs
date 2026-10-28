@@ -173,6 +173,30 @@ test('routes browser lifecycle scripts and shared fixtures to browser integratio
   }
 });
 
+test('checks screenshot tool results even when stderr diagnostics are mixed into the event stream', async () => {
+  const workflow = await readFile(new URL('../workflows/integration.yml', import.meta.url), 'utf8');
+  const assertion = workflow.slice(workflow.indexOf('          # Screenshot scenario:'), workflow.indexOf('          # pi-goal:'))
+    .replaceAll('${{ matrix.assert_visual_analysis }}', 'true');
+  const result = { type: 'tool_execution_end', toolName: 'browser_analyze_screenshot', isError: false,
+    result: { content: [{ type: 'text', text: 'Large heading: VISUAL CHECK 7391\nDominant background: bright blue (#1E50E0)' }] } };
+  for (const text of [result.result.content[0].text, 'Heading: VISUAL CHECK 7391 only', 'Background: blue only']) {
+    const event = { ...result, result: { content: [{ type: 'text', text }] } };
+    const events = JSON.stringify(event);
+    const run = () => execFileSync('bash', ['-c', assertion], { encoding: 'utf8', stdio: 'pipe', env: {
+      PATH: process.env.PATH, output: `[pi-telemetry] export completed\n${events}\nstartup diagnostic`, EVENTS_JSON: events,
+    } });
+    if (text === result.result.content[0].text) assert.doesNotThrow(run);
+    else assert.throws(run);
+  }
+});
+
+test('uses configured Seedream defaults without inventing unsupported size or model parameters', () => {
+  const scenario = fullMatrix.find(({ extension, provider }) => extension === 'pi-image-gen' && provider === 'seedream-lite');
+  assert.match(scenario.prompt, /omit.*size.*model/i);
+  assert.equal(scenario.assert_tool, 'image_generate');
+  assert.equal(scenario.assert_tool_count, 1);
+});
+
 test('selects a separate Langfuse hierarchy scenario', () => {
   const selected = selectIntegrationMatrix(['packages/pi-telemetry/src/extension.ts']);
   assert.deepEqual(

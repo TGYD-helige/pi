@@ -1155,7 +1155,7 @@ jobs:
                   and ((.text // "") | test("blue|#1457d9"; "i"))
                 )
               )
-            ' <<<"$output" >/dev/null; then
+            ' <<<"$EVENTS_JSON" >/dev/null; then
               echo "::error::browser_analyze_screenshot did not identify the fixture heading and color"
               exit 1
             fi
