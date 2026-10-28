@@ -193,8 +193,10 @@ export const fullMatrix = [
     extension: 'pi-browser-use',
     scenario: 'screenshot',
     prompt: 'Use browser_list_pages first to get the current pageId. Pass that pageId to browser_evaluate_script with this function parameter exactly: () => { document.title = "Screenshot fixture"; document.documentElement.style.cssText = "height:100%;margin:0"; document.body.style.cssText = "height:100%;margin:0;display:grid;place-items:center;background:#1457d9;color:white;font-family:sans-serif"; const heading = document.createElement("h1"); heading.textContent = "VISUAL CHECK 7391"; heading.style.cssText = "font-size:64px;letter-spacing:.08em"; document.body.replaceChildren(heading); return document.title; }. Then pass the same pageId to browser_analyze_screenshot exactly once and ask it to report the exact large heading plus the dominant background color. Return its visual findings.',
-    assert_pattern: '(VISUAL CHECK 7391.*(blue|#1457d9)|(blue|#1457d9).*VISUAL CHECK 7391)',
-    assert_visual_analysis: true,
+    assert_pattern: '(VISUAL CHECK 7391|blue|#1457d9)',
+    assert_tool: 'browser_analyze_screenshot',
+    assert_tool_pattern: '(VISUAL CHECK 7391[\\s\\S]*(blue|#1457d9)|(blue|#1457d9)[\\s\\S]*VISUAL CHECK 7391)',
+    assert_tool_count: 1,
   },
 ];
 

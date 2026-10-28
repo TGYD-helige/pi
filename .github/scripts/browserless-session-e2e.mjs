@@ -72,9 +72,10 @@ export async function runBrowserlessSessionE2E(endpoint) {
     await configure({ enabled: false });
     assert.equal((await runner.run('disabled')).state, 'direct');
     console.log('PASS: disabled sessions expose no retention tools or commands.');
-  } catch {
+  } catch (error) {
     // Child/MCP stderr may contain provider connection information. Never upload or print it.
-    throw Error(`Browserless Cloud lifecycle E2E failed during ${phase}.`);
+    const diagnostic = error?.browserSessionDiagnostic ? ` ${error.message}` : '';
+    throw Error(`Browserless Cloud lifecycle E2E failed during ${phase}.${diagnostic}`);
   } finally {
     runner.stop();
     if (sessionEnabled) {

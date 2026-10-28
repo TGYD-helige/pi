@@ -63,7 +63,18 @@ export function createBrowserSessionRunner(root, configPath, url) {
             );
             state = record.ended ?? 'live';
           } catch {}
-          reject(Error(`Browser session client ${phase} failed (${code}, ${state}): ${stderr}`));
+          const marker = stderr
+            .split('\n')
+            .findLast((line) => line.startsWith('PI_BROWSER_SESSION_TEST_ERROR '));
+          let diagnostic;
+          try {
+            diagnostic = JSON.parse(marker.slice('PI_BROWSER_SESSION_TEST_ERROR '.length));
+          } catch {}
+          const failure = Error(
+            `Browser session client ${phase} failed (${code}, ${state}): ${diagnostic ? JSON.stringify(diagnostic) : 'no safe child diagnostic'}`,
+          );
+          failure.browserSessionDiagnostic = true;
+          reject(failure);
         } else {
           try {
             resolve(stdout.trim() ? JSON.parse(stdout) : {});

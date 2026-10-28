@@ -1034,10 +1034,9 @@ jobs:
           [ -z "$HAYSTACK" ] && HAYSTACK="$output"
           # pi-goal is asserted below by the goal engine's diagnostics and a
           # filesystem check, not by grepping assistant text (which would be
-          # self-matched by prompt/thinking echo). Visual analysis cases are
-          # asserted against the tool result below so line wrapping in the final
-          # assistant answer cannot cause a false negative.
-          if [ "${{ matrix.extension }}" != "pi-goal" ] && [ "${{ matrix.assert_visual_analysis }}" != "true" ]; then
+          # self-matched by prompt/thinking echo). Tool-specific checks below
+          # additionally verify the successful tool result itself.
+          if [ "${{ matrix.extension }}" != "pi-goal" ]; then
             if ! grep -qiE '${{ matrix.assert_pattern }}' <<<"$HAYSTACK"; then
               echo "::error::Expected pattern '${{ matrix.assert_pattern }}' not found in ${{ matrix.extension }} output"
               exit 1
@@ -1134,31 +1133,6 @@ jobs:
               IMAGE_COUNT=$((IMAGE_COUNT + 1))
             done <<<"$IMAGE_PATHS"
             echo "✓ Verified $IMAGE_COUNT image file(s) from the image_generate result."
-          fi
-
-          # Screenshot scenario: browser_analyze_screenshot captures the image
-          # internally, sends it to the configured DeepSeek vision model, and returns
-          # text to the DeepSeek main model. Assert the vision tool itself found
-          # both deterministic markers.
-          if [ "${{ matrix.assert_visual_analysis }}" = "true" ]; then
-            if ! command -v jq >/dev/null 2>&1; then
-              echo "::error::jq is required for the visual analysis assertion"
-              exit 1
-            fi
-            if ! jq -e -s '
-              any(.[];
-                .type == "tool_execution_end"
-                and .toolName == "browser_analyze_screenshot"
-                and any((.result.content // [])[]?;
-                  .type == "text"
-                  and ((.text // "") | test("VISUAL CHECK 7391"; "i"))
-                  and ((.text // "") | test("blue|#1457d9"; "i"))
-                )
-              )
-            ' <<<"$EVENTS_JSON" >/dev/null; then
-              echo "::error::browser_analyze_screenshot did not identify the fixture heading and color"
-              exit 1
-            fi
           fi
 
           # pi-goal: prove the goal engine actually ran and the task completed.

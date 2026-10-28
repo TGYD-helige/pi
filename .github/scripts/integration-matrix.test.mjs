@@ -175,13 +175,17 @@ test('routes browser lifecycle scripts and shared fixtures to browser integratio
 
 test('checks screenshot tool results even when stderr diagnostics are mixed into the event stream', async () => {
   const workflow = await readFile(new URL('../workflows/integration.yml', import.meta.url), 'utf8');
-  const assertion = workflow.slice(workflow.indexOf('          # Screenshot scenario:'), workflow.indexOf('          # pi-goal:'))
-    .replaceAll('${{ matrix.assert_visual_analysis }}', 'true');
+  const scenario = fullMatrix.find(({ extension, scenario }) => extension === 'pi-browser-use' && scenario === 'screenshot');
+  assert.equal(scenario.assert_tool, 'browser_analyze_screenshot');
+  assert.equal(scenario.assert_tool_count, 1);
+  assert.notEqual(scenario.assert_visual_analysis, true);
+  const assertion = workflow.slice(workflow.indexOf('          # Cases with assert_tool'), workflow.indexOf('          # Image generation may'))
+    .replace(/\$\{\{ matrix\.(assert_tool_pattern \|\| matrix\.assert_pattern|assert_tool_count \|\| 0|assert_tool_count|allow_tool_error|assert_tool) \}\}/g, (_, key) => String(scenario[key.split(' || ')[0]] ?? ''));
   const result = { type: 'tool_execution_end', toolName: 'browser_analyze_screenshot', isError: false,
     result: { content: [{ type: 'text', text: 'Large heading: VISUAL CHECK 7391\nDominant background: bright blue (#1E50E0)' }] } };
   for (const text of [result.result.content[0].text, 'Heading: VISUAL CHECK 7391 only', 'Background: blue only']) {
     const event = { ...result, result: { content: [{ type: 'text', text }] } };
-    const events = JSON.stringify(event);
+    const events = JSON.stringify({ type: 'tool_execution_start', toolName: scenario.assert_tool }) + '\n' + JSON.stringify(event);
     const run = () => execFileSync('bash', ['-c', assertion], { encoding: 'utf8', stdio: 'pipe', env: {
       PATH: process.env.PATH, output: `[pi-telemetry] export completed\n${events}\nstartup diagnostic`, EVENTS_JSON: events,
     } });
