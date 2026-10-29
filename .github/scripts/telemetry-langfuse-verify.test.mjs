@@ -98,6 +98,21 @@ const baseArgs = {
   sleep: () => Promise.resolve(),
 };
 
+it('accepts a canonical response model while checking the requested model alias', () => {
+  const trace = fullTrace().map((row) => row.type === 'GENERATION' ? {
+    ...row,
+    providedModelName: 'deepseek-v4.1-flash',
+    metadata: { ...row.metadata, requestedModel: 'deepseek-v4-flash' },
+  } : row);
+  assert.deepEqual(evaluateTrace(trace, CODEWORD), []);
+  const wrongRequest = trace.map((row) => row.type === 'GENERATION' ? {
+    ...row, metadata: { ...row.metadata, requestedModel: 'unrelated-model' },
+  } : row);
+  assert.ok(evaluateTrace(wrongRequest, CODEWORD).some((problem) => problem.includes('wrong model')));
+  const missingResponse = trace.map((row) => row.type === 'GENERATION' ? { ...row, providedModelName: '' } : row);
+  assert.ok(evaluateTrace(missingResponse, CODEWORD).some((problem) => problem.includes('returned model')));
+});
+
 it('empty LANGFUSE_BASE_URL falls back to the cloud default', async () => {
   const fetchImpl = fakeFetch(() => ({ data: fullTrace(), meta: {} }));
   const result = await runVerification({ ...baseArgs, fetchImpl });
