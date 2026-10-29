@@ -8,9 +8,69 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { DevToolsClient } from '../index.js';
 import { BrowserAcquisitionError, type ManagedBrowser } from '../session-backend.js';
+import * as connectionModule from '../session-connection.js';
 import { serveBrowserSession } from '../session-server.js';
 
 describe('browser session shutdown', () => {
+  it.each([
+    'close',
+    'connect',
+  ] as const)('closes failed replacement tunnels before retrying after %s fails', async (failure) => {
+    const token = randomBytes(32).toString('hex');
+    const owner = randomBytes(32).toString('hex');
+    const createConnection = connectionModule.createBrowserConnection;
+    const tunnels: Awaited<ReturnType<typeof createConnection>>[] = [];
+    const factory = vi
+      .spyOn(connectionModule, 'createBrowserConnection')
+      .mockImplementation(async (...args) => {
+        const tunnel = await createConnection(...args);
+        tunnels.push(tunnel);
+        return tunnel;
+      });
+    const connect = vi.spyOn(DevToolsClient.prototype, 'connect').mockResolvedValue();
+    const close = vi.spyOn(DevToolsClient.prototype, 'close').mockResolvedValue();
+    const call = vi.spyOn(DevToolsClient.prototype, 'callTool').mockResolvedValue({ content: [] });
+    const server = await serveBrowserSession(
+      {
+        wsEndpoint: 'ws://127.0.0.1:1',
+        sessionMode: 'existing',
+        session: { enabled: true, key: 'replacement', retentionMs: 1000 },
+      },
+      token,
+    );
+    if (failure === 'close')
+      close
+        .mockRejectedValueOnce(new Error('close failed'))
+        .mockRejectedValueOnce(new Error('close failed again'));
+    else
+      connect
+        .mockRejectedValueOnce(new Error('connect failed'))
+        .mockRejectedValueOnce(new Error('connect failed again'));
+    const request = (action: string, args: object = {}) =>
+      fetch(`http://127.0.0.1:${server.port}/`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action, owner, ...args }),
+      });
+    try {
+      await request('attach');
+      for (let attempt = 0; attempt < 2; attempt++) {
+        expect((await request('call', { name: 'list_pages', args: {} })).status).toBe(409);
+        expect(tunnels.every((tunnel) => !tunnel.alive)).toBe(true);
+      }
+      expect((await request('call', { name: 'list_pages', args: {} })).status).toBe(200);
+      await server.stop();
+      expect(tunnels).toHaveLength(3);
+      expect(tunnels.every((tunnel) => !tunnel.alive)).toBe(true);
+    } finally {
+      await server.stop();
+      for (const tunnel of tunnels) await tunnel.close();
+      factory.mockRestore();
+      connect.mockRestore();
+      close.mockRestore();
+      call.mockRestore();
+    }
+  });
   it('ends a detached local session when its live marker disappears before retention expires', async () => {
     const token = randomBytes(32).toString('hex');
     const owner = randomBytes(32).toString('hex');

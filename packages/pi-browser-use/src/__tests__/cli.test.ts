@@ -1,8 +1,12 @@
 // biome-ignore-all lint/suspicious/noTemplateCurlyInString: Fixtures intentionally contain literal environment placeholders.
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, test, vi } from 'vitest';
+import { resolveConfig } from '../config.js';
+import { BrowserSessionClient } from '../session-client.js';
 
 const mockPrepareBrowserProfile = vi.hoisted(() => vi.fn());
 const { mockHandlers, mockCliCall } = vi.hoisted(() => ({
@@ -104,8 +108,90 @@ describe('cli startup', () => {
 });
 
 describe('parseArgs', () => {
+  let directory: string;
+  beforeEach(() => {
+    directory = mkdtempSync(join(tmpdir(), 'pi-browser-use-cli-'));
+  });
+  afterEach(() => {
+    rmSync(directory, { recursive: true, force: true });
+    vi.unstubAllEnvs();
+  });
+
+  it.each([
+    'wsEndpoint',
+    'browserUrl',
+  ] as const)('rejects malformed %s values with a safe field-specific diagnostic', (field) => {
+    const file = join(directory, 'config.json');
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      for (const value of [true, false, null, 42, {}, []]) {
+        writeFileSync(file, JSON.stringify({ [field]: value }));
+        try {
+          parseArgs(['--config', file]);
+          throw new Error('Invalid value was accepted');
+        } catch (error) {
+          expect(error).toBeInstanceOf(Error);
+          expect((error as Error).message).toBe(`${field} must be a string.`);
+          reportStartupFailure(error);
+          expect(log).toHaveBeenLastCalledWith(
+            expect.stringContaining(`${field} must be a string.`),
+          );
+        }
+      }
+      expect(() => parseArgs([field === 'wsEndpoint' ? '--ws-endpoint' : '--browser-url'])).toThrow(
+        `${field} must be a string.`,
+      );
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it.each([
+    ' { "Authorization" : "Bearer token" } ',
+    '{"Authorization":"Bearer \\u0074oken"}',
+  ])('resumes a pre-upgrade session without changing header spelling: %s', async (headers) => {
+    vi.stubEnv('PI_AGENT_HOME', directory);
+    const original = {
+      wsEndpoint: 'ws://127.0.0.1:1',
+      wsHeaders: headers,
+      session: { enabled: true as const, key: 'upgrade', retentionMs: 1000 },
+    };
+    const previous = resolveConfig(original);
+    const file = join(directory, 'config.json');
+    writeFileSync(file, JSON.stringify(original));
+    const worker = createServer((request, response) => {
+      request.resume();
+      response.setHeader('Content-Type', 'application/json');
+      response.end('{"result":{"state":"active"}}');
+    });
+    await new Promise<void>((resolve) => worker.listen(0, '127.0.0.1', resolve));
+    const address = worker.address();
+    if (!address || typeof address === 'string') throw new Error('Missing worker address');
+    const record = join(
+      directory,
+      'browser-sessions',
+      createHash('sha256').update('upgrade').digest('hex'),
+    );
+    mkdirSync(record, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(record, 'session.json'),
+      JSON.stringify({
+        token: 'a'.repeat(64),
+        configHash: createHash('sha256').update(JSON.stringify(previous)).digest('hex'),
+        port: address.port,
+      }),
+      { mode: 0o600 },
+    );
+    const client = new BrowserSessionClient(resolveConfig(parseArgs(['--config', file])));
+    try {
+      await expect(client.control('status')).resolves.toEqual({ state: 'active' });
+      expect(parseArgs(['--config', file]).wsHeaders).toBe(headers);
+    } finally {
+      await client.close();
+      await new Promise<void>((resolve) => worker.close(() => resolve()));
+    }
+  });
   it('resolves environment-backed connection and management authentication without expanding request bodies', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'pi-browser-use-cli-auth-'));
     vi.stubEnv('PI_BROWSER_CLI_TEST_TOKEN', 'token-"quoted"\\safe');
     vi.stubEnv('PI_BROWSER_CLI_TEST_URL', 'wss://browser.example/cdp?token=private');
     vi.stubEnv('PI_BROWSER_CLI_TEST_MANAGEMENT', 'https://browser.example/session');
@@ -114,36 +200,31 @@ describe('parseArgs', () => {
       headers: { Authorization: 'Bearer ${PI_BROWSER_CLI_TEST_TOKEN}' },
       body: { expression: '${PI_BROWSER_CLI_TEST_TOKEN}', price: '$PRICE' },
     };
-    try {
-      const file = join(directory, 'config.json');
-      writeFileSync(
-        file,
-        JSON.stringify({
-          wsEndpoint: '${PI_BROWSER_CLI_TEST_URL}',
-          wsHeaders: JSON.stringify({ Authorization: 'Bearer ${PI_BROWSER_CLI_TEST_TOKEN}' }),
-          session: {
-            enabled: true,
-            key: 'auth',
-            retentionMs: 1000,
-            backend: { create: request, status: request, retain: request, release: request },
-          },
-        }),
-      );
-      const config = parseArgs(['--config', file]);
-      expect(config.wsEndpoint).toBe('wss://browser.example/cdp?token=private');
-      expect(JSON.parse(config.wsHeaders!)).toEqual({
+    const file = join(directory, 'config.json');
+    writeFileSync(
+      file,
+      JSON.stringify({
+        wsEndpoint: '${PI_BROWSER_CLI_TEST_URL}',
+        wsHeaders: JSON.stringify({ Authorization: 'Bearer ${PI_BROWSER_CLI_TEST_TOKEN}' }),
+        session: {
+          enabled: true,
+          key: 'auth',
+          retentionMs: 1000,
+          backend: { create: request, status: request, retain: request, release: request },
+        },
+      }),
+    );
+    const config = parseArgs(['--config', file]);
+    expect(config.wsEndpoint).toBe('wss://browser.example/cdp?token=private');
+    expect(JSON.parse(config.wsHeaders!)).toEqual({
+      Authorization: 'Bearer token-"quoted"\\safe',
+    });
+    for (const action of ['create', 'status', 'retain', 'release'] as const) {
+      expect(config.session?.backend?.[action]?.url).toBe('https://browser.example/session');
+      expect(config.session?.backend?.[action]?.headers).toEqual({
         Authorization: 'Bearer token-"quoted"\\safe',
       });
-      for (const action of ['create', 'status', 'retain', 'release'] as const) {
-        expect(config.session?.backend?.[action]?.url).toBe('https://browser.example/session');
-        expect(config.session?.backend?.[action]?.headers).toEqual({
-          Authorization: 'Bearer token-"quoted"\\safe',
-        });
-        expect(config.session?.backend?.[action]?.body).toEqual(request.body);
-      }
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-      vi.unstubAllEnvs();
+      expect(config.session?.backend?.[action]?.body).toEqual(request.body);
     }
   });
   it.each([
@@ -151,49 +232,36 @@ describe('parseArgs', () => {
     '',
   ])('fails before connection when authentication environment is missing or empty: %s', (value) => {
     vi.stubEnv('PI_BROWSER_CLI_MISSING_TOKEN', value);
-    try {
-      expect(() =>
-        parseArgs(['--ws-headers={"Authorization":"Bearer ${PI_BROWSER_CLI_MISSING_TOKEN}"}']),
-      ).toThrow('PI_BROWSER_CLI_MISSING_TOKEN is missing or empty');
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    expect(() =>
+      parseArgs(['--ws-headers={"Authorization":"Bearer ${PI_BROWSER_CLI_MISSING_TOKEN}"}']),
+    ).toThrow('PI_BROWSER_CLI_MISSING_TOKEN is missing or empty');
   });
   it('rejects injected header newlines without exposing the resolved credential', () => {
     vi.stubEnv('PI_BROWSER_CLI_TEST_TOKEN', 'private-token\r\nX-Injected: value');
-    try {
-      expect(() =>
-        parseArgs(['--ws-headers={"Authorization":"${PI_BROWSER_CLI_TEST_TOKEN}"}']),
-      ).toThrow('valid HTTP header');
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    expect(() =>
+      parseArgs(['--ws-headers={"Authorization":"${PI_BROWSER_CLI_TEST_TOKEN}"}']),
+    ).toThrow('valid HTTP header');
   });
   it('does not resolve unused backend credentials when sessions are disabled', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'pi-browser-use-cli-disabled-auth-'));
-    try {
-      const file = join(directory, 'config.json');
-      writeFileSync(
-        file,
-        JSON.stringify({
-          session: {
-            enabled: false,
-            backend: {
-              release: {
-                url: 'https://browser.example',
-                headers: { Authorization: '${PI_BROWSER_CLI_MISSING_TOKEN}' },
-              },
+    const file = join(directory, 'config.json');
+    writeFileSync(
+      file,
+      JSON.stringify({
+        session: {
+          enabled: false,
+          backend: {
+            release: {
+              url: 'https://browser.example',
+              headers: { Authorization: '${PI_BROWSER_CLI_MISSING_TOKEN}' },
             },
           },
-        }),
-      );
-      expect(parseArgs(['--config', file]).session?.enabled).toBe(false);
-      expect(
-        parseArgs(['--ws-headers={"Authorization":"$PI_BROWSER_CLI_MISSING_TOKEN"}']).wsHeaders,
-      ).toContain('$PI_BROWSER_CLI_MISSING_TOKEN');
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
+        },
+      }),
+    );
+    expect(parseArgs(['--config', file]).session?.enabled).toBe(false);
+    expect(
+      parseArgs(['--ws-headers={"Authorization":"$PI_BROWSER_CLI_MISSING_TOKEN"}']).wsHeaders,
+    ).toContain('$PI_BROWSER_CLI_MISSING_TOKEN');
   });
   it('collects repeated URL pattern flags into arrays', () => {
     const config = parseArgs([
@@ -260,8 +328,7 @@ describe('parseArgs', () => {
   });
 
   test('--config reads JSON file', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cli-test-'));
-    const configPath = join(dir, 'settings.json');
+    const configPath = join(directory, 'settings.json');
     writeFileSync(
       configPath,
       JSON.stringify({
@@ -272,39 +339,25 @@ describe('parseArgs', () => {
       }),
     );
 
-    try {
-      const config = parseArgs(['--config', configPath]);
-      expect(config.headless).toBe(true);
-      expect(config.channel).toBe('canary');
-    } finally {
-      rmSync(dir, { recursive: true });
-    }
+    const config = parseArgs(['--config', configPath]);
+    expect(config.headless).toBe(true);
+    expect(config.channel).toBe('canary');
   });
 
   test('--config reads top-level keys when no pi-browser-use section', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cli-test-'));
-    const configPath = join(dir, 'settings.json');
+    const configPath = join(directory, 'settings.json');
     writeFileSync(configPath, JSON.stringify({ headless: true, viewport: '1280x720' }));
 
-    try {
-      const config = parseArgs(['--config', configPath]);
-      expect(config.headless).toBe(true);
-      expect(config.viewport).toBe('1280x720');
-    } finally {
-      rmSync(dir, { recursive: true });
-    }
+    const config = parseArgs(['--config', configPath]);
+    expect(config.headless).toBe(true);
+    expect(config.viewport).toBe('1280x720');
   });
 
   test('--config can be combined with other flags (flags override)', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cli-test-'));
-    const configPath = join(dir, 'settings.json');
+    const configPath = join(directory, 'settings.json');
     writeFileSync(configPath, JSON.stringify({ 'pi-browser-use': { channel: 'canary' } }));
 
-    try {
-      const config = parseArgs(['--config', configPath, '--channel=stable']);
-      expect(config.channel).toBe('stable');
-    } finally {
-      rmSync(dir, { recursive: true });
-    }
+    const config = parseArgs(['--config', configPath, '--channel=stable']);
+    expect(config.channel).toBe('stable');
   });
 });

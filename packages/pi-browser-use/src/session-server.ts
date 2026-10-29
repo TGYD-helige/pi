@@ -252,8 +252,7 @@ export async function serveBrowserSession(
     if (!browserUsed) {
       const resolved = managed?.connection ?? directConfig;
       if (resolved.wsEndpoint || resolved.browserUrl) {
-        connection = await createBrowserConnection(resolved, signal);
-        await client.close();
+        const nextConnection = await createBrowserConnection(resolved, signal);
         const {
           wsEndpoint: _ws,
           browserUrl: _url,
@@ -266,12 +265,25 @@ export async function serveBrowserSession(
           ...localConfig
         } = directConfig;
         // Provider connections must not inherit local-launch/discovery flags.
-        client = new DevToolsClient({
-          ...localConfig,
-          sessionMode: 'existing',
-          wsEndpoint: connection.wsEndpoint,
-        });
-        await client.connect(signal);
+        let nextClient: DevToolsClient | undefined;
+        try {
+          await client.close();
+          nextClient = new DevToolsClient({
+            ...localConfig,
+            sessionMode: 'existing',
+            wsEndpoint: nextConnection.wsEndpoint,
+          });
+          await nextClient.connect(signal);
+          client = nextClient;
+          connection = nextConnection;
+        } catch (error) {
+          try {
+            await nextClient?.close();
+          } finally {
+            await nextConnection.close();
+          }
+          throw error;
+        }
       }
     }
     browserUsed = true;

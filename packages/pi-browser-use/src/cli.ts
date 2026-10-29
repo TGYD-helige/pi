@@ -115,12 +115,16 @@ export function parseArgs(argv: string[]): BrowserUseConfig {
   }
 
   for (const field of ['wsEndpoint', 'browserUrl'] as const) {
+    if (config[field] !== undefined && typeof config[field] !== 'string')
+      throw new Error(`${field} must be a string.`);
     if (config[field]) config[field] = resolveAuthentication(config[field]);
   }
-  if (config.wsHeaders)
-    config.wsHeaders = JSON.stringify(
-      resolveAuthenticationHeaders(parseBrowserHeaders(config.wsHeaders)),
-    );
+  if (config.wsHeaders) {
+    const headers = parseBrowserHeaders(config.wsHeaders);
+    const resolved = resolveAuthenticationHeaders(headers);
+    if (Object.entries(headers).some(([name, value]) => resolved[name] !== value))
+      config.wsHeaders = JSON.stringify(resolved);
+  }
   const backend = config.session?.enabled ? config.session.backend : undefined;
   for (const request of [backend?.create, backend?.status, backend?.retain, backend?.release]) {
     if (!request) continue;
@@ -248,8 +252,12 @@ export function reportStartupFailure(error: unknown) {
     )
       ? `, ${code}`
       : '';
+  const fieldDiagnostic =
+    error instanceof Error && /^(wsEndpoint|browserUrl) must be a string\.$/.test(error.message)
+      ? ` ${error.message}`
+      : '';
   console.error(
-    `[pi-browser-use] startup failed (${name}${safeCode}); check browser configuration and runtime availability`,
+    `[pi-browser-use] startup failed (${name}${safeCode}); check browser configuration and runtime availability${fieldDiagnostic}`,
   );
 }
 
