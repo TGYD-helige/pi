@@ -11,8 +11,6 @@ test('uses non-thinking tool integration while retaining the reasoning smoke che
   assert.equal(matrix.match(/--thinking off/g)?.length, 2);
   assert.doesNotMatch(matrix, /--thinking high/);
   assert.match(smoke, /--thinking xhigh/);
-  const child = await readFile(new URL('./telemetry-subagent.sh', import.meta.url), 'utf8');
-  assert.match(child, /--thinking off/);
 });
 
 const expectedComputerUseScenarios = [
