@@ -209,6 +209,8 @@ jobs:
         run: |
           pnpm --filter @amaster.ai/pi-shared build
           pnpm --filter @amaster.ai/pi-browser-use build
+      - name: Verify installed MCP output contract and local live sessions
+        run: node tests/browser-session-e2e.mjs
       - name: Verify Browserless Cloud live sessions
         env:
           BROWSERLESS_TOKEN: ${{ secrets.BROWSERLESS_TOKEN }}

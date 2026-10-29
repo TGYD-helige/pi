@@ -120,6 +120,7 @@ export async function serveBrowserSession(
   let owner: string | undefined;
   let ownerPid: number | undefined;
   let attachedOnce = false;
+  let resumed = false;
   const startedAt = Date.now();
   let lastSeen = Date.now();
   let expiresAt: number | undefined;
@@ -151,8 +152,11 @@ export async function serveBrowserSession(
   }
 
   function status() {
+    let state = browserUsed ? 'active' : 'idle';
+    if (expiresAt) state = expiresAt > Date.now() ? 'retained' : 'expired';
     return {
-      state: expiresAt && expiresAt > Date.now() ? 'retained' : browserUsed ? 'active' : 'idle',
+      state,
+      resumed,
       strategy: 'held-connection',
       ownership: adapter
         ? 'adapter'
@@ -163,9 +167,7 @@ export async function serveBrowserSession(
           ? 'external'
           : 'local',
       providerDeadlineKnown: hardDeadline !== undefined,
-      ...(expiresAt && expiresAt > Date.now()
-        ? { expiresAt: new Date(expiresAt).toISOString() }
-        : {}),
+      ...(expiresAt ? { expiresAt: new Date(expiresAt).toISOString() } : {}),
       ...(hardDeadline ? { providerExpiresAt: new Date(hardDeadline).toISOString() } : {}),
     };
   }
@@ -336,6 +338,7 @@ export async function serveBrowserSession(
       if (expiresAt) await verify(signal);
       owner = input.owner;
       ownerPid = input.pid as number | undefined;
+      resumed = attachedOnce && expiresAt !== undefined;
       attachedOnce = true;
       lastSeen = Date.now();
       // Keep the deadline until explicit release, including a subsequent client crash.
@@ -494,6 +497,16 @@ export async function serveBrowserSession(
         if (connection && !connection.alive) await stop('lost');
         else if (expired || (!owner && (!expiresAt || Date.now() >= expiresAt)))
           await stop(expired || expiresAt ? 'expired' : 'closed');
+        else if (!owner && marker && !connection) {
+          try {
+            await bounded(
+              verify(AbortSignal.any([lifetime.signal, AbortSignal.timeout(5000)])),
+              5000,
+            );
+          } catch {
+            await stop('lost');
+          }
+        }
       })
       .catch(() => console.error('[pi-browser-use] browser session expiry cleanup failed'))
       .finally(() => {

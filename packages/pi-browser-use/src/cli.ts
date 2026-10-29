@@ -57,14 +57,14 @@ export function parseArgs(argv: string[]): BrowserUseConfig {
       let raw: string;
       try {
         raw = readFileSync(configPath, 'utf-8');
-      } catch {
-        throw new Error(`Cannot read config file: ${configPath}`);
+      } catch (cause) {
+        throw new Error(`Cannot read config file: ${configPath}`, { cause });
       }
       let parsed: Record<string, unknown>;
       try {
         parsed = JSON.parse(raw) as Record<string, unknown>;
-      } catch {
-        throw new Error(`Invalid JSON in config file: ${configPath}`);
+      } catch (cause) {
+        throw new Error(`Invalid JSON in config file: ${configPath}`, { cause });
       }
       const section = (parsed['pi-browser-use'] ?? parsed) as BrowserUseConfig;
       Object.assign(config, section);
@@ -216,9 +216,26 @@ async function main(): Promise<void> {
   await server.connect(transport);
 }
 
-main().catch(() => {
+export function reportStartupFailure(error: unknown) {
+  const cause = error instanceof Error && error.cause instanceof Error ? error.cause : error;
+  const name =
+    cause instanceof Error && /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(cause.name)
+      ? cause.name
+      : 'UnknownError';
+  const code = cause instanceof Error ? (cause as NodeJS.ErrnoException).code : undefined;
+  const safeCode =
+    typeof code === 'string' &&
+    /^(?:ENOENT|EACCES|EPERM|ECONNREFUSED|ETIMEDOUT|MODULE_NOT_FOUND|ERR_MODULE_NOT_FOUND|ERR_UNKNOWN_FILE_EXTENSION)$/.test(
+      code,
+    )
+      ? `, ${code}`
+      : '';
   console.error(
-    '[pi-browser-use] startup failed; check browser configuration and runtime availability',
+    `[pi-browser-use] startup failed (${name}${safeCode}); check browser configuration and runtime availability`,
   );
+}
+
+main().catch((error) => {
+  reportStartupFailure(error);
   process.exit(1);
 });

@@ -6,7 +6,11 @@ import {
   type PiSettingsOptions,
 } from '@amaster.ai/pi-shared/settings';
 import type { TextContent as AiTextContent } from '@earendil-works/pi-ai';
-import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
+import {
+  type ExtensionAPI,
+  type ExtensionContext,
+  truncateHead,
+} from '@earendil-works/pi-coding-agent';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { Type } from 'typebox';
@@ -421,6 +425,19 @@ function toToolContent(
         content.push({ type: 'text', text: item.text });
       }
     }
+  }
+
+  const text = content
+    .filter((item) => item.type === 'text')
+    .map((item) => item.text)
+    .join('\n');
+  const bounded = truncateHead(text, { maxBytes: 50 * 1024 - 128, maxLines: 1998 });
+  if (bounded.truncated) {
+    content.length = 0;
+    content.push({
+      type: 'text',
+      text: `${bounded.content}\n[Browser output truncated; request a smaller result.]`,
+    });
   }
 
   if (result.content) {

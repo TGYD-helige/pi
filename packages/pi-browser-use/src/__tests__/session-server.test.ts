@@ -11,6 +11,96 @@ import { BrowserAcquisitionError, type ManagedBrowser } from '../session-backend
 import { serveBrowserSession } from '../session-server.js';
 
 describe('browser session shutdown', () => {
+  it('ends a detached local session when its live marker disappears before retention expires', async () => {
+    const token = randomBytes(32).toString('hex');
+    const owner = randomBytes(32).toString('hex');
+    let alive = true;
+    const call = vi
+      .spyOn(DevToolsClient.prototype, 'callTool')
+      .mockImplementation(async (name, args) => ({
+        content: [
+          {
+            type: 'text',
+            text: name === 'new_page' ? `2: ${args.url}` : `\`\`\`json\n${alive}\n\`\`\``,
+          },
+        ],
+      }));
+    const outcomes: string[] = [];
+    const server = await serveBrowserSession(
+      {
+        headless: true,
+        sessionMode: 'isolated',
+        session: { enabled: true, key: 'local-lost', retentionMs: 30000 },
+      },
+      token,
+      {
+        onStop: async (reason) => {
+          outcomes.push(reason);
+        },
+      },
+    );
+    const request = (action: string, args: object = {}) =>
+      fetch(`http://127.0.0.1:${server.port}/`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action, owner, ...args }),
+      });
+    try {
+      await request('attach');
+      await request('call', { name: 'list_pages', args: {} });
+      expect((await request('retain')).status).toBe(200);
+      await request('detach');
+      alive = false;
+      await vi.waitFor(() => expect(outcomes).toEqual(['lost']), { timeout: 2500 });
+    } finally {
+      await server.stop();
+      call.mockRestore();
+    }
+  });
+
+  it('reports reattachment and expired retention accurately before the sweep', async () => {
+    const token = randomBytes(32).toString('hex');
+    const owner = randomBytes(32).toString('hex');
+    const call = vi
+      .spyOn(DevToolsClient.prototype, 'callTool')
+      .mockImplementation(async (name, args) => ({
+        content: [
+          { type: 'text', text: name === 'new_page' ? `2: ${args.url}` : '```json\ntrue\n```' },
+        ],
+      }));
+    const server = await serveBrowserSession(
+      {
+        headless: true,
+        sessionMode: 'isolated',
+        session: { enabled: true, key: 'local-status', retentionMs: 30000 },
+      },
+      token,
+    );
+    const request = (action: string, args: object = {}) =>
+      fetch(`http://127.0.0.1:${server.port}/`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action, owner, ...args }),
+      });
+    let now: ReturnType<typeof vi.spyOn> | undefined;
+    try {
+      await request('attach');
+      await request('call', { name: 'list_pages', args: {} });
+      const retained = (await (await request('retain')).json()) as {
+        result: { expiresAt: string };
+      };
+      await request('detach');
+      expect(await (await request('attach')).json()).toMatchObject({ result: { resumed: true } });
+      now = vi.spyOn(Date, 'now').mockReturnValue(Date.parse(retained.result.expiresAt) + 1);
+      expect(await (await request('status')).json()).toMatchObject({
+        result: { state: 'expired', expiresAt: retained.result.expiresAt, resumed: true },
+      });
+    } finally {
+      now?.mockRestore();
+      await server.stop();
+      call.mockRestore();
+    }
+  });
   it.each([
     '9999999999999',
     Number.MAX_VALUE,

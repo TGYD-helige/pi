@@ -39,6 +39,32 @@ describe('BrowserSessionClient', () => {
     vi.mocked(spawn).mockClear();
   });
 
+  it.each([
+    'expired',
+    'lost',
+  ])('reports a %s browser without starting a replacement', async (ended) => {
+    const config = { session: { enabled: true as const, key: 'ended-browser', retentionMs: 1000 } };
+    const directory = join(
+      root,
+      'browser-sessions',
+      createHash('sha256').update(config.session.key).digest('hex'),
+    );
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await writeFile(
+      join(directory, 'session.json'),
+      JSON.stringify({
+        token: 'a'.repeat(64),
+        configHash: createHash('sha256').update(JSON.stringify(config)).digest('hex'),
+        ended,
+      }),
+      { mode: 0o600 },
+    );
+    await expect(new BrowserSessionClient(config).connect()).rejects.toThrow(
+      ended === 'expired' ? 'expired' : 'lost',
+    );
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it('removes its initial record and preserves cancellation before spawning a worker', async () => {
     const controller = new AbortController();
     const reason = new Error('cancelled before worker creation');

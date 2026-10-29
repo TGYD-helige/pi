@@ -28,9 +28,30 @@ vi.mock('@modelcontextprotocol/sdk/server/stdio.js', () => ({
   StdioServerTransport: class {},
 }));
 
-const { parseArgs } = await import('../cli.js');
+const { parseArgs, reportStartupFailure } = await import('../cli.js');
 
 describe('cli startup', () => {
+  it('logs diagnostic categories without raw errors or credentials', () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      reportStartupFailure(
+        Object.assign(new Error('wss://secret.test/?token=private'), {
+          code: 'ERR_MODULE_NOT_FOUND',
+        }),
+      );
+      expect(log).toHaveBeenLastCalledWith(
+        '[pi-browser-use] startup failed (Error, ERR_MODULE_NOT_FOUND); check browser configuration and runtime availability',
+      );
+      const diagnostic = new SyntaxError('private JSON contents');
+      reportStartupFailure(new Error('private config path', { cause: diagnostic }));
+      expect(log).toHaveBeenLastCalledWith(
+        '[pi-browser-use] startup failed (SyntaxError); check browser configuration and runtime availability',
+      );
+      expect(JSON.stringify(log.mock.calls)).not.toContain('private');
+    } finally {
+      log.mockRestore();
+    }
+  });
   it('prepares the resolved browser profile before starting the client', () => {
     expect(mockPrepareBrowserProfile).toHaveBeenCalledWith(
       expect.objectContaining({ sessionMode: 'persistent', userDataDir: expect.any(String) }),

@@ -158,6 +158,10 @@ export class BrowserSessionClient {
           throw new BrowserSessionError(
             'Browser session configuration changed. Release the old session or use a new key.',
           );
+        if (this.record.ended === 'expired' || this.record.ended === 'lost')
+          throw new BrowserSessionError(
+            `The original browser session ${this.record.ended === 'expired' ? 'expired' : 'was lost'}. No replacement was created. Release it explicitly or use a new key.`,
+          );
         if (this.record.ended || !this.record.port)
           throw new BrowserSessionError(
             'The previous browser session ended or startup was uncertain. Inspect the provider, then explicitly release it or use a new key.',

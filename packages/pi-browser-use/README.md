@@ -70,6 +70,8 @@ Or with a config file:
 npx @amaster.ai/pi-browser-use --config path/to/config.json
 ```
 
+Standalone `--config` reads literal JSON; it does not expand `${ENV_VAR}` or `$ENV_VAR`. The host must resolve credentials before supplying this file and protect it with owner-only permissions. Environment interpolation in the examples below applies to extension settings in the global or agent configuration directory, not standalone JSON or project settings. Startup logs report safe error classes/system codes without printing config contents, credentials, or raw exceptions.
+
 ## Configuration
 
 ### Session Mode
@@ -148,9 +150,15 @@ Disabling sessions on a later Pi session removes the tool from the model's avail
 
 `retentionMs` is an upper bound, not a minimum paid period. Ordinary disconnects have no retention window. Repeated `retain` calls within one handoff do not renew its deadline. The process detects exited local clients and tracks client liveness independently; heartbeats never extend retention. Provider hard timeouts, explicit termination/revocation, and host/container shutdown still apply. `providerDeadlineKnown: false` means the backend did not supply its hard expiry; the displayed retention expiry is only the local upper bound.
 
+Status includes `resumed: true` after a client attaches to a previously retained session. A retention deadline that has elapsed is reported as `state: "expired"`, including its original `expiresAt`, even before background cleanup runs. While a local handoff has no attached client, the worker probes its marker tab every second with a five-second timeout and stops if identity verification fails.
+
+There is no general provider-capability discovery API in this version. All enabled sessions support bounded local retain/status/release; repeated retain does not renew a handoff. An adapter may additionally implement `describe` (provider liveness/deadline) and `retain` (provider retention), while `release` is required. These operations cannot recover after the holding worker exits or promise an extension beyond provider limits. Capability negotiation remains follow-up work in [#273](https://github.com/TGYD-helige/pi/issues/273).
+
 Holding CDP does not override provider inactivity or WebSocket idle limits. Configure the provider's supported lifetime options when acquiring the browser, and report any shorter effective deadline through the adapter. Use structured browser connection settings; `extraArgs` cannot override them (including short aliases), enable slim mode, or change page ID routing when live sessions are enabled.
 
 Remote sessions use a single-use WebSocket tunnel: losing the original CDP connection cannot silently redial a provider launch URL and allocate a replacement browser. Local launch/discovery uses a small blank marker tab to verify live browser identity; leave that tab open during retention. No website page is refreshed to perform this check. Expired/lost sessions report failure instead of presenting a new browser/profile as restored live state.
+
+Marker verification depends on the installed MCP runtime's `new_page` page-list text and `evaluate_script` JSON result format. The lifecycle CI job runs the real local-Chrome E2E against that installed runtime before Cloud checks, covering marker creation, cross-process continuation, and verification. Incompatible output fails retention explicitly instead of treating a fresh browser as recovery.
 
 Resume credentials are kept in owner-only session directories and 0600 records under `resolveHome()/browser-sessions/`, outside model-visible results. This is same-host, same-runtime-home continuation across Pi/MCP clients, not recovery after the independent session process, container, or machine disappears. Failed or ambiguous provider creation/cleanup retains a protected record and blocks automatic recreation. Inspect the provider and that record before manually resetting an uncertain session. An expired/lost session whose cleanup completed can be reset with `DevToolsClient.sessionControl('release')` or a new logical key.
 

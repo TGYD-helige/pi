@@ -65,6 +65,8 @@ try {
     );
     assert.equal(first.state, 'retained');
     assert.equal(second.state, 'active');
+    assert.equal(first.resumed, false);
+    assert.equal(second.resumed, true);
     console.log(
       `PASS: ${name}: independent Pi clients retain the original page and polling loop, then release it.`,
     );

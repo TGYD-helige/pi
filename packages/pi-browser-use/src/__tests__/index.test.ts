@@ -206,6 +206,37 @@ describe('browserUseExtension', () => {
   });
 
   describe('config loading', () => {
+    it.each([
+      '界'.repeat(30000),
+      'row\n'.repeat(3000),
+    ])('bounds session-mode tool text before returning it to Pi', async (large) => {
+      vi.spyOn(BrowserSessionClient.prototype, 'connect').mockResolvedValue();
+      vi.spyOn(BrowserSessionClient.prototype, 'listAllTools').mockImplementation(mockListAllTools);
+      vi.spyOn(BrowserSessionClient.prototype, 'close').mockResolvedValue();
+      vi.spyOn(BrowserSessionClient.prototype, 'callTool').mockResolvedValue({
+        content: [
+          { type: 'text', text: large },
+          { type: 'text', text: large },
+        ],
+      });
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        JSON.stringify({
+          'pi-browser-use': {
+            session: { enabled: true, key: 'bounded-output', retentionMs: 1000 },
+          },
+        }),
+      );
+      await startExtension();
+      const result = await registeredTools
+        .get('browser_take_snapshot')!
+        .execute('test', {}, undefined, undefined, {});
+      const output = result as { content: Array<{ text?: string }>; details?: unknown };
+      const text = output.content.map((item) => item.text ?? '').join('\n');
+      expect(Buffer.byteLength(text)).toBeLessThanOrEqual(50 * 1024);
+      expect(text.split('\n').length).toBeLessThanOrEqual(2000);
+      expect(output.details).toBeUndefined();
+      await shutdownExtension();
+    });
     test('uses defaults when config.json is missing', async () => {
       await startExtension();
       // Should still register tools — no crash
