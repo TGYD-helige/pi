@@ -12,7 +12,7 @@ fi
 exec pi \
   --provider deepseek-integration \
   --model "${PI_INTEGRATION_MODEL:-deepseek-v4-flash}" \
-  --thinking off \
+  --thinking minimal \
   --no-session \
   --no-context-files \
   --tools bash \
