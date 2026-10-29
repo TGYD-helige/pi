@@ -4,6 +4,11 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  mem0ai@3.3.1:
+    hash: 819f19ead65fe3079ef3a8601ae1359c873545b22f033ecd5aaa93d57d811d8e
+    path: patches/mem0ai@3.3.1.patch
+
 importers:
 
   .:
@@ -255,7 +260,7 @@ importers:
         version: 1.18.0(typescript@5.9.3)
       mem0ai:
         specifier: 3.3.1
-        version: 3.3.1(@azure/identity@4.13.1)(@azure/search-documents@12.2.0)(@cloudflare/workers-types@4.20260611.1)(@google/genai@1.52.0(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@3.25.76)))(@langchain/core@1.1.48(@opentelemetry/api@1.9.1)(@opentelemetry/sdk-trace-base@2.10.0(@opentelemetry/api@1.9.1))(openai@7.19.0(@aws-sdk/credential-provider-node@3.972.88)(@smithy/signature-v4@5.7.4)(undici@8.10.2)(ws@8.22.0)(zod@3.25.76))(ws@8.22.0))(@qdrant/js-client-rest@1.18.0(typescript@5.9.3))(@supabase/supabase-js@2.108.1)(@types/pg@8.11.0)(better-sqlite3@12.10.0)(cloudflare@4.5.0)(compromise@14.15.1)(groq-sdk@0.3.0)(mongodb@7.5.0(socks@2.8.9))(natural@8.1.1(@opentelemetry/api@1.9.1)(socks@2.8.9))(ollama@0.5.18)(pg@8.21.0)(ws@8.22.0)
+        version: 3.3.1(patch_hash=819f19ead65fe3079ef3a8601ae1359c873545b22f033ecd5aaa93d57d811d8e)(@azure/identity@4.13.1)(@azure/search-documents@12.2.0)(@cloudflare/workers-types@4.20260611.1)(@google/genai@1.52.0(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@3.25.76)))(@langchain/core@1.1.48(@opentelemetry/api@1.9.1)(@opentelemetry/sdk-trace-base@2.10.0(@opentelemetry/api@1.9.1))(openai@7.19.0(@aws-sdk/credential-provider-node@3.972.88)(@smithy/signature-v4@5.7.4)(undici@8.10.2)(ws@8.22.0)(zod@3.25.76))(ws@8.22.0))(@qdrant/js-client-rest@1.18.0(typescript@5.9.3))(@supabase/supabase-js@2.108.1)(@types/pg@8.11.0)(better-sqlite3@12.10.0)(cloudflare@4.5.0)(compromise@14.15.1)(groq-sdk@0.3.0)(mongodb@7.5.0(socks@2.8.9))(natural@8.1.1(@opentelemetry/api@1.9.1)(socks@2.8.9))(ollama@0.5.18)(pg@8.21.0)(ws@8.22.0)
     devDependencies:
       '@earendil-works/pi-ai':
         specifier: 1.4.0
@@ -6804,7 +6809,7 @@ snapshots:
 
   media-typer@1.1.0: {}
 
-  mem0ai@3.3.1(@azure/identity@4.13.1)(@azure/search-documents@12.2.0)(@cloudflare/workers-types@4.20260611.1)(@google/genai@1.52.0(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@3.25.76)))(@langchain/core@1.1.48(@opentelemetry/api@1.9.1)(@opentelemetry/sdk-trace-base@2.10.0(@opentelemetry/api@1.9.1))(openai@7.19.0(@aws-sdk/credential-provider-node@3.972.88)(@smithy/signature-v4@5.7.4)(undici@8.10.2)(ws@8.22.0)(zod@3.25.76))(ws@8.22.0))(@qdrant/js-client-rest@1.18.0(typescript@5.9.3))(@supabase/supabase-js@2.108.1)(@types/pg@8.11.0)(better-sqlite3@12.10.0)(cloudflare@4.5.0)(compromise@14.15.1)(groq-sdk@0.3.0)(mongodb@7.5.0(socks@2.8.9))(natural@8.1.1(@opentelemetry/api@1.9.1)(socks@2.8.9))(ollama@0.5.18)(pg@8.21.0)(ws@8.22.0):
+  mem0ai@3.3.1(patch_hash=819f19ead65fe3079ef3a8601ae1359c873545b22f033ecd5aaa93d57d811d8e)(@azure/identity@4.13.1)(@azure/search-documents@12.2.0)(@cloudflare/workers-types@4.20260611.1)(@google/genai@1.52.0(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@3.25.76)))(@langchain/core@1.1.48(@opentelemetry/api@1.9.1)(@opentelemetry/sdk-trace-base@2.10.0(@opentelemetry/api@1.9.1))(openai@7.19.0(@aws-sdk/credential-provider-node@3.972.88)(@smithy/signature-v4@5.7.4)(undici@8.10.2)(ws@8.22.0)(zod@3.25.76))(ws@8.22.0))(@qdrant/js-client-rest@1.18.0(typescript@5.9.3))(@supabase/supabase-js@2.108.1)(@types/pg@8.11.0)(better-sqlite3@12.10.0)(cloudflare@4.5.0)(compromise@14.15.1)(groq-sdk@0.3.0)(mongodb@7.5.0(socks@2.8.9))(natural@8.1.1(@opentelemetry/api@1.9.1)(socks@2.8.9))(ollama@0.5.18)(pg@8.21.0)(ws@8.22.0):
     dependencies:
       '@cloudflare/workers-types': 4.20260611.1
       axios: 1.20.0

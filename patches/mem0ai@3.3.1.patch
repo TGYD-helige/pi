@@ -1,0 +1,116 @@
+diff --git a/dist/oss/index.d.mts b/dist/oss/index.d.mts
+index 84b7b170435ecafa4a73972946072b45cd0abb10..30af19548c8f2a8c6b02fcf3d59d2105ea36e638 100644
+--- a/dist/oss/index.d.mts
++++ b/dist/oss/index.d.mts
+@@ -68,6 +68,7 @@ interface HistoryStoreConfig {
+     };
+ }
+ interface LLMConfig {
++    extraBody?: Record<string, unknown>;
+     provider?: string;
+     baseURL?: string;
+     vllmBaseURL?: string;
+@@ -908,6 +909,7 @@ interface LLM {
+ }
+ 
+ declare class OpenAILLM implements LLM {
++    private extraBody;
+     private openai;
+     private model;
+     constructor(config: LLMConfig);
+diff --git a/dist/oss/index.d.ts b/dist/oss/index.d.ts
+index 84b7b170435ecafa4a73972946072b45cd0abb10..30af19548c8f2a8c6b02fcf3d59d2105ea36e638 100644
+--- a/dist/oss/index.d.ts
++++ b/dist/oss/index.d.ts
+@@ -68,6 +68,7 @@ interface HistoryStoreConfig {
+     };
+ }
+ interface LLMConfig {
++    extraBody?: Record<string, unknown>;
+     provider?: string;
+     baseURL?: string;
+     vllmBaseURL?: string;
+@@ -908,6 +909,7 @@ interface LLM {
+ }
+ 
+ declare class OpenAILLM implements LLM {
++    private extraBody;
+     private openai;
+     private model;
+     constructor(config: LLMConfig);
+diff --git a/dist/oss/index.js b/dist/oss/index.js
+index 38b7d1a33e18b97b9d810087a99cab78c4a2c71f..cc89e7e3f22415ef5765e7114a7c47b5f23126ad 100644
+--- a/dist/oss/index.js
++++ b/dist/oss/index.js
+@@ -541,15 +541,25 @@ var TogetherEmbedder = class extends OpenAIEmbedder {
+ var import_openai4 = __toESM(require("openai"));
+ var OpenAILLM = class {
+   constructor(config) {
++    if (config.extraBody !== void 0) {
++      if (config.extraBody === null || typeof config.extraBody !== "object" || Array.isArray(config.extraBody)) {
++        throw new Error("OpenAILLM extraBody must be an object");
++      }
++      if (["model", "messages", "tools", "tool_choice", "response_format", "stream"].some((key) => Object.prototype.hasOwnProperty.call(config.extraBody, key))) {
++        throw new Error("OpenAILLM extraBody cannot override reserved request fields");
++      }
++    }
+     this.openai = new import_openai4.default({
+       apiKey: config.apiKey,
+       baseURL: config.baseURL,
+       ...config.timeout != null && { timeout: config.timeout }
+     });
+     this.model = config.model || "gpt-5-mini";
++    this.extraBody = config.extraBody;
+   }
+   async generateResponse(messages, responseFormat, tools) {
+     const completion = await this.openai.chat.completions.create({
++      ...this.extraBody,
+       messages: messages.map((msg) => {
+         const role = msg.role;
+         return {
+@@ -576,6 +586,7 @@ var OpenAILLM = class {
+   }
+   async generateChat(messages) {
+     const completion = await this.openai.chat.completions.create({
++      ...this.extraBody,
+       messages: messages.map((msg) => {
+         const role = msg.role;
+         return {
+diff --git a/dist/oss/index.mjs b/dist/oss/index.mjs
+index a226d3a001d79403261643fb3135dfbc6ad9ee96..88a000c5fe4b5f96863b5320622dc915b02279c9 100644
+--- a/dist/oss/index.mjs
++++ b/dist/oss/index.mjs
+@@ -447,15 +447,25 @@ var TogetherEmbedder = class extends OpenAIEmbedder {
+ import OpenAI3 from "openai";
+ var OpenAILLM = class {
+   constructor(config) {
++    if (config.extraBody !== void 0) {
++      if (config.extraBody === null || typeof config.extraBody !== "object" || Array.isArray(config.extraBody)) {
++        throw new Error("OpenAILLM extraBody must be an object");
++      }
++      if (["model", "messages", "tools", "tool_choice", "response_format", "stream"].some((key) => Object.prototype.hasOwnProperty.call(config.extraBody, key))) {
++        throw new Error("OpenAILLM extraBody cannot override reserved request fields");
++      }
++    }
+     this.openai = new OpenAI3({
+       apiKey: config.apiKey,
+       baseURL: config.baseURL,
+       ...config.timeout != null && { timeout: config.timeout }
+     });
+     this.model = config.model || "gpt-5-mini";
++    this.extraBody = config.extraBody;
+   }
+   async generateResponse(messages, responseFormat, tools) {
+     const completion = await this.openai.chat.completions.create({
++      ...this.extraBody,
+       messages: messages.map((msg) => {
+         const role = msg.role;
+         return {
+@@ -482,6 +492,7 @@ var OpenAILLM = class {
+   }
+   async generateChat(messages) {
+     const completion = await this.openai.chat.completions.create({
++      ...this.extraBody,
+       messages: messages.map((msg) => {
+         const role = msg.role;
+         return {

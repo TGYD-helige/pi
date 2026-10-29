@@ -40,7 +40,13 @@ export interface Mem0ExtensionConfig {
     /** Additional Mem0 fact-extraction instructions. */
     customInstructions?: string;
     embedder?: { provider: string; config?: Record<string, unknown> };
-    llm?: { provider: string; config?: Record<string, unknown> };
+    llm?: {
+      provider: string;
+      config?: Record<string, unknown> & {
+        /** Extra OpenAI request-body fields; requires the workspace's mem0ai patch. */
+        extraBody?: Record<string, unknown>;
+      };
+    };
     vectorStore?: { provider: string; config?: Record<string, unknown> };
     /** Mem0 OSS history store config. Default: sqlite at <home>/memories/mem0-history.db */
     historyStore?: { provider: string; config?: Record<string, unknown> };

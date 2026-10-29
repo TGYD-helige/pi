@@ -36,6 +36,9 @@
       "koffi",
       "prisma",
       "protobufjs"
-    ]
+    ],
+    "patchedDependencies": {
+      "mem0ai@3.3.1": "patches/mem0ai@3.3.1.patch"
+    }
   }
 }
