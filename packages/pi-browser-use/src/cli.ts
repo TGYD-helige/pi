@@ -17,6 +17,7 @@ import { type BrowserUseConfig, resolveConfig } from './config.js';
 import { DevToolsClient } from './index.js';
 import { prepareBrowserProfile } from './profile.js';
 import { readBrowserSessionBinding } from './session-backend.js';
+import { parseBrowserHeaders } from './session-connection.js';
 import { SESSION_DESCRIPTION, sessionParameters, sessionToolResult } from './session-control.js';
 import { augmentToolDescription } from './tool-augment.js';
 import { toToolContent } from './tool-result.js';
@@ -41,6 +42,26 @@ const ARRAY_CONFIG_KEYS = new Set([
   'envAllowlist',
   'envBlocklist',
 ]);
+
+function resolveAuthentication(value: string): string {
+  return value.replace(/\$\{([A-Z_][A-Z0-9_]*)\}/g, (_match, name: string) => {
+    const credential = process.env[name];
+    if (!credential)
+      throw Object.assign(
+        new Error(`Browser authentication environment variable ${name} is missing or empty.`),
+        { name: 'BrowserAuthEnvironmentError' },
+      );
+    return credential;
+  });
+}
+
+function resolveAuthenticationHeaders(headers: Record<string, string>) {
+  const parsed = parseBrowserHeaders(JSON.stringify(headers));
+  const resolved = Object.fromEntries(
+    Object.entries(parsed).map(([name, value]) => [name, resolveAuthentication(value)]),
+  );
+  return parseBrowserHeaders(JSON.stringify(resolved));
+}
 
 export function parseArgs(argv: string[]): BrowserUseConfig {
   const config: BrowserUseConfig = {};
@@ -93,6 +114,19 @@ export function parseArgs(argv: string[]): BrowserUseConfig {
     i++;
   }
 
+  for (const field of ['wsEndpoint', 'browserUrl'] as const) {
+    if (config[field]) config[field] = resolveAuthentication(config[field]);
+  }
+  if (config.wsHeaders)
+    config.wsHeaders = JSON.stringify(
+      resolveAuthenticationHeaders(parseBrowserHeaders(config.wsHeaders)),
+    );
+  const backend = config.session?.enabled ? config.session.backend : undefined;
+  for (const request of [backend?.create, backend?.status, backend?.retain, backend?.release]) {
+    if (!request) continue;
+    if (typeof request.url === 'string') request.url = resolveAuthentication(request.url);
+    if (request.headers) request.headers = resolveAuthenticationHeaders(request.headers);
+  }
   return config;
 }
 

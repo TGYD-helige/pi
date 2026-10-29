@@ -1,3 +1,4 @@
+// biome-ignore-all lint/suspicious/noTemplateCurlyInString: Fixtures intentionally contain literal environment placeholders.
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -103,6 +104,97 @@ describe('cli startup', () => {
 });
 
 describe('parseArgs', () => {
+  it('resolves environment-backed connection and management authentication without expanding request bodies', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'pi-browser-use-cli-auth-'));
+    vi.stubEnv('PI_BROWSER_CLI_TEST_TOKEN', 'token-"quoted"\\safe');
+    vi.stubEnv('PI_BROWSER_CLI_TEST_URL', 'wss://browser.example/cdp?token=private');
+    vi.stubEnv('PI_BROWSER_CLI_TEST_MANAGEMENT', 'https://browser.example/session');
+    const request = {
+      url: '${PI_BROWSER_CLI_TEST_MANAGEMENT}',
+      headers: { Authorization: 'Bearer ${PI_BROWSER_CLI_TEST_TOKEN}' },
+      body: { expression: '${PI_BROWSER_CLI_TEST_TOKEN}', price: '$PRICE' },
+    };
+    try {
+      const file = join(directory, 'config.json');
+      writeFileSync(
+        file,
+        JSON.stringify({
+          wsEndpoint: '${PI_BROWSER_CLI_TEST_URL}',
+          wsHeaders: JSON.stringify({ Authorization: 'Bearer ${PI_BROWSER_CLI_TEST_TOKEN}' }),
+          session: {
+            enabled: true,
+            key: 'auth',
+            retentionMs: 1000,
+            backend: { create: request, status: request, retain: request, release: request },
+          },
+        }),
+      );
+      const config = parseArgs(['--config', file]);
+      expect(config.wsEndpoint).toBe('wss://browser.example/cdp?token=private');
+      expect(JSON.parse(config.wsHeaders!)).toEqual({
+        Authorization: 'Bearer token-"quoted"\\safe',
+      });
+      for (const action of ['create', 'status', 'retain', 'release'] as const) {
+        expect(config.session?.backend?.[action]?.url).toBe('https://browser.example/session');
+        expect(config.session?.backend?.[action]?.headers).toEqual({
+          Authorization: 'Bearer token-"quoted"\\safe',
+        });
+        expect(config.session?.backend?.[action]?.body).toEqual(request.body);
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+      vi.unstubAllEnvs();
+    }
+  });
+  it.each([
+    undefined,
+    '',
+  ])('fails before connection when authentication environment is missing or empty: %s', (value) => {
+    vi.stubEnv('PI_BROWSER_CLI_MISSING_TOKEN', value);
+    try {
+      expect(() =>
+        parseArgs(['--ws-headers={"Authorization":"Bearer ${PI_BROWSER_CLI_MISSING_TOKEN}"}']),
+      ).toThrow('PI_BROWSER_CLI_MISSING_TOKEN is missing or empty');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+  it('rejects injected header newlines without exposing the resolved credential', () => {
+    vi.stubEnv('PI_BROWSER_CLI_TEST_TOKEN', 'private-token\r\nX-Injected: value');
+    try {
+      expect(() =>
+        parseArgs(['--ws-headers={"Authorization":"${PI_BROWSER_CLI_TEST_TOKEN}"}']),
+      ).toThrow('valid HTTP header');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+  it('does not resolve unused backend credentials when sessions are disabled', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'pi-browser-use-cli-disabled-auth-'));
+    try {
+      const file = join(directory, 'config.json');
+      writeFileSync(
+        file,
+        JSON.stringify({
+          session: {
+            enabled: false,
+            backend: {
+              release: {
+                url: 'https://browser.example',
+                headers: { Authorization: '${PI_BROWSER_CLI_MISSING_TOKEN}' },
+              },
+            },
+          },
+        }),
+      );
+      expect(parseArgs(['--config', file]).session?.enabled).toBe(false);
+      expect(
+        parseArgs(['--ws-headers={"Authorization":"$PI_BROWSER_CLI_MISSING_TOKEN"}']).wsHeaders,
+      ).toContain('$PI_BROWSER_CLI_MISSING_TOKEN');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
   it('collects repeated URL pattern flags into arrays', () => {
     const config = parseArgs([
       '--allowed-url-pattern=https://one.example/*',
