@@ -4,6 +4,17 @@ import { readFile } from 'node:fs/promises';
 import { test } from 'vitest';
 import { fullMatrix, selectIntegrationMatrix } from './integration-matrix.mjs';
 
+test('uses non-thinking tool integration while retaining the reasoning smoke check', async () => {
+  const workflow = await readFile(new URL('../workflows/integration.yml', import.meta.url), 'utf8');
+  const matrix = workflow.slice(workflow.indexOf('  extension-tool-matrix:'));
+  const smoke = workflow.slice(workflow.indexOf('  pi-runtime-smoke:'), workflow.indexOf('  extension-tool-matrix:'));
+  assert.equal(matrix.match(/--thinking off/g)?.length, 2);
+  assert.doesNotMatch(matrix, /--thinking high/);
+  assert.match(smoke, /--thinking xhigh/);
+  const child = await readFile(new URL('./telemetry-subagent.sh', import.meta.url), 'utf8');
+  assert.match(child, /--thinking off/);
+});
+
 const expectedComputerUseScenarios = [
   ['pi-computer-use', 'linux'],
   ['pi-computer-use', 'macos'],
@@ -97,7 +108,7 @@ test('runs model-backed computer-use E2E on Linux, macOS, and Windows', async ()
   assert.match(matrixJob, /pnpm --filter @amaster\.ai\/pi-shared build/);
   assert.match(matrixJob, /pnpm --filter @amaster\.ai\/pi-computer-use build/);
   assert.match(matrixJob, /RUNNER_TEMP="\$\{RUNNER_TEMP\/\/\\\\\/\/\}"/);
-  assert.match(matrixJob, /matrix\.allow_tool_error.*!= "true"/);
+  assert.match(matrixJob, /--argjson allow_error/);
   assert.match(matrixJob, /Run extension prompt \(Stage C\)/);
   // --tools is conditional so entries without an allowlist get the full surface.
   assert.match(matrixJob, /if \[ -n '\$\{\{ matrix\.tools \}\}' \]/);
@@ -164,6 +175,54 @@ test('selects every scenario for a changed extension', () => {
     ['pi-image-gen', undefined],
     ['pi-image-gen', 'seedream-lite'],
   ]);
+});
+
+test('checks screenshot tool results even when stderr diagnostics are mixed into the event stream', async () => {
+  const workflow = await readFile(new URL('../workflows/integration.yml', import.meta.url), 'utf8');
+  const scenario = fullMatrix.find(({ extension, scenario }) => extension === 'pi-browser-use' && scenario === 'screenshot');
+  assert.equal(scenario.assert_tool, 'browser_analyze_screenshot');
+  assert.equal(scenario.assert_tool_count, 1);
+  assert.notEqual(scenario.assert_visual_analysis, true);
+  const assertion = workflow.slice(workflow.indexOf('          # Cases with assert_tool'), workflow.indexOf('          # Image generation may'))
+    .replace(/\$\{\{ matrix\.(assert_tool_pattern \|\| matrix\.assert_pattern|assert_tool_count \|\| 0|assert_tool_count|allow_tool_error \|\| false|allow_tool_error|assert_tool) \}\}/g, (_, key) => String(scenario[key.split(' || ')[0]] ?? (key === 'allow_tool_error || false' ? 'false' : '')));
+  const result = { type: 'tool_execution_end', toolName: 'browser_analyze_screenshot', isError: false,
+    result: { content: [{ type: 'text', text: 'Large heading: VISUAL CHECK 7391\nDominant background: bright blue (#1E50E0)' }] } };
+  for (const text of [result.result.content[0].text, 'Heading: VISUAL CHECK 7391 only', 'Background: blue only']) {
+    const event = { ...result, result: { content: [{ type: 'text', text }] } };
+    const events = JSON.stringify({ type: 'tool_execution_start', toolName: scenario.assert_tool }) + '\n' + JSON.stringify(event);
+    const run = () => execFileSync('bash', ['-c', assertion], { encoding: 'utf8', stdio: 'pipe', env: {
+      PATH: process.env.PATH, output: `[pi-telemetry] export completed\n${events}\nstartup diagnostic`, EVENTS_JSON: events,
+    } });
+    if (text === result.result.content[0].text) assert.doesNotThrow(run);
+    else assert.throws(run);
+  }
+});
+
+test('checks the exact expected macOS permission error from the tool rather than assistant wording', async () => {
+  const workflow = await readFile(new URL('../workflows/integration.yml', import.meta.url), 'utf8');
+  const scenario = fullMatrix.find(({ extension, scenario }) => extension === 'pi-computer-use' && scenario === 'macos');
+  const assertion = workflow.slice(workflow.indexOf('          # Assert: prefer'), workflow.indexOf('          # Image generation may'))
+    .replace(/\$\{\{ matrix\.([^}]+?) \}\}/g, (_, expression) => {
+      const [key, fallback] = expression.split(' || ');
+      return String(scenario[key] ?? (fallback?.startsWith('matrix.') ? scenario[fallback.slice(7)] : fallback) ?? '');
+    });
+  for (const [code, modelFailed] of [['permissions_pending', false], ['unexpected_failure', false], ['permissions_pending', true]]) {
+    const events = [
+      {type: 'tool_execution_start', toolName: scenario.assert_tool},
+      {type: 'tool_execution_end', toolName: scenario.assert_tool, isError: true, result: {isError: true, content: [{type:'text',text:code}]}},
+      {type:'message_end',message:{role:'assistant',stopReason:modelFailed?'error':'stop',content:[]}},
+    ].map((event) => JSON.stringify(event)).join('\n');
+    const run = () => execFileSync('bash', ['-c', assertion], {stdio:'pipe',env:{PATH:process.env.PATH,EVENTS_JSON:events,ASSISTANT_TEXT:code==='permissions_pending'?'The permission gate is pending.':'permissions_pending',output:events}});
+    if (code === 'permissions_pending' && !modelFailed) assert.doesNotThrow(run);
+    else assert.throws(run);
+  }
+});
+
+test('uses configured Seedream defaults without inventing unsupported size or model parameters', () => {
+  const scenario = fullMatrix.find(({ extension, provider }) => extension === 'pi-image-gen' && provider === 'seedream-lite');
+  assert.match(scenario.prompt, /omit.*size.*model/i);
+  assert.equal(scenario.assert_tool, 'image_generate');
+  assert.equal(scenario.assert_tool_count, 1);
 });
 
 test('selects a separate Langfuse hierarchy scenario', () => {
