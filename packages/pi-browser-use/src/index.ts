@@ -6,11 +6,7 @@ import {
   type PiSettingsOptions,
 } from '@amaster.ai/pi-shared/settings';
 import type { TextContent as AiTextContent } from '@earendil-works/pi-ai';
-import {
-  type ExtensionAPI,
-  type ExtensionContext,
-  truncateHead,
-} from '@earendil-works/pi-coding-agent';
+import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { Type } from 'typebox';
@@ -32,12 +28,9 @@ import { type ManagedBrowser, readBrowserSessionBinding } from './session-backen
 import { BrowserSessionClient } from './session-client.js';
 import type { SessionAction } from './session-control.js';
 import { SESSION_DESCRIPTION, sessionParameters, sessionToolResult } from './session-control.js';
-import {
-  augmentToolDescription,
-  extractTextContent,
-  postProcessToolResult,
-} from './tool-augment.js';
+import { augmentToolDescription } from './tool-augment.js';
 import { buildGroups, CORE_TOOLS, GROUP_SUMMARIES, loadCategoryMap } from './tool-groups.js';
+import { toToolContent } from './tool-result.js';
 
 export type {
   BrowserLifecycleAdapter,
@@ -390,69 +383,6 @@ function loadConfigFromFile(options?: PiSettingsOptions): BrowserUseConfig {
   if (session) config.session = session;
   else delete config.session;
   return config;
-}
-
-/** Convert upstream MCP result into pi-agent content, applying text post-processing. */
-function toToolContent(
-  result: {
-    content?: Array<{
-      type: string;
-      text?: string;
-      data?: string;
-      mimeType?: string;
-    }>;
-    isError?: boolean;
-  },
-  originalName: string,
-): {
-  content: Array<
-    { type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }
-  >;
-  isError?: boolean;
-} {
-  const textContent = extractTextContent(result.content);
-  const processed = postProcessToolResult(originalName, textContent);
-
-  const content: Array<
-    { type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }
-  > = [];
-
-  if (processed !== textContent) {
-    content.push({ type: 'text', text: processed });
-  } else if (result.content) {
-    for (const item of result.content) {
-      if (item.type === 'text' && item.text) {
-        content.push({ type: 'text', text: item.text });
-      }
-    }
-  }
-
-  const text = content
-    .filter((item) => item.type === 'text')
-    .map((item) => item.text)
-    .join('\n');
-  const bounded = truncateHead(text, { maxBytes: 50 * 1024 - 128, maxLines: 1998 });
-  if (bounded.truncated) {
-    content.length = 0;
-    content.push({
-      type: 'text',
-      text: `${bounded.content}\n[Browser output truncated; request a smaller result.]`,
-    });
-  }
-
-  if (result.content) {
-    for (const item of result.content) {
-      if (item.type === 'image' && item.data) {
-        content.push({ type: 'image', data: item.data, mimeType: item.mimeType ?? 'image/png' });
-      }
-    }
-  }
-
-  if (content.length === 0) {
-    content.push({ type: 'text', text: '' });
-  }
-
-  return result.isError ? { content, isError: true } : { content };
 }
 
 /**

@@ -4,14 +4,20 @@ import { join } from 'node:path';
 import { describe, expect, it, test, vi } from 'vitest';
 
 const mockPrepareBrowserProfile = vi.hoisted(() => vi.fn());
+const { mockHandlers, mockCliCall } = vi.hoisted(() => ({
+  mockHandlers: [] as Array<(request: unknown, extra: unknown) => Promise<unknown>>,
+  mockCliCall: vi.fn(),
+}));
 
 vi.mock('../profile.js', () => ({ prepareBrowserProfile: mockPrepareBrowserProfile }));
 
 vi.mock('../index.js', () => ({
   DevToolsClient: class {
     connect = vi.fn();
-    listAllTools = vi.fn(() => Promise.resolve([]));
-    callTool = vi.fn();
+    listAllTools = vi.fn(() =>
+      Promise.resolve([{ name: 'take_snapshot', inputSchema: { type: 'object' } }]),
+    );
+    callTool = mockCliCall;
     close = vi.fn();
   },
   default: vi.fn(),
@@ -19,7 +25,10 @@ vi.mock('../index.js', () => ({
 
 vi.mock('@modelcontextprotocol/sdk/server/index.js', () => ({
   Server: class {
-    setRequestHandler = vi.fn();
+    setRequestHandler = vi.fn(
+      (_schema: unknown, handler: (request: unknown, extra: unknown) => Promise<unknown>) =>
+        mockHandlers.push(handler),
+    );
     connect = vi.fn();
   },
 }));
@@ -31,6 +40,40 @@ vi.mock('@modelcontextprotocol/sdk/server/stdio.js', () => ({
 const { parseArgs, reportStartupFailure } = await import('../cli.js');
 
 describe('cli startup', () => {
+  it.each([
+    '界'.repeat(30000),
+    'row\n'.repeat(3000),
+  ])('bounds standalone MCP text and structured output', async (large) => {
+    await mockHandlers[0]!({}, {});
+    mockCliCall.mockResolvedValueOnce({
+      content: [
+        { type: 'text', text: large },
+        { type: 'text', text: large },
+        { type: 'image', data: 'image', mimeType: 'image/png' },
+      ],
+      structuredContent: { records: [{ id: 'record-1', body: large }] },
+      isError: true,
+    });
+    const result = (await mockHandlers[1]!(
+      { params: { name: 'browser_take_snapshot', arguments: {} } },
+      {},
+    )) as {
+      content: Array<{ type: string; text?: string }>;
+      structuredContent: object;
+      isError?: boolean;
+    };
+    const text = result.content
+      .filter((item) => item.type === 'text')
+      .map((item) => item.text ?? '')
+      .join('\n');
+    expect(Buffer.byteLength(text)).toBeLessThanOrEqual(50 * 1024);
+    expect(text.split('\n').length).toBeLessThanOrEqual(2000);
+    expect(Buffer.byteLength(JSON.stringify(result.structuredContent))).toBeLessThanOrEqual(
+      12 * 1024,
+    );
+    expect(result.content).toContainEqual({ type: 'image', data: 'image', mimeType: 'image/png' });
+    expect(result.isError).toBe(true);
+  });
   it('logs diagnostic categories without raw errors or credentials', () => {
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {

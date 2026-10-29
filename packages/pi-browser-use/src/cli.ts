@@ -18,11 +18,8 @@ import { DevToolsClient } from './index.js';
 import { prepareBrowserProfile } from './profile.js';
 import { readBrowserSessionBinding } from './session-backend.js';
 import { SESSION_DESCRIPTION, sessionParameters, sessionToolResult } from './session-control.js';
-import {
-  augmentToolDescription,
-  extractTextContent,
-  postProcessToolResult,
-} from './tool-augment.js';
+import { augmentToolDescription } from './tool-augment.js';
+import { toToolContent } from './tool-result.js';
 
 const TOOL_PREFIX = 'browser_';
 const EXCLUDED_TOOLS = new Set([
@@ -186,20 +183,7 @@ async function main(): Promise<void> {
     }
 
     const result = await client.callTool(originalName, args ?? {}, extra.signal);
-    const textContent = extractTextContent(result.content);
-    const processed = postProcessToolResult(originalName, textContent);
-
-    if (processed !== textContent) {
-      const newContent = (result.content ?? []).map((item) => {
-        if (item.type === 'text') {
-          return { ...item, text: processed };
-        }
-        return item;
-      });
-      return { ...result, content: newContent } as Record<string, unknown>;
-    }
-
-    return result as Record<string, unknown>;
+    return toToolContent(result, originalName);
   });
 
   const transport = new StdioServerTransport();

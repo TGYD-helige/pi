@@ -954,10 +954,9 @@ jobs:
           # what args, and what each call returned — including any tool-side
           # errors that text-mode silently summarizes into prose.
           #
-          # --thinking high (not xhigh): for DeepSeek, xhigh maps to
-          # `reasoning_effort: max`, which on the amaster gateway has been
-          # observed to occasionally hang >5min on tool-call prompts. Stage B
-          # smoke keeps xhigh per the original spec.
+          # Tool integration must not depend on gateway reasoning replay: some tool
+          # responses omit reasoning that the next thinking-mode request requires.
+          # Stage B separately retains the xhigh reasoning smoke check.
           if [ "${{ matrix.extension }}" = "pi-goal" ]; then
             # pi-goal has no LLM tool. --goal '' enables auto-derivation; -p
             # drives one real agent run (print mode won't run a turn without a
@@ -967,7 +966,7 @@ jobs:
             output="$(pi \
               --provider deepseek-integration \
               --model "$PI_INTEGRATION_MODEL" \
-              --thinking high \
+              --thinking off \
               --no-session \
               --no-context-files \
               --tools '${{ matrix.tools }}' \
@@ -988,7 +987,7 @@ jobs:
             output="$(pi \
               --provider deepseek-integration \
               --model "$PI_INTEGRATION_MODEL" \
-              --thinking high \
+              --thinking off \
               --no-session \
               --no-context-files \
               ${tools_args[@]+"${tools_args[@]}"} \

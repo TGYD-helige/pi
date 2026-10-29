@@ -72,6 +72,8 @@ npx @amaster.ai/pi-browser-use --config path/to/config.json
 
 Standalone `--config` reads literal JSON; it does not expand `${ENV_VAR}` or `$ENV_VAR`. The host must resolve credentials before supplying this file and protect it with owner-only permissions. Environment interpolation in the examples below applies to extension settings in the global or agent configuration directory, not standalone JSON or project settings. Startup logs report safe error classes/system codes without printing config contents, credentials, or raw exceptions.
 
+The extension and standalone MCP CLI share the same result processing: aggregate text is bounded below 50 KiB / 2,000 lines with a truncation notice, and structured content uses the shared 12 KiB limiter. Screenshot image blocks and tool error status are preserved.
+
 ## Configuration
 
 ### Session Mode
