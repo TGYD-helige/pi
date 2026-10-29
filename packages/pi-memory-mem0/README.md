@@ -197,6 +197,36 @@ The extension automatically:
 2. Injects `baseUrl` from the registry
 3. Maps `api: "openai-completions"` → mem0 provider `"openai"`
 
+### Extra OpenAI Request Parameters (Embedded)
+
+This repository patches `mem0ai@3.3.1` to support `oss.llm.config.extraBody` for the `openai` LLM provider. Parameters are merged into both extraction and chat request bodies, so OpenAI-compatible endpoints can receive vendor-specific options:
+
+```json
+{
+  "pi-memory-mem0": {
+    "mode": "embedded",
+    "oss": {
+      "llm": {
+        "provider": "openai",
+        "config": {
+          "model": "qwen3.8-flash",
+          "apiKey": "${DASHSCOPE_API_KEY}",
+          "baseURL": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          "extraBody": {
+            "enable_thinking": false,
+            "temperature": 0
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+`extraBody` must be an object. It cannot override `model`, `messages`, `tools`, `tool_choice`, `response_format`, or `stream`; these fields belong to Mem0's request protocol. Use API field names such as `max_tokens`, `reasoning_effort`, or `chat_template_kwargs` inside `extraBody`. Endpoint support depends on the selected model and provider.
+
+The patch is applied by `pnpm install` in this workspace. Installing the published extension alone does not apply this workspace patch. Recheck or remove `patches/mem0ai@3.3.1.patch` when upgrading Mem0 to an upstream version with equivalent support.
+
 ### Fully Local (Ollama)
 
 ```json
