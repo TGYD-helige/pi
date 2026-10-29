@@ -1042,13 +1042,20 @@ jobs:
           # the raw event stream when jq isn't available or didn't extract any
           # text. The raw stream contains tool args/results too, so the
           # pattern still matches when the assistant doesn't quote them back.
+          # Pi can exit zero after a provider error; never accept a partial tool run.
+          if command -v jq >/dev/null 2>&1 && jq -e -s '
+            any(.[]; .type == "message_end" and .message.role == "assistant" and .message.stopReason == "error")
+          ' <<<"$EVENTS_JSON" >/dev/null; then
+            echo "::error::Model request failed during extension integration"
+            exit 1
+          fi
           HAYSTACK="${ASSISTANT_TEXT:-$output}"
           [ -z "$HAYSTACK" ] && HAYSTACK="$output"
           # pi-goal is asserted below by the goal engine's diagnostics and a
           # filesystem check, not by grepping assistant text (which would be
           # self-matched by prompt/thinking echo). Tool-specific checks below
-          # additionally verify the successful tool result itself.
-          if [ "${{ matrix.extension }}" != "pi-goal" ]; then
+          # verify expected permission errors without depending on assistant paraphrases.
+          if [ "${{ matrix.extension }}" != "pi-goal" ] && [ "${{ matrix.allow_tool_error }}" != "true" ]; then
             if ! grep -qiE '${{ matrix.assert_pattern }}' <<<"$HAYSTACK"; then
               echo "::error::Expected pattern '${{ matrix.assert_pattern }}' not found in ${{ matrix.extension }} output"
               exit 1
@@ -1056,20 +1063,21 @@ jobs:
           fi
 
           # Cases with assert_tool must prove that the expected text came from
-          # a successful tool result, not from the prompt or model commentary.
-          if [ -n "${{ matrix.assert_tool }}" ] && [ "${{ matrix.allow_tool_error }}" != "true" ]; then
+          # the actual tool result, not from the prompt or model commentary.
+          # Expected permission errors still have to match their exact status code.
+          if [ -n "${{ matrix.assert_tool }}" ]; then
             if ! command -v jq >/dev/null 2>&1; then
               echo "::error::jq is required for the tool result assertion"
               exit 1
             fi
             if ! jq -e -s \
               --arg tool '${{ matrix.assert_tool }}' \
-              --arg pattern '${{ matrix.assert_tool_pattern || matrix.assert_pattern }}' '
+              --arg pattern '${{ matrix.assert_tool_pattern || matrix.assert_pattern }}' \
+              --argjson allow_error '${{ matrix.allow_tool_error || false }}' '
                 any(.[];
                   .type == "tool_execution_end"
                   and .toolName == $tool
-                  and .isError != true
-                  and .result.isError != true
+                  and ($allow_error or (.isError != true and .result.isError != true))
                   and (
                     any((.result.content // [])[]?;
                       .type == "text"

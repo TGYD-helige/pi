@@ -109,7 +109,7 @@ test('runs model-backed computer-use E2E on Linux, macOS, and Windows', async ()
   assert.match(matrixJob, /pnpm --filter @amaster\.ai\/pi-shared build/);
   assert.match(matrixJob, /pnpm --filter @amaster\.ai\/pi-computer-use build/);
   assert.match(matrixJob, /RUNNER_TEMP="\$\{RUNNER_TEMP\/\/\\\\\/\/\}"/);
-  assert.match(matrixJob, /matrix\.allow_tool_error.*!= "true"/);
+  assert.match(matrixJob, /--argjson allow_error/);
   assert.match(matrixJob, /Run extension prompt \(Stage C\)/);
   // --tools is conditional so entries without an allowlist get the full surface.
   assert.match(matrixJob, /if \[ -n '\$\{\{ matrix\.tools \}\}' \]/);
@@ -206,7 +206,7 @@ test('checks screenshot tool results even when stderr diagnostics are mixed into
   assert.equal(scenario.assert_tool_count, 1);
   assert.notEqual(scenario.assert_visual_analysis, true);
   const assertion = workflow.slice(workflow.indexOf('          # Cases with assert_tool'), workflow.indexOf('          # Image generation may'))
-    .replace(/\$\{\{ matrix\.(assert_tool_pattern \|\| matrix\.assert_pattern|assert_tool_count \|\| 0|assert_tool_count|allow_tool_error|assert_tool) \}\}/g, (_, key) => String(scenario[key.split(' || ')[0]] ?? ''));
+    .replace(/\$\{\{ matrix\.(assert_tool_pattern \|\| matrix\.assert_pattern|assert_tool_count \|\| 0|assert_tool_count|allow_tool_error \|\| false|allow_tool_error|assert_tool) \}\}/g, (_, key) => String(scenario[key.split(' || ')[0]] ?? (key === 'allow_tool_error || false' ? 'false' : '')));
   const result = { type: 'tool_execution_end', toolName: 'browser_analyze_screenshot', isError: false,
     result: { content: [{ type: 'text', text: 'Large heading: VISUAL CHECK 7391\nDominant background: bright blue (#1E50E0)' }] } };
   for (const text of [result.result.content[0].text, 'Heading: VISUAL CHECK 7391 only', 'Background: blue only']) {
@@ -216,6 +216,26 @@ test('checks screenshot tool results even when stderr diagnostics are mixed into
       PATH: process.env.PATH, output: `[pi-telemetry] export completed\n${events}\nstartup diagnostic`, EVENTS_JSON: events,
     } });
     if (text === result.result.content[0].text) assert.doesNotThrow(run);
+    else assert.throws(run);
+  }
+});
+
+test('checks the exact expected macOS permission error from the tool rather than assistant wording', async () => {
+  const workflow = await readFile(new URL('../workflows/integration.yml', import.meta.url), 'utf8');
+  const scenario = fullMatrix.find(({ extension, scenario }) => extension === 'pi-computer-use' && scenario === 'macos');
+  const assertion = workflow.slice(workflow.indexOf('          # Assert: prefer'), workflow.indexOf('          # Image generation may'))
+    .replace(/\$\{\{ matrix\.([^}]+?) \}\}/g, (_, expression) => {
+      const [key, fallback] = expression.split(' || ');
+      return String(scenario[key] ?? (fallback?.startsWith('matrix.') ? scenario[fallback.slice(7)] : fallback) ?? '');
+    });
+  for (const [code, modelFailed] of [['permissions_pending', false], ['unexpected_failure', false], ['permissions_pending', true]]) {
+    const events = [
+      {type: 'tool_execution_start', toolName: scenario.assert_tool},
+      {type: 'tool_execution_end', toolName: scenario.assert_tool, isError: true, result: {isError: true, content: [{type:'text',text:code}]}},
+      {type:'message_end',message:{role:'assistant',stopReason:modelFailed?'error':'stop',content:[]}},
+    ].map((event) => JSON.stringify(event)).join('\n');
+    const run = () => execFileSync('bash', ['-c', assertion], {stdio:'pipe',env:{PATH:process.env.PATH,EVENTS_JSON:events,ASSISTANT_TEXT:code==='permissions_pending'?'The permission gate is pending.':'permissions_pending',output:events}});
+    if (code === 'permissions_pending' && !modelFailed) assert.doesNotThrow(run);
     else assert.throws(run);
   }
 });
