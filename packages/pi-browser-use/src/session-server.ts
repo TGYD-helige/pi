@@ -111,6 +111,7 @@ export async function serveBrowserSession(
   let managed: ManagedBrowser | undefined;
   let acquiring: Promise<void> | undefined;
   let releasing: Promise<void> | undefined;
+  let replacing: Promise<void> | undefined;
   let acquisitionFailed = false;
   let browserUsed = false;
   let connection: Awaited<ReturnType<typeof createBrowserConnection>> | undefined;
@@ -187,6 +188,16 @@ export async function serveBrowserSession(
       }
       let outcome: typeof reason | 'cleanup-failed' =
         acquisitionFailed && !managed ? 'cleanup-failed' : reason;
+      if (replacing) {
+        try {
+          await bounded(
+            replacing.catch(() => {}),
+            15_000,
+          );
+        } catch {
+          outcome = 'cleanup-failed';
+        }
+      }
       try {
         await client.close();
       } catch {
@@ -252,37 +263,48 @@ export async function serveBrowserSession(
     if (!browserUsed) {
       const resolved = managed?.connection ?? directConfig;
       if (resolved.wsEndpoint || resolved.browserUrl) {
-        const nextConnection = await createBrowserConnection(resolved, signal);
-        const {
-          wsEndpoint: _ws,
-          browserUrl: _url,
-          wsHeaders: _headers,
-          userDataDir: _profile,
-          executablePath: _executable,
-          channel: _channel,
-          isolated: _isolated,
-          autoConnect: _autoConnect,
-          ...localConfig
-        } = directConfig;
-        // Provider connections must not inherit local-launch/discovery flags.
-        let nextClient: DevToolsClient | undefined;
-        try {
-          await client.close();
-          nextClient = new DevToolsClient({
-            ...localConfig,
-            sessionMode: 'existing',
-            wsEndpoint: nextConnection.wsEndpoint,
-          });
-          await nextClient.connect(signal);
-          client = nextClient;
-          connection = nextConnection;
-        } catch (error) {
+        replacing = (async () => {
+          const nextConnection = await createBrowserConnection(resolved, signal);
+          const {
+            wsEndpoint: _ws,
+            browserUrl: _url,
+            wsHeaders: _headers,
+            userDataDir: _profile,
+            executablePath: _executable,
+            channel: _channel,
+            isolated: _isolated,
+            autoConnect: _autoConnect,
+            ...localConfig
+          } = directConfig;
+          // Provider connections must not inherit local-launch/discovery flags.
+          let nextClient: DevToolsClient | undefined;
           try {
-            await nextClient?.close();
-          } finally {
-            await nextConnection.close();
+            signal.throwIfAborted();
+            if (stopped) throw new BrowserSessionError('The browser session has ended.');
+            await client.close();
+            nextClient = new DevToolsClient({
+              ...localConfig,
+              sessionMode: 'existing',
+              wsEndpoint: nextConnection.wsEndpoint,
+            });
+            await nextClient.connect(signal);
+            signal.throwIfAborted();
+            if (stopped) throw new BrowserSessionError('The browser session has ended.');
+            client = nextClient;
+            connection = nextConnection;
+          } catch (error) {
+            try {
+              await nextClient?.close();
+            } finally {
+              await nextConnection.close();
+            }
+            throw error;
           }
-          throw error;
+        })();
+        try {
+          await replacing;
+        } finally {
+          replacing = undefined;
         }
       }
     }

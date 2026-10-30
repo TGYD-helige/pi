@@ -11,7 +11,99 @@ import { BrowserAcquisitionError, type ManagedBrowser } from '../session-backend
 import * as connectionModule from '../session-connection.js';
 import { serveBrowserSession } from '../session-server.js';
 
+function deferred() {
+  let resolve!: () => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<void>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
 describe('browser session shutdown', () => {
+  it.each([
+    'resolve',
+    'reject',
+  ] as const)('waits for candidate cleanup when connect ignores shutdown and later %ss', async (completion) => {
+    const token = randomBytes(32).toString('hex');
+    const owner = randomBytes(32).toString('hex');
+    const { promise: started, resolve: entered } = deferred();
+    const pending = deferred();
+    const cleanup = deferred();
+    const cleaning = deferred();
+    const createConnection = connectionModule.createBrowserConnection;
+    const tunnels: Awaited<ReturnType<typeof createConnection>>[] = [];
+    vi.spyOn(connectionModule, 'createBrowserConnection').mockImplementation(async (...args) => {
+      const tunnel = await createConnection(...args);
+      tunnels.push(tunnel);
+      return tunnel;
+    });
+    const connect = vi.spyOn(DevToolsClient.prototype, 'connect').mockResolvedValue();
+    const close = vi.spyOn(DevToolsClient.prototype, 'close').mockResolvedValue();
+    const callTool = vi
+      .spyOn(DevToolsClient.prototype, 'callTool')
+      .mockResolvedValue({ content: [] });
+    const onStop = vi.fn();
+    const server = await serveBrowserSession(
+      {
+        wsEndpoint: 'ws://127.0.0.1:1',
+        sessionMode: 'existing',
+        session: { enabled: true, key: 'shutdown-candidate', retentionMs: 1000 },
+      },
+      token,
+      { onStop },
+    );
+    let candidate: DevToolsClient | undefined;
+    connect.mockImplementationOnce(function (this: DevToolsClient) {
+      candidate = this;
+      entered();
+      return pending.promise;
+    });
+    close.mockImplementation(async function (this: DevToolsClient) {
+      if (this === candidate) {
+        cleaning.resolve();
+        await cleanup.promise;
+      }
+    });
+    const request = (action: string, args: object = {}) =>
+      fetch(`http://127.0.0.1:${server.port}/`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action, owner, ...args }),
+      });
+    let stopped = false;
+    try {
+      await request('attach');
+      const call = request('call', { name: 'list_pages', args: {} });
+      await started;
+      const shutdown = server.stop('lost').then(() => {
+        stopped = true;
+      });
+      // Drain immediate cleanup so an early shutdown deterministically becomes visible.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(stopped).toBe(false);
+      if (completion === 'resolve') pending.resolve();
+      else pending.reject(new Error('late connect failure'));
+      await cleaning.promise;
+      expect(stopped).toBe(false);
+      expect(onStop).not.toHaveBeenCalled();
+      cleanup.resolve();
+      await shutdown;
+      expect((await call).status).toBe(409);
+      expect(callTool).not.toHaveBeenCalled();
+      expect(tunnels).toHaveLength(1);
+      expect(tunnels[0]!.alive).toBe(false);
+      expect(close.mock.contexts).toContain(candidate);
+      expect(onStop).toHaveBeenCalledWith('lost');
+    } finally {
+      pending.resolve();
+      cleanup.resolve();
+      await server.stop();
+      for (const tunnel of tunnels) await tunnel.close();
+      vi.restoreAllMocks();
+    }
+  });
   it.each([
     'close',
     'connect',
