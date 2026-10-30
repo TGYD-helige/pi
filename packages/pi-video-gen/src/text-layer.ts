@@ -2,7 +2,7 @@ import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import sharp from 'sharp';
 import { VideoGenError } from './errors.js';
-import { probeCommand } from './probe.js';
+import { probeCommand, waitForProbe } from './probe.js';
 import { CancelledError } from './providers/task.js';
 import type { OverlayPosition, TimelineOverlay, TimelineSubtitles } from './timeline.js';
 
@@ -20,6 +20,7 @@ const SAFE_MARGIN_RATIO = 0.08;
 
 export async function hasCjkFont(signal?: AbortSignal): Promise<boolean> {
   if (signal?.aborted) throw new CancelledError();
+  const deadline = Date.now() + 2000;
   const windowsFonts = process.env.WINDIR ? join(process.env.WINDIR, 'Fonts') : '';
   for (const path of [
     '/System/Library/Fonts/PingFang.ttc',
@@ -30,16 +31,28 @@ export async function hasCjkFont(signal?: AbortSignal): Promise<boolean> {
     windowsFonts && join(windowsFonts, 'simsun.ttc'),
   ]) {
     if (!path) continue;
-    const font = await stat(path).catch((error: NodeJS.ErrnoException) => {
-      if (!['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM'].includes(error.code ?? '')) {
-        console.error('[pi-video-gen] font lookup failed');
-      }
-      return undefined;
-    });
+    if (Date.now() >= deadline) return false;
+    const font = await waitForProbe(
+      stat(path).catch((error: NodeJS.ErrnoException) => {
+        if (
+          !signal?.aborted &&
+          Date.now() < deadline &&
+          !['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM'].includes(error.code ?? '')
+        ) {
+          console.error('[pi-video-gen] font lookup failed');
+        }
+        return undefined;
+      }),
+      signal,
+      deadline,
+    );
     if (signal?.aborted) throw new CancelledError();
+    if (Date.now() >= deadline) return false;
     if (font?.isFile()) return true;
   }
-  const listed = await probeCommand('fc-list', [':lang=zh-cn', 'family'], signal, 2000);
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) return false;
+  const listed = await probeCommand('fc-list', [':lang=zh-cn', 'family'], signal, 2000, deadline);
   return Boolean(listed?.trim());
 }
 

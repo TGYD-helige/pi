@@ -18,7 +18,7 @@ vi.mock('../otel.js', () => ({
 
 import telemetryExtension from '../extension.js';
 
-describe('telemetry disabled startup', () => {
+describe('telemetryExtension', () => {
   it('leaves the runtime unloaded and the session history unread', async () => {
     const handlers = new Map<string, (...args: any[]) => unknown>();
     telemetryExtension({

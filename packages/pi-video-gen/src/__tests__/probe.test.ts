@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { run } = vi.hoisted(() => ({ run: vi.fn() }));
+const { run, metadata } = vi.hoisted(() => ({ run: vi.fn(), metadata: vi.fn() }));
 vi.mock('node:fs/promises', async (importOriginal) => ({
   ...(await importOriginal<typeof import('node:fs/promises')>()),
-  stat: vi.fn(async () => ({ ino: 1, size: 1, mtimeMs: 1, ctimeMs: 1 })),
+  stat: metadata,
 }));
 vi.mock('node:child_process', () => ({
   execFile: Object.assign(vi.fn(), { [Symbol.for('nodejs.util.promisify.custom')]: run }),
@@ -12,10 +12,92 @@ vi.mock('node:child_process', () => ({
 beforeEach(() => {
   vi.resetModules();
   run.mockReset();
+  metadata.mockReset().mockResolvedValue({ ino: 1, size: 1, mtimeMs: 1, ctimeMs: 1 });
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
 describe('probeCommand', () => {
+  it('cancels stalled metadata immediately and ignores late metadata completion', async () => {
+    let finish: (value: unknown) => void = () => {};
+    metadata.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const { probeCommand } = await import('../probe.js');
+    const { CancelledError } = await import('../providers/task.js');
+    const controller = new AbortController();
+    let settled = false;
+    const result = probeCommand(process.execPath, ['-version'], controller.signal).then(
+      (value) => {
+        settled = true;
+        return value;
+      },
+      (error: unknown) => {
+        settled = true;
+        return error;
+      },
+    );
+    controller.abort();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(settled).toBe(true);
+    expect(await result).toBeInstanceOf(CancelledError);
+    expect(run.mock.calls.length).toBe(0);
+    finish({ ino: 1, size: 1, mtimeMs: 1, ctimeMs: 1 });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(run.mock.calls.length).toBe(0);
+    run.mockResolvedValueOnce({ stdout: 'fresh' });
+    expect(await probeCommand(process.execPath, ['-version'])).toBe('fresh');
+    expect(run.mock.calls.length).toBe(1);
+  });
+
+  it('includes stalled metadata in the probe deadline without late side effects', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    let finish: (value: unknown) => void = () => {};
+    metadata.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const { probeCommand } = await import('../probe.js');
+    let settled = false;
+    const result = probeCommand(process.execPath, ['-version'], undefined, 100).then((value) => {
+      settled = true;
+      return value;
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(settled).toBe(true);
+    expect(await result).toBeUndefined();
+    finish({ ino: 1, size: 1, mtimeMs: 1, ctimeMs: 1 });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(run.mock.calls.length).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('passes only the time left after metadata lookup to the child process', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    let finish: (value: unknown) => void = () => {};
+    metadata.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    run.mockResolvedValueOnce({ stdout: 'ok' });
+    const { probeCommand } = await import('../probe.js');
+    const result = probeCommand(process.execPath, ['-version'], undefined, 100);
+    await vi.advanceTimersByTimeAsync(40);
+    finish({ ino: 1, size: 1, mtimeMs: 1, ctimeMs: 1 });
+    expect(await result).toBe('ok');
+    expect(run.mock.calls[0]![2].timeout).toBe(60);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('shares overlapping identical probes while cancelling each caller independently', async () => {
     let finish: (value: { stdout: string }) => void = () => {};
     run.mockImplementation(
@@ -71,6 +153,30 @@ describe('probeCommand', () => {
     expect(await replacement).toBe('fresh');
     expect(await joined).toBe('fresh');
     expect(await probeCommand(process.execPath, ['-version'])).toBe('fresh');
+  });
+
+  it('releases an expired joining caller without aborting the original process owner', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    let finish: (value: { stdout: string }) => void = () => {};
+    run.mockImplementationOnce(
+      () =>
+        new Promise<{ stdout: string }>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const { probeCommand } = await import('../probe.js');
+    const owner = probeCommand(process.execPath, ['-version'], undefined, 100);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const joining = probeCommand(process.execPath, ['-version'], undefined, 100, Date.now() + 40);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(run.mock.calls.length).toBe(1);
+    await vi.advanceTimersByTimeAsync(40);
+    expect(await joining).toBeUndefined();
+    expect(run.mock.calls[0]![2].signal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(20);
+    finish({ stdout: 'ok' });
+    expect(await owner).toBe('ok');
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('keeps distinct argument and timeout budgets separate and retries failures', async () => {
