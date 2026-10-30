@@ -1,8 +1,9 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { safeBasename, VideoGenError } from './errors.js';
+import { probeCommand } from './probe.js';
 import { CancelledError } from './providers/task.js';
 
 /**
@@ -57,71 +58,73 @@ export type FfmpegResolution = {
  * resolved ffmpeg named `ffmpeg-gpl`. Required for h264 output — the LGPL
  * build intentionally has no x264 encoder.
  */
-export function resolveGplFfmpeg(settingsPath?: string | undefined): FfmpegResolution {
-  const ff = resolveFfmpeg(settingsPath);
+export async function resolveGplFfmpeg(
+  settingsPath?: string | undefined,
+  signal?: AbortSignal,
+): Promise<FfmpegResolution> {
+  const ff = await resolveFfmpeg(settingsPath, signal);
   const exe = process.platform === 'win32' ? 'ffmpeg-gpl.exe' : 'ffmpeg-gpl';
   if (ff.source !== 'path') {
     const sibling = join(dirname(ff.path), exe);
-    if (hasEncoder(sibling, 'libx264')) return { path: sibling, source: ff.source, runnable: true };
+    if (await hasEncoder(sibling, 'libx264', signal))
+      return { path: sibling, source: ff.source, runnable: true };
   }
   return {
     path: ff.path,
     source: ff.source,
-    runnable: ff.runnable && hasEncoder(ff.path, 'libx264'),
+    runnable: ff.runnable && (await hasEncoder(ff.path, 'libx264', signal)),
   };
 }
 
-export function resolveFfprobe(settingsPath?: string | undefined): FfmpegResolution {
-  const ff = resolveFfmpeg(settingsPath);
+export async function resolveFfprobe(
+  settingsPath?: string | undefined,
+  signal?: AbortSignal,
+): Promise<FfmpegResolution> {
+  const ff = await resolveFfmpeg(settingsPath, signal);
   const exe = process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe';
   if (ff.source !== 'path') {
     const sibling = join(dirname(ff.path), exe);
-    if (isRunnable(sibling)) return { path: sibling, source: ff.source, runnable: true };
+    if (await isRunnable(sibling, signal))
+      return { path: sibling, source: ff.source, runnable: true };
     if (ff.source === 'settings' || ff.source === 'env') {
       return { path: sibling, source: ff.source, runnable: false };
     }
     // Bundled sibling missing/broken — keep looking on PATH rather than dying.
   }
-  return { path: exe, source: 'path', runnable: isRunnable(exe) };
+  return { path: exe, source: 'path', runnable: await isRunnable(exe, signal) };
 }
 
-export function resolveFfmpeg(settingsPath?: string | undefined): FfmpegResolution {
+export async function resolveFfmpeg(
+  settingsPath?: string | undefined,
+  signal?: AbortSignal,
+): Promise<FfmpegResolution> {
   if (settingsPath)
-    return { path: settingsPath, source: 'settings', runnable: isRunnable(settingsPath) };
+    return {
+      path: settingsPath,
+      source: 'settings',
+      runnable: await isRunnable(settingsPath, signal),
+    };
   if (process.env.FFMPEG_PATH) {
     return {
       path: process.env.FFMPEG_PATH,
       source: 'env',
-      runnable: isRunnable(process.env.FFMPEG_PATH),
+      runnable: await isRunnable(process.env.FFMPEG_PATH, signal),
     };
   }
-  if (platformBin && isRunnable(platformBin))
+  if (platformBin && (await isRunnable(platformBin, signal)))
     return { path: platformBin, source: 'bundled', runnable: true };
-  if (ffmpegStatic && isRunnable(ffmpegStatic))
+  if (ffmpegStatic && (await isRunnable(ffmpegStatic, signal)))
     return { path: ffmpegStatic, source: 'bundled', runnable: true };
-  return { path: 'ffmpeg', source: 'path', runnable: isRunnable('ffmpeg') };
+  return { path: 'ffmpeg', source: 'path', runnable: await isRunnable('ffmpeg', signal) };
 }
 
-function isRunnable(path: string): boolean {
-  try {
-    const res = spawnSync(path, ['-version'], { stdio: 'ignore' });
-    return res.status === 0;
-  } catch {
-    return false;
-  }
+async function isRunnable(path: string, signal?: AbortSignal): Promise<boolean> {
+  return (await probeCommand(path, ['-version'], signal)) !== undefined;
 }
 
-function hasEncoder(path: string, encoder: string): boolean {
-  try {
-    const res = spawnSync(path, ['-hide_banner', '-encoders'], {
-      encoding: 'utf-8',
-      maxBuffer: 1024 * 1024,
-      timeout: 5_000,
-    });
-    return res.status === 0 && new RegExp(`\\b${encoder}\\b`).test(res.stdout);
-  } catch {
-    return false;
-  }
+async function hasEncoder(path: string, encoder: string, signal?: AbortSignal): Promise<boolean> {
+  const output = await probeCommand(path, ['-hide_banner', '-encoders'], signal);
+  return output !== undefined && new RegExp(`\\b${encoder}\\b`).test(output);
 }
 
 export type StreamInfo = {

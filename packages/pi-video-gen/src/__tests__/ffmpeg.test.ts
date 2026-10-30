@@ -31,27 +31,70 @@ describe('resolveFfmpeg', () => {
     rmSync(suiteDir, { recursive: true, force: true });
   });
 
-  it('settings path wins and reports source', () => {
-    const res = resolveFfmpeg('/custom/ffmpeg');
+  it('keeps the event loop responsive during binary detection', async () => {
+    mkdirSync(suiteDir, { recursive: true });
+    const binary = join(suiteDir, 'slow-ffmpeg');
+    writeFileSync(binary, '#!/bin/sh\nsleep 0.1\nexit 0\n');
+    chmodSync(binary, 0o755);
+    let timerFired = false;
+    const timer = setTimeout(() => {
+      timerFired = true;
+    }, 0);
+    try {
+      const result = await resolveFfmpeg(binary);
+      expect(result.runnable).toBe(true);
+      expect(timerFired).toBe(true);
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+
+  it('reuses successful detections without spawning the same binary again', async () => {
+    mkdirSync(suiteDir, { recursive: true });
+    const binary = join(suiteDir, 'cached-ffmpeg');
+    const counter = join(suiteDir, 'calls');
+    writeFileSync(binary, `#!/bin/sh\necho probe >> "${counter}"\nexit 0\n`);
+    chmodSync(binary, 0o755);
+    expect((await resolveFfmpeg(binary)).runnable).toBe(true);
+    expect((await resolveFfmpeg(binary)).runnable).toBe(true);
+    expect(readFileSync(counter, 'utf8').trim().split('\n')).toEqual(['probe']);
+  });
+
+  it('cancels an in-progress binary detection', async () => {
+    mkdirSync(suiteDir, { recursive: true });
+    const binary = join(suiteDir, 'cancel-ffmpeg');
+    writeFileSync(binary, '#!/bin/sh\nexec sleep 10\n');
+    chmodSync(binary, 0o755);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30);
+    try {
+      await expect(resolveFfmpeg(binary, controller.signal)).rejects.toBeInstanceOf(CancelledError);
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+
+  it('settings path wins and reports source', async () => {
+    const res = await resolveFfmpeg('/custom/ffmpeg');
     expect(res.path).toBe('/custom/ffmpeg');
     expect(res.source).toBe('settings');
   });
 
-  it('env FFMPEG_PATH is second', () => {
+  it('env FFMPEG_PATH is second', async () => {
     vi.stubEnv('FFMPEG_PATH', '/env/ffmpeg');
-    const res = resolveFfmpeg();
+    const res = await resolveFfmpeg();
     expect(res.path).toBe('/env/ffmpeg');
     expect(res.source).toBe('env');
   });
 
-  it('falls back to a bundled platform package or the development ffmpeg-static', () => {
-    const res = resolveFfmpeg();
+  it('falls back to a bundled platform package or the development ffmpeg-static', async () => {
+    const res = await resolveFfmpeg();
     expect(res.source).toBe('bundled');
     expect(res.path.includes('ffmpeg')).toBe(true);
     expect(res.runnable).toBe(true);
   });
 
-  it('only reports a custom ffmpeg as H.264-capable when libx264 is available', () => {
+  it('only reports a custom ffmpeg as H.264-capable when libx264 is available', async () => {
     mkdirSync(suiteDir, { recursive: true });
     const ffmpeg = join(suiteDir, 'custom-ffmpeg');
     writeFileSync(
@@ -65,7 +108,7 @@ describe('resolveFfmpeg', () => {
     );
     chmodSync(ffmpeg, 0o755);
 
-    expect(resolveGplFfmpeg(ffmpeg)).toMatchObject({
+    expect(await resolveGplFfmpeg(ffmpeg)).toMatchObject({
       path: ffmpeg,
       source: 'settings',
       runnable: false,
@@ -80,27 +123,27 @@ describe('resolveFfmpeg', () => {
         'exit 0',
       ].join('\n'),
     );
-    expect(resolveGplFfmpeg(ffmpeg)).toMatchObject({
+    expect(await resolveGplFfmpeg(ffmpeg)).toMatchObject({
       path: ffmpeg,
       source: 'settings',
       runnable: true,
     });
   });
 
-  it('does not mix an explicitly configured ffmpeg with ffprobe from PATH', () => {
+  it('does not mix an explicitly configured ffmpeg with ffprobe from PATH', async () => {
     mkdirSync(suiteDir, { recursive: true });
     const ffmpeg = join(suiteDir, 'ffmpeg');
     writeFileSync(ffmpeg, '#!/bin/sh\nexit 0\n');
     chmodSync(ffmpeg, 0o755);
 
-    expect(resolveFfprobe(ffmpeg)).toMatchObject({
+    expect(await resolveFfprobe(ffmpeg)).toMatchObject({
       path: join(suiteDir, 'ffprobe'),
       source: 'settings',
       runnable: false,
     });
 
     vi.stubEnv('FFMPEG_PATH', ffmpeg);
-    expect(resolveFfprobe()).toMatchObject({
+    expect(await resolveFfprobe()).toMatchObject({
       path: join(suiteDir, 'ffprobe'),
       source: 'env',
       runnable: false,

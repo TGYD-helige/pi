@@ -914,6 +914,44 @@ describe('mem0Extension recallFrequency', () => {
     return provider;
   }
 
+  it('keeps uncancellable searches single-flight across session transitions', async () => {
+    vi.useFakeTimers();
+    try {
+      let finish: (value: []) => void = () => {};
+      const oldProvider = mockActiveProvider({
+        supportsSearchCancellation: false,
+        search: vi.fn(
+          () =>
+            new Promise<[]>((resolve) => {
+              finish = resolve;
+            }),
+        ),
+      });
+      const { pi, handlers } = createMockPi();
+      mem0Extension(pi as never);
+      const ctx = createMockCtx();
+      await handlers.session_start![0]!({}, ctx);
+      await handlers.input![0]!({ text: 'first' }, ctx);
+      const recall = handlers.before_agent_start![0]!({}, ctx);
+      await vi.advanceTimersByTimeAsync(3000);
+      await recall;
+      await handlers.session_shutdown![0]!({}, ctx);
+      const newProvider = mockActiveProvider({ supportsSearchCancellation: false });
+      await handlers.session_start![0]!({}, createMockCtx({ sessionId: 'next' }));
+      await handlers.input![0]!({ text: 'second' }, ctx);
+      expect(oldProvider.search).toHaveBeenCalledOnce();
+      expect(newProvider.search).not.toHaveBeenCalled();
+      finish([]);
+      await Promise.resolve();
+      await handlers.input![0]!({ text: 'third' }, ctx);
+      await handlers.before_agent_start![0]!({}, ctx);
+      expect(newProvider.search).toHaveBeenCalledOnce();
+      await handlers.session_shutdown![0]!({}, ctx);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('user-input recalls once for each user input', async () => {
     const provider = mockActiveProvider();
     const { pi, handlers } = createMockPi();

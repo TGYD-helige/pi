@@ -7,7 +7,9 @@ vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
   return {
     ...actual,
-    spawnSync: vi.fn(() => ({ status: 1, stdout: '' })),
+    execFile: vi.fn((_command, _args, _opts, callback) =>
+      callback(new Error('fontconfig unavailable')),
+    ),
   };
 });
 

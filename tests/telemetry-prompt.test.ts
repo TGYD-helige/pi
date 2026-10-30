@@ -8,6 +8,10 @@ import { describe, expect, it, vi } from 'vitest';
 import telemetryExtension from '../packages/pi-telemetry/src/extension.js';
 
 const { holder } = vi.hoisted(() => ({ holder: { spans: [] as any[] } }));
+vi.mock('../packages/pi-telemetry/src/config.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../packages/pi-telemetry/src/config.js')>()),
+  loadConfigFromFile: () => ({ includePayloads: true }),
+}));
 vi.mock('../packages/pi-telemetry/src/otel.js', async () => {
   const { OtelRuntimeEventExporter } = await import(
     '../packages/pi-telemetry/src/langfuse/exporters.js'

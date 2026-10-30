@@ -28,6 +28,8 @@ describe('webFetch', () => {
 
   afterEach(() => {
     process.env = originalEnv;
+    vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it.each([
@@ -59,6 +61,66 @@ describe('webFetch', () => {
     ).rejects.toThrow('aborted');
     expect(mockFetch).toHaveBeenCalledOnce();
     expect(safeFetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'caller',
+    'deadline',
+  ] as const)('cancels pending destination DNS on %s abort', async (source) => {
+    const controller = new AbortController();
+    const deadline = new AbortController();
+    if (source === 'deadline') vi.spyOn(AbortSignal, 'timeout').mockReturnValue(deadline.signal);
+    let rejected = false;
+    const lookup = vi.fn(() => new Promise<Array<{ address: string; family: number }>>(() => {}));
+    void webFetch({ url: 'https://example.com' }, {}, lookup, controller.signal).catch(() => {
+      rejected = true;
+    });
+    (source === 'caller' ? controller : deadline).abort();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(rejected).toBe(true);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('shares one deadline across Jina timeout and local fallback', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new Error('deadline exceeded')), ms);
+      return controller.signal;
+    });
+    mockFetch.mockImplementation(
+      (_url, init) =>
+        new Promise((_resolve, reject) => {
+          init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true });
+        }),
+    );
+    const started = Date.now();
+    const result = expect(
+      webFetch({ url: 'https://example.com' }, { timeoutMs: 100 }, publicLookup),
+    ).rejects.toThrow('deadline');
+    await vi.advanceTimersByTimeAsync(100);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch.mock.calls[1]![1].signal.aborted).toBe(true);
+    await result;
+    expect(Date.now() - started).toBe(100);
+  });
+
+  it('stops reading an oversized local response before converting HTML', async () => {
+    mockFetch.mockResolvedValueOnce(new Response('', { status: 503 }));
+    const cancel = vi.fn();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(2 * 1024 * 1024 + 1));
+      },
+      cancel,
+    });
+    mockFetch.mockResolvedValueOnce(
+      new Response(stream, { headers: { 'content-type': 'text/html' } }),
+    );
+    await expect(webFetch({ url: 'https://example.com' }, {}, publicLookup)).rejects.toThrow(
+      'size ceiling',
+    );
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it('fetches via zai when configured as default', async () => {
@@ -151,10 +213,7 @@ describe('webFetch', () => {
   });
 
   it('tries jina reader first when fetch.provider not set', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      text: async () => '# Jina Title\n\nRendered content from Jina',
-    });
+    mockFetch.mockResolvedValueOnce(new Response('# Jina Title\n\nRendered content from Jina'));
 
     const result = await webFetch({ url: 'https://example.com' }, {}, publicLookup);
 
@@ -168,12 +227,12 @@ describe('webFetch', () => {
     // Jina fails
     mockFetch.mockResolvedValueOnce({ ok: false, status: 503 });
     // Local fetch succeeds
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      headers: new Map([['content-type', 'text/html']]),
-      text: async () =>
+    mockFetch.mockResolvedValueOnce(
+      new Response(
         '<html><head><title>Local Page</title></head><body><h1>Hello</h1><p>World</p></body></html>',
-    });
+        { headers: { 'content-type': 'text/html' } },
+      ),
+    );
 
     const result = await webFetch({ url: 'https://example.com' }, {}, publicLookup);
 
@@ -198,11 +257,9 @@ describe('webFetch', () => {
     };
     // Jina fails → local fallback goes through safeFetch.
     mockFetch.mockResolvedValueOnce({ ok: false, status: 503 });
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      headers: new Map([['content-type', 'text/html']]),
-      text: async () => '<html><body>ok</body></html>',
-    });
+    mockFetch.mockResolvedValueOnce(
+      new Response('<html><body>ok</body></html>', { headers: { 'content-type': 'text/html' } }),
+    );
 
     await webFetch({ url: 'https://example.com' }, settings, publicLookup);
 

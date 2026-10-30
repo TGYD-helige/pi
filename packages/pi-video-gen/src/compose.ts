@@ -372,14 +372,14 @@ export async function runCompose(opts: {
     });
 
     // 3. stream compatibility precheck via ffprobe
-    const ffmpeg = resolveFfmpeg(opts.settings.ffmpegPath);
+    const ffmpeg = await resolveFfmpeg(opts.settings.ffmpegPath, opts.signal);
     if (!ffmpeg.runnable) {
       throw new VideoGenError(
         `ffmpeg is not runnable (source tried: ${ffmpeg.source}). Install ffmpeg (brew/apt) or set pi-video-gen.ffmpegPath in GLOBAL settings.`,
         'compose: ffmpeg missing',
       );
     }
-    const ffprobe = resolveFfprobe(opts.settings.ffmpegPath);
+    const ffprobe = await resolveFfprobe(opts.settings.ffmpegPath, opts.signal);
     if (!ffprobe.runnable) {
       throw new VideoGenError(
         `ffprobe is not runnable (source tried: ${ffprobe.source}) — required for stream compatibility prechecks.`,

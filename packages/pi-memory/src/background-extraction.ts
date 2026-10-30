@@ -113,15 +113,16 @@ export function createExtractionRunner(opts: ExtractionRunnerOptions): Extractio
   const { store, modelConfig, interval, modelRegistry, onNotify } = opts;
 
   let turnsSinceExtraction = 0;
-  let lastExtractionTurnIndex = -1;
   let inFlight = false;
   let shutdownFlag = false;
   let warnedOnce = false;
 
   /** Rolling buffer of conversation messages for the sub-agent's context. */
-  const messageBuffer: Array<{ role: string; text: string; turnIndex: number }> = [];
+  const messageBuffer: Array<{ role: string; text: string }> = [];
+  let bufferedChars = 0;
 
   function onTurnEnd(event: TurnEndEvent): void {
+    if (shutdownFlag) return;
     bufferMessage(event);
     turnsSinceExtraction++;
 
@@ -129,11 +130,8 @@ export function createExtractionRunner(opts: ExtractionRunnerOptions): Extractio
 
     inFlight = true;
     turnsSinceExtraction = 0;
-    const sinceTurn = lastExtractionTurnIndex;
-    lastExtractionTurnIndex = event.turnIndex;
-
-    // Only pass messages since last extraction to avoid re-processing.
-    const messagesToAnalyze = messageBuffer.filter((m) => sinceTurn < 0 || m.turnIndex > sinceTurn);
+    const messagesToAnalyze = messageBuffer.splice(0);
+    bufferedChars = 0;
 
     // Fire-and-forget: never block the main agent.
     runExtraction(messagesToAnalyze)
@@ -167,7 +165,12 @@ export function createExtractionRunner(opts: ExtractionRunnerOptions): Extractio
   function bufferMessage(event: TurnEndEvent): void {
     const text = extractTextFromMessage(event.message);
     if (text) {
-      messageBuffer.push({ role: event.message.role, text, turnIndex: event.turnIndex });
+      const bounded = text.slice(0, MAX_CONTEXT_CHARS);
+      messageBuffer.push({ role: event.message.role, text: bounded });
+      bufferedChars += bounded.length;
+      while (bufferedChars > MAX_CONTEXT_CHARS && messageBuffer.length > 1) {
+        bufferedChars -= messageBuffer.shift()!.text.length;
+      }
     }
   }
 
@@ -232,6 +235,8 @@ export function createExtractionRunner(opts: ExtractionRunnerOptions): Extractio
 
   function shutdown(): void {
     shutdownFlag = true;
+    messageBuffer.length = 0;
+    bufferedChars = 0;
   }
 
   return { onTurnEnd, shutdown };
@@ -269,9 +274,11 @@ export function serializeMessages(messages: Array<{ role: string; text: string }
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]!;
     const line = `[${m.role}] ${m.text}`;
-    if (totalChars + line.length > MAX_CONTEXT_CHARS && lines.length > 0) break;
-    lines.unshift(line);
-    totalChars += line.length;
+    const separatorChars = lines.length ? 2 : 0;
+    if (totalChars + line.length + separatorChars > MAX_CONTEXT_CHARS && lines.length > 0) break;
+    const bounded = line.slice(0, MAX_CONTEXT_CHARS - totalChars - separatorChars);
+    lines.unshift(bounded);
+    totalChars += bounded.length + separatorChars;
   }
 
   return lines.join('\n\n');

@@ -328,7 +328,7 @@ describe('runRender', () => {
 
   it('rejects a completed render when timeline child QC is missing', async () => {
     const clip = join(cwd, 'existing.mp4');
-    const ffmpegPath = resolveFfmpeg().path;
+    const ffmpegPath = (await resolveFfmpeg()).path;
     execFileSync(ffmpegPath, [
       '-loglevel',
       'error',
@@ -369,7 +369,7 @@ describe('runRender', () => {
   });
 
   it('samples the finished concat at the actual midpoint of each unequal shot', async () => {
-    const ffmpegPath = resolveFfmpeg().path;
+    const ffmpegPath = (await resolveFfmpeg()).path;
     const clips = [
       { id: 'short', color: 'red', durationSec: 1 },
       { id: 'long', color: 'blue', durationSec: 10 },
@@ -408,7 +408,7 @@ describe('runRender', () => {
   });
 
   it('samples the finished timeline at resolved segment midpoints', async () => {
-    const ffmpegPath = resolveFfmpeg().path;
+    const ffmpegPath = (await resolveFfmpeg()).path;
     const clips = [
       { id: 'short', durationSec: 1 },
       { id: 'long', durationSec: 4 },

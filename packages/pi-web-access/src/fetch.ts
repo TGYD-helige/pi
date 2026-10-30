@@ -2,6 +2,7 @@ import {
   assertPublicHttpUrl,
   type DnsLookup,
   hostFromUrl,
+  readResponseBytes,
   safeFetch,
   type TrustedHosts,
 } from '@amaster.ai/pi-shared';
@@ -13,6 +14,7 @@ import { getProvider } from './providers/index.js';
 import type { WebToolSettings } from './types.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+const MAX_FETCH_BYTES = 2 * 1024 * 1024;
 const JINA_READER_BASE = 'https://r.jina.ai';
 
 const USER_AGENT =
@@ -49,7 +51,7 @@ async function fetchViaJina(
     throw new Error(`Jina Reader error ${response.status}`);
   }
 
-  const markdown = await response.text();
+  const markdown = new TextDecoder().decode(await readResponseBytes(response, MAX_FETCH_BYTES));
   const titleMatch = markdown.match(/^#\s+(.+)$/m);
   const title = titleMatch?.[1]?.trim() ?? url;
 
@@ -60,7 +62,6 @@ async function fetchViaJina(
 
 async function fetchLocal(
   url: string,
-  timeoutMs: number,
   lookup?: DnsLookup,
   trustedHosts?: TrustedHosts,
   signal?: AbortSignal,
@@ -72,7 +73,7 @@ async function fetchLocal(
         'User-Agent': USER_AGENT,
         Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       },
-      signal: timeoutSignal(timeoutMs, signal),
+      ...(signal ? { signal } : {}),
     },
     { lookup, trustedHosts },
   );
@@ -82,7 +83,7 @@ async function fetchLocal(
   }
 
   const contentType = response.headers.get('content-type') ?? '';
-  const text = await response.text();
+  const text = new TextDecoder().decode(await readResponseBytes(response, MAX_FETCH_BYTES));
 
   if (!contentType.includes('text/html') && !contentType.includes('application/xhtml')) {
     return { url, title: url, content: text };
@@ -106,12 +107,14 @@ async function fetchWithFallback(
   trustedHosts?: TrustedHosts,
   signal?: AbortSignal,
 ): Promise<FetchResponse> {
-  await assertPublicHttpUrl(url, { lookup, trustedHosts });
+  const deadline = timeoutSignal(timeoutMs, signal);
+  await assertPublicHttpUrl(url, { lookup, trustedHosts, signal: deadline });
+  deadline.throwIfAborted();
   try {
-    return await fetchViaJina(url, timeoutMs, signal);
+    return await fetchViaJina(url, Math.max(1, Math.floor(timeoutMs / 2)), deadline);
   } catch (error) {
-    if (signal?.aborted) throw error;
-    return fetchLocal(url, timeoutMs, lookup, trustedHosts, signal);
+    if (deadline.aborted) throw error;
+    return fetchLocal(url, lookup, trustedHosts, deadline);
   }
 }
 
@@ -128,7 +131,7 @@ export async function webFetch(
   const trustedHosts = trustedHostsFromSettings(settings);
   const resolved = resolveFetchProvider(settings);
   if (resolved) {
-    await assertPublicHttpUrl(params.url, { lookup, trustedHosts });
+    await assertPublicHttpUrl(params.url, { lookup, trustedHosts, signal });
     const provider = getProvider(resolved.id);
     if (!provider) {
       throw new Error(`Provider "${resolved.id}" is not registered.`);

@@ -273,6 +273,8 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   let systemPrompt: string | undefined;
   let contextHistory: JsonObject[] | undefined;
   let hasFullContext = false;
+  let enabled = false;
+  let capturePayloads = false;
   let mediaEnabled = false;
   let lastModelConfig: RuntimeModelConfig = { provider: 'unknown', model: 'unknown' };
   let streamInput: JsonValue | undefined;
@@ -370,11 +372,14 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     // endpoint are configured: two providers would mint different span ids for
     // the same logical span and cross-wire PI_TELEMETRY_TRACEPARENT.
     exporter = createTelemetryExporter(config);
+    enabled = exporter.getStatus?.().enabled !== false;
+    capturePayloads = enabled && config.includePayloads === true;
     mediaEnabled = config.includePayloads === true && config.mediaUploadEnabled === true;
     showStatus(ctx);
   });
 
   pi.on('input', async (event) => {
+    if (!enabled) return;
     if (event.streamingBehavior && currentTraceId) {
       promptNumber += 1;
       await exporter.publish({
@@ -391,17 +396,19 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
           : {}),
         createdAt: new Date().toISOString(),
         details: {
-          input: event.images?.length
-            ? [
-                {
-                  role: 'user',
-                  content: displayContent(
-                    [{ type: 'text', text: event.text }, ...event.images],
-                    mediaEnabled,
-                  ),
-                },
-              ]
-            : event.text,
+          input: !capturePayloads
+            ? undefined
+            : event.images?.length
+              ? [
+                  {
+                    role: 'user',
+                    content: displayContent(
+                      [{ type: 'text', text: event.text }, ...event.images],
+                      mediaEnabled,
+                    ),
+                  },
+                ]
+              : event.text,
           turnMode: event.streamingBehavior,
         },
       });
@@ -411,8 +418,8 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
       await completeTrace({ error: 'Run superseded by a new input', outcome: 'aborted' });
     promptNumber += 1;
     inputNumbered = true;
-    pendingInput = event.text;
-    pendingImages = event.images ?? [];
+    pendingInput = capturePayloads ? event.text : undefined;
+    pendingImages = capturePayloads ? (event.images ?? []) : [];
     contextHistory = undefined;
     hasFullContext = false;
     if (!isSubagent) {
@@ -428,6 +435,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   });
 
   pi.on('before_agent_start', (event) => {
+    if (!capturePayloads) return;
     if ('prompt' in event) {
       pendingInput ??= event.prompt;
       pendingImages = event.images ?? pendingImages;
@@ -444,15 +452,18 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     systemPrompt = event.systemPrompt;
   });
   pi.on('agent_start', (_event, ctx) => {
+    if (!capturePayloads) return;
     systemPrompt = ctx.getSystemPrompt?.() ?? systemPrompt;
   });
   pi.on('context', (event) => {
+    if (!capturePayloads) return;
     hasFullContext = false;
     contextHistory = (convertMessages ? convertMessages(event.messages) : event.messages)
       .map((message) => displayMessage(message))
       .filter((message) => message !== undefined);
   });
   pi.on('context_with_system', (event) => {
+    if (!capturePayloads) return;
     hasFullContext = true;
     contextHistory = (convertMessages ? convertMessages(event.messages) : event.messages)
       .map((message, index) => displayMessage(message, index > 0))
@@ -460,6 +471,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   });
 
   pi.on('turn_start', async (event) => {
+    if (!enabled) return;
     if (!currentTraceId) {
       currentTraceId =
         (isSubagent ? inheritedTraceId : undefined) ?? randomUUID().replace(/-/g, '');
@@ -525,11 +537,13 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   });
 
   pi.on('agent_end', async (event) => {
+    if (!enabled) return;
     finalMessages = event.messages;
     if (!supportsSettlement) await completeTrace();
   });
 
   pi.on('agent_before_settle', (event) => {
+    if (!enabled) return;
     boundaryFailure =
       event.outcome === 'completed'
         ? {}
@@ -540,6 +554,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   });
 
   pi.on('agent_settled', async (event, ctx) => {
+    if (!enabled) return;
     if (event.aborted && !boundaryFailure.error) {
       boundaryFailure = { error: 'Run cancelled', outcome: 'aborted' };
     }
@@ -552,7 +567,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     if (!currentTraceId) return;
     const now = Date.now();
     const durationMs = traceStartTime ? now - traceStartTime : undefined;
-    const output = extractLastOutput(finalMessages);
+    const output = capturePayloads ? extractLastOutput(finalMessages) : undefined;
     const lastAssistant = [...finalMessages]
       .reverse()
       .find(
@@ -636,6 +651,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   }
 
   pi.on('tool_execution_start', async (event) => {
+    if (!enabled) return;
     if (!currentTraceId) return;
     if (toolStarts.size >= 512) toolStarts.delete(toolStarts.keys().next().value!);
     toolStarts.set(event.toolCallId, { startedAt: Date.now(), toolName: event.toolName });
@@ -647,14 +663,16 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
       toolName: event.toolName,
       status: 'started',
       createdAt: new Date().toISOString(),
-      args: event.args as JsonObject,
+      ...(capturePayloads ? { args: event.args as JsonObject } : {}),
     });
   });
 
   pi.on('tool_execution_end', async (event) => {
+    if (!enabled) return;
     if (!currentTraceId) return;
     toolStarts.delete(event.toolCallId);
-    const resultDetails = toolEventDetails(event.result, event.isError);
+    const resultDetails =
+      capturePayloads || event.isError ? toolEventDetails(event.result, event.isError) : {};
 
     await exporter.publish({
       id: randomUUID(),
@@ -665,7 +683,8 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
       createdAt: new Date().toISOString(),
       ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
       ...resultDetails,
-      ...(!event.isError &&
+      ...(capturePayloads &&
+      !event.isError &&
       Array.isArray(event.result?.content) &&
       !shouldSuppressToolOutput(event.result?.details)
         ? {
@@ -713,7 +732,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
       id: randomUUID(),
       status: 'completed',
       createdAt: new Date(now).toISOString(),
-      ...(entry.summary !== undefined
+      ...(capturePayloads && entry.summary !== undefined
         ? { output: entry.summary, displayOutput: { role: 'assistant', content: entry.summary } }
         : {}),
       ...(entry.usage && typeof entry.usage === 'object'
@@ -728,6 +747,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   }
 
   pi.on('tool_result', async (event, ctx) => {
+    if (!enabled) return;
     if (!currentTraceId || !event.usage) return;
     await publishAuxiliary(
       'tool',
@@ -739,12 +759,15 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   });
 
   pi.on('session_before_compact', () => {
+    if (!enabled) return;
     compactionStartedAt = Date.now();
   });
   pi.on('session_before_tree', () => {
+    if (!enabled) return;
     branchSummaryStartedAt = Date.now();
   });
   pi.on('session_tree', async (event, ctx) => {
+    if (!enabled) return;
     const startedAt = branchSummaryStartedAt;
     branchSummaryStartedAt = undefined;
     if (event.summaryEntry)
@@ -808,6 +831,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   }
 
   pi.on('before_provider_request', async (event, ctx) => {
+    if (!enabled) return;
     if (!currentTraceId) return;
     if (generationOpen) await failOpenGeneration('Superseded by provider retry', 'superseded');
     llmGenerationCounter++;
@@ -815,17 +839,18 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     lastModelConfig = modelConfigFromCtx(ctx);
     modelPricingKnown = hasModelPricing(ctx);
     requestParameters = modelParameters(event.payload, ctx.thinkingLevel);
-    systemPrompt = ctx.getSystemPrompt?.() ?? systemPrompt;
+    if (capturePayloads) systemPrompt = ctx.getSystemPrompt?.() ?? systemPrompt;
     completionStartTime = undefined;
-    streamStartedAt = Date.now();
-    streamInput = event.payload as JsonValue;
+    streamStartedAt = capturePayloads ? Date.now() : undefined;
+    streamInput = capturePayloads ? (event.payload as JsonValue) : undefined;
     streamEvents = [];
     streamBytes = 0;
     streamTruncated = false;
 
-    const displayInput =
-      providerDisplayInput(event.payload) ??
-      (contextHistory || systemPrompt ? generationDisplayInput() : undefined);
+    const displayInput = capturePayloads
+      ? (providerDisplayInput(event.payload) ??
+        (contextHistory || systemPrompt ? generationDisplayInput() : undefined))
+      : undefined;
     await exporter.publish({
       id: randomUUID(),
       ...observationLineage(currentTraceId),
@@ -834,22 +859,25 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
       status: 'started',
       createdAt: new Date().toISOString(),
       model: lastModelConfig,
-      input: event.payload as JsonValue,
+      ...(capturePayloads ? { input: event.payload as JsonValue } : {}),
       modelParameters: requestParameters,
       ...(displayInput !== undefined ? { displayInput } : {}),
     });
   });
 
   pi.on('after_provider_response', async (event) => {
+    if (!enabled) return;
     if (event.status >= 400) await failOpenGeneration(`HTTP ${event.status}`, 'error');
   });
 
   pi.on('message_update', async (event) => {
+    if (!enabled) return;
     if (!currentTraceId || !generationOpen) return;
     const update = event.assistantMessageEvent as unknown as Record<string, unknown>;
     if (!completionStartTime && hasFirstToken(update, event.message)) {
       completionStartTime = new Date().toISOString();
     }
+    if (!capturePayloads || streamTruncated) return;
     const { partial: _partial, message: _message, error: _error, ...frame } = update;
     const value = toTelemetryValue(frame);
     if (value === undefined) return;
@@ -865,16 +893,19 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   });
 
   pi.on('message_end', async (event) => {
+    if (!enabled) return;
     if (!currentTraceId || !generationOpen) return;
     const msg = event.message as unknown as Record<string, unknown>;
     if (msg.role !== 'assistant') return;
     generationOpen = false;
 
-    const content = simplifyContent(msg.content) ?? extractOutput(event.message);
+    const content = capturePayloads
+      ? (simplifyContent(msg.content) ?? extractOutput(event.message))
+      : undefined;
     const usage = msg.usage as Record<string, unknown> | undefined;
     const mapped = usage ? mapUsage(usage, modelPricingKnown) : undefined;
     const failure = messageFailure(msg);
-    const displayOutput = displayMessage(msg);
+    const displayOutput = capturePayloads ? displayMessage(msg) : undefined;
 
     await publishStream();
 
@@ -913,6 +944,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   });
 
   pi.on('model_select', async (event) => {
+    if (!enabled) return;
     if (!currentTraceId) return;
     const evt = event as unknown as Record<string, unknown>;
     const model = evt.model as Record<string, unknown> | undefined;
@@ -945,6 +977,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   });
 
   pi.on('session_compact', async (event, ctx) => {
+    if (!enabled) return;
     const startedAt = compactionStartedAt;
     compactionStartedAt = undefined;
     if (event.compactionEntry?.summary !== undefined || event.compactionEntry?.usage) {

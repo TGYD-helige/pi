@@ -94,7 +94,7 @@ describe('runCompose (C0)', () => {
     expect(manifest.state).toBe('done');
     expect(Object.keys(manifest.clipHashes)).toHaveLength(2);
     // final duration ≈ 2s (probe it with the real ffprobe resolution)
-    const probe = resolveFfprobe();
+    const probe = await resolveFfprobe();
     const info = await probeStreams(probe.path, result.finalVideoPath);
     expect(info.videoCodec).toBe('h264');
   });

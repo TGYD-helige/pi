@@ -1,8 +1,8 @@
-import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import sharp from 'sharp';
 import { VideoGenError } from './errors.js';
+import { probeCommand } from './probe.js';
 import type { OverlayPosition, TimelineOverlay, TimelineSubtitles } from './timeline.js';
 
 /**
@@ -17,22 +17,21 @@ import type { OverlayPosition, TimelineOverlay, TimelineSubtitles } from './time
 const FONT_STACK = 'PingFang SC, Hiragana Sans GB, Microsoft YaHei, Noto Sans CJK SC, sans-serif';
 const SAFE_MARGIN_RATIO = 0.08;
 
-export function hasCjkFont(): boolean {
-  const listed = spawnSync('fc-list', [':lang=zh-cn', 'family'], {
-    encoding: 'utf-8',
-    timeout: 2_000,
-  });
-  if (listed.status === 0 && listed.stdout.trim()) return true;
-
+export async function hasCjkFont(signal?: AbortSignal): Promise<boolean> {
   const windowsFonts = process.env.WINDIR ? join(process.env.WINDIR, 'Fonts') : '';
-  return [
-    '/System/Library/Fonts/PingFang.ttc',
-    '/System/Library/Fonts/STHeiti Light.ttc',
-    '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
-    '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',
-    windowsFonts && join(windowsFonts, 'msyh.ttc'),
-    windowsFonts && join(windowsFonts, 'simsun.ttc'),
-  ].some((path) => path !== '' && existsSync(path));
+  if (
+    [
+      '/System/Library/Fonts/PingFang.ttc',
+      '/System/Library/Fonts/STHeiti Light.ttc',
+      '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+      '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',
+      windowsFonts && join(windowsFonts, 'msyh.ttc'),
+      windowsFonts && join(windowsFonts, 'simsun.ttc'),
+    ].some((path) => path !== '' && existsSync(path))
+  )
+    return true;
+  const listed = await probeCommand('fc-list', [':lang=zh-cn', 'family'], signal, 2000);
+  return Boolean(listed?.trim());
 }
 
 function escapeXml(text: string): string {
@@ -172,10 +171,11 @@ export async function renderTextOverlay(opts: {
   width: number;
   height: number;
   outPath: string;
+  signal?: AbortSignal | undefined;
 }): Promise<string | null> {
   if (!opts.overlay.title && !opts.overlay.subtitle) return null;
   const text = `${opts.overlay.title ?? ''}${opts.overlay.subtitle ?? ''}`;
-  if (/\p{Script=Han}/u.test(text) && !hasCjkFont()) {
+  if (/\p{Script=Han}/u.test(text) && !(await hasCjkFont(opts.signal))) {
     throw new VideoGenError(
       'A CJK font is required for Chinese text overlays. Install PingFang, Microsoft YaHei, Noto Sans CJK, or WenQuanYi, then retry.',
       'text-layer: CJK font missing',
@@ -224,8 +224,9 @@ export async function renderBurnedSubtitle(opts: {
   width: number;
   height: number;
   outPath: string;
+  signal?: AbortSignal | undefined;
 }): Promise<string> {
-  if (/\p{Script=Han}/u.test(opts.text) && !hasCjkFont()) {
+  if (/\p{Script=Han}/u.test(opts.text) && !(await hasCjkFont(opts.signal))) {
     throw new VideoGenError(
       'A CJK font is required for burned Chinese subtitles. Install PingFang, Microsoft YaHei, Noto Sans CJK, or WenQuanYi, then retry.',
       'text-layer: CJK font missing',

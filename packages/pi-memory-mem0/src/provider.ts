@@ -36,6 +36,8 @@ const MAX_DEDUP_PAGES = MAX_DEDUP_ITEMS_PER_SCOPE / DEDUP_PAGE_SIZE;
 const SELF_HOSTED_DEDUP_LIMIT = 1000;
 
 export interface Mem0Provider {
+  /** True only when aborting search stops the underlying request. */
+  readonly supportsSearchCancellation?: boolean;
   add(
     messages: Array<{ role: string; content: string }>,
     opts: Mem0AddOptions,
@@ -223,6 +225,7 @@ interface PlatformClient {
 }
 
 class PlatformProvider implements Mem0Provider {
+  readonly supportsSearchCancellation = true;
   private client: PlatformClient | undefined;
   private initPromise: Promise<void> | null = null;
   private readonly requestSignal = new AsyncLocalStorage<AbortSignal>();
@@ -386,6 +389,7 @@ class PlatformProvider implements Mem0Provider {
 // ---------------------------------------------------------------------------
 
 class SelfHostedProvider implements Mem0Provider {
+  readonly supportsSearchCancellation = true;
   private readonly baseUrl: string;
 
   constructor(

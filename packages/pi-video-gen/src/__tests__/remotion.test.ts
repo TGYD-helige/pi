@@ -248,7 +248,7 @@ describe('runRemotion', () => {
       settings: {},
       activeJobs,
       trusted: true,
-      ffmpegPath: resolveFfmpeg().path,
+      ffmpegPath: (await resolveFfmpeg()).path,
       verifyMedia: false,
       signal: controller.signal,
     });
@@ -351,7 +351,7 @@ describe('runRemotion', () => {
       browserExecutable: process.execPath,
     };
     writeFileSync(join(job, 'remotion-input.json'), JSON.stringify(spec));
-    const ffmpegPath = resolveFfmpeg().path;
+    const ffmpegPath = (await resolveFfmpeg()).path;
     const projectHash = await preflightRemotion({
       spec,
       cwd: root,
@@ -494,7 +494,7 @@ describe('runRemotion', () => {
       settings: {},
       activeJobs: new ActiveJobs(),
       trusted: true,
-      ffmpegPath: resolveFfmpeg().path,
+      ffmpegPath: (await resolveFfmpeg()).path,
       preflight: true,
     };
     const first = await runRemotion(opts);

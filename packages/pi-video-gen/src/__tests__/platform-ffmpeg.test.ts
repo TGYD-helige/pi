@@ -1,3 +1,4 @@
+import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 describe('resolveFfmpeg platform package', () => {
@@ -13,7 +14,7 @@ describe('resolveFfmpeg platform package', () => {
     vi.doMock('node:fs', () => ({ existsSync: () => false }));
     vi.doMock('node:child_process', () => ({
       spawn: vi.fn(),
-      spawnSync: () => ({ status: 0 }),
+      execFile: Object.assign(vi.fn(), { [promisify.custom]: async () => ({ stdout: '' }) }),
     }));
     vi.doMock('node:module', () => ({
       createRequire: () =>
@@ -27,7 +28,7 @@ describe('resolveFfmpeg platform package', () => {
 
     const { resolveFfmpeg } = await import('../ffmpeg.js');
 
-    expect(resolveFfmpeg()).toEqual({
+    expect(await resolveFfmpeg()).toEqual({
       path: '/optional-package/bin/ffmpeg',
       source: 'bundled',
       runnable: true,
@@ -38,7 +39,12 @@ describe('resolveFfmpeg platform package', () => {
     const packageRequest = `@amaster.ai/pi-video-gen-ffmpeg-${process.platform}-${process.arch}/ffmpeg`;
     vi.doMock('node:child_process', () => ({
       spawn: vi.fn(),
-      spawnSync: (path: string) => ({ status: path === 'ffmpeg' ? 0 : 1 }),
+      execFile: Object.assign(vi.fn(), {
+        [promisify.custom]: async (path: string) => {
+          if (path !== 'ffmpeg') throw new Error('not runnable');
+          return { stdout: '' };
+        },
+      }),
     }));
     vi.doMock('node:module', () => ({
       createRequire: () =>
@@ -52,7 +58,7 @@ describe('resolveFfmpeg platform package', () => {
 
     const { resolveFfmpeg } = await import('../ffmpeg.js');
 
-    expect(resolveFfmpeg()).toEqual({
+    expect(await resolveFfmpeg()).toEqual({
       path: 'ffmpeg',
       source: 'path',
       runnable: true,

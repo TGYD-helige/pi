@@ -76,7 +76,7 @@ describe('interrupt flow', () => {
   beforeEach(() => {
     handlers.clear();
     exported = [];
-    vi.mocked(loadConfigFromFile).mockReturnValue({});
+    vi.mocked(loadConfigFromFile).mockReturnValue({ includePayloads: true });
     telemetryExtension(mockPi as any);
   });
 
