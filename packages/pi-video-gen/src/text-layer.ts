@@ -1,8 +1,9 @@
-import { existsSync } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import sharp from 'sharp';
 import { VideoGenError } from './errors.js';
 import { probeCommand } from './probe.js';
+import { CancelledError } from './providers/task.js';
 import type { OverlayPosition, TimelineOverlay, TimelineSubtitles } from './timeline.js';
 
 /**
@@ -18,18 +19,26 @@ const FONT_STACK = 'PingFang SC, Hiragana Sans GB, Microsoft YaHei, Noto Sans CJ
 const SAFE_MARGIN_RATIO = 0.08;
 
 export async function hasCjkFont(signal?: AbortSignal): Promise<boolean> {
+  if (signal?.aborted) throw new CancelledError();
   const windowsFonts = process.env.WINDIR ? join(process.env.WINDIR, 'Fonts') : '';
-  if (
-    [
-      '/System/Library/Fonts/PingFang.ttc',
-      '/System/Library/Fonts/STHeiti Light.ttc',
-      '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
-      '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',
-      windowsFonts && join(windowsFonts, 'msyh.ttc'),
-      windowsFonts && join(windowsFonts, 'simsun.ttc'),
-    ].some((path) => path !== '' && existsSync(path))
-  )
-    return true;
+  for (const path of [
+    '/System/Library/Fonts/PingFang.ttc',
+    '/System/Library/Fonts/STHeiti Light.ttc',
+    '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+    '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',
+    windowsFonts && join(windowsFonts, 'msyh.ttc'),
+    windowsFonts && join(windowsFonts, 'simsun.ttc'),
+  ]) {
+    if (!path) continue;
+    const font = await stat(path).catch((error: NodeJS.ErrnoException) => {
+      if (!['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM'].includes(error.code ?? '')) {
+        console.error('[pi-video-gen] font lookup failed');
+      }
+      return undefined;
+    });
+    if (signal?.aborted) throw new CancelledError();
+    if (font?.isFile()) return true;
+  }
   const listed = await probeCommand('fc-list', [':lang=zh-cn', 'family'], signal, 2000);
   return Boolean(listed?.trim());
 }

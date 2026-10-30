@@ -238,7 +238,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
       return;
     }
 
-    prefetch.queue(redactMemoryText(text), ctx.signal);
+    if (!prefetch.queue(redactMemoryText(text), ctx.signal)) return;
 
     if (activeRecallFrequency === 'session') {
       recallQueuedThisSession = true;

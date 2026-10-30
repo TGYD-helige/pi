@@ -7,10 +7,10 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import telemetryExtension from '../packages/pi-telemetry/src/extension.js';
 
-const { holder } = vi.hoisted(() => ({ holder: { spans: [] as any[] } }));
+const { holder } = vi.hoisted(() => ({ holder: { spans: [] as any[], includePayloads: true } }));
 vi.mock('../packages/pi-telemetry/src/config.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../packages/pi-telemetry/src/config.js')>()),
-  loadConfigFromFile: () => ({ includePayloads: true }),
+  loadConfigFromFile: () => ({ includePayloads: holder.includePayloads }),
 }));
 vi.mock('../packages/pi-telemetry/src/otel.js', async () => {
   const { OtelRuntimeEventExporter } = await import(
@@ -28,7 +28,7 @@ vi.mock('../packages/pi-telemetry/src/otel.js', async () => {
         {
           enabled: true,
           endpoint: '',
-          includePayloads: true,
+          includePayloads: holder.includePayloads,
           flushAt: 10,
           flushIntervalMs: 60_000,
         },
@@ -50,7 +50,8 @@ vi.mock('../packages/pi-telemetry/src/otel.js', async () => {
 });
 
 describe('telemetry final prompt', () => {
-  it('matches a real Pi extension prompt to the request received by a local provider', async () => {
+  it.each([true, false])('preserves real Pi request and stream contracts with includePayloads=%s', async (includePayloads) => {
+    holder.includePayloads = includePayloads;
     const sdk = await import(
       '../packages/pi-telemetry/node_modules/@earendil-works/pi-coding-agent/dist/index.js'
     );
@@ -141,11 +142,18 @@ describe('telemetry final prompt', () => {
       );
       const stream = holder.spans.find((span) => span.name === 'llm-stream');
       expect(generation).toBeDefined();
-      const input = JSON.parse(generation.attributes['langfuse.observation.input']);
       expect(JSON.stringify(requests[0].messages)).toContain('APPENDED_BY_REAL_EXTENSION');
-      expect(input).toEqual(requests[0].messages);
-      expect(JSON.parse(stream.attributes['langfuse.observation.input'])).toEqual(requests[0]);
-      expect(JSON.parse(generation.attributes['langfuse.observation.metadata.rawInput'])).toEqual(requests[0]);
+      expect(holder.spans.filter((span) => span.name === 'llm-stream')).toHaveLength(1);
+      if (includePayloads) {
+        expect(JSON.parse(generation.attributes['langfuse.observation.input'])).toEqual(requests[0].messages);
+        expect(JSON.parse(stream.attributes['langfuse.observation.input'])).toEqual(requests[0]);
+        expect(JSON.parse(generation.attributes['langfuse.observation.metadata.rawInput'])).toEqual(requests[0]);
+      } else {
+        expect(generation.attributes['langfuse.observation.input']).toBeUndefined();
+        expect(generation.attributes['langfuse.observation.metadata.rawInput']).toBeUndefined();
+        expect(stream.attributes['langfuse.observation.input']).toBeUndefined();
+        expect(JSON.parse(stream.attributes['langfuse.observation.output'])).toEqual([]);
+      }
       expect(stream.parentSpanContext.spanId).toBe(generation.spanContext().spanId);
     } finally {
       session?.dispose();

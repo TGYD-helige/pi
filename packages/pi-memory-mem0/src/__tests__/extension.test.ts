@@ -914,7 +914,10 @@ describe('mem0Extension recallFrequency', () => {
     return provider;
   }
 
-  it('keeps uncancellable searches single-flight across session transitions', async () => {
+  it.each([
+    'user-input',
+    'session',
+  ] as const)('keeps searches single-flight across sessions with %s recall', async (recallFrequency) => {
     vi.useFakeTimers();
     try {
       let finish: (value: []) => void = () => {};
@@ -927,6 +930,11 @@ describe('mem0Extension recallFrequency', () => {
             }),
         ),
       });
+      vi.mocked(loadPiSettings).mockReturnValue({
+        mode: 'platform',
+        apiKey: 'm0-test',
+        recallFrequency,
+      });
       const { pi, handlers } = createMockPi();
       mem0Extension(pi as never);
       const ctx = createMockCtx();
@@ -937,15 +945,25 @@ describe('mem0Extension recallFrequency', () => {
       await recall;
       await handlers.session_shutdown![0]!({}, ctx);
       const newProvider = mockActiveProvider({ supportsSearchCancellation: false });
-      await handlers.session_start![0]!({}, createMockCtx({ sessionId: 'next' }));
-      await handlers.input![0]!({ text: 'second' }, ctx);
+      vi.mocked(loadPiSettings).mockReturnValue({
+        mode: 'platform',
+        apiKey: 'm0-test',
+        recallFrequency,
+      });
+      const nextCtx = createMockCtx({ sessionId: 'next' });
+      await handlers.session_start![0]!({}, nextCtx);
+      pi.appendEntry.mockClear();
+      await handlers.input![0]!({ text: 'second' }, nextCtx);
+      expect(pi.appendEntry.mock.calls.length).toBe(0);
       expect(oldProvider.search).toHaveBeenCalledOnce();
       expect(newProvider.search).not.toHaveBeenCalled();
       finish([]);
       await Promise.resolve();
-      await handlers.input![0]!({ text: 'third' }, ctx);
+      await handlers.input![0]!({ text: 'third' }, nextCtx);
       await handlers.before_agent_start![0]!({}, ctx);
       expect(newProvider.search).toHaveBeenCalledOnce();
+      if (recallFrequency === 'session')
+        expect(pi.appendEntry).toHaveBeenCalledWith('mem0-session-recall', 'next');
       await handlers.session_shutdown![0]!({}, ctx);
     } finally {
       vi.useRealTimers();

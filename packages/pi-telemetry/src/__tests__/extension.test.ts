@@ -62,6 +62,18 @@ describe('telemetryExtension', () => {
     });
   });
 
+  it('does not scan session history when starting with export disabled', async () => {
+    vi.mocked(createTelemetryExporter).mockReturnValueOnce(new NoopRuntimeEventExporter());
+    telemetryExtension(mockPi as any);
+    const getEntries = vi.fn(() => []);
+    await fireEvent(
+      'session_start',
+      {},
+      { sessionManager: { getSessionId: () => 'resumed', getEntries } },
+    );
+    expect(getEntries.mock.calls.length).toBe(0);
+  });
+
   it('does not inspect context when export is disabled', async () => {
     vi.mocked(createTelemetryExporter).mockReturnValueOnce(new NoopRuntimeEventExporter());
     telemetryExtension(mockPi as any);
@@ -123,7 +135,10 @@ describe('telemetryExtension', () => {
       completionStartTime: expect.any(String),
       usage: { input: 10, output: 1 },
     });
-    expect(getPublishedEvents().some((event) => 'streamEvents' in event)).toBe(false);
+    const streams = getPublishedEvents().filter((event) => 'streamEvents' in event);
+    expect(streams).toHaveLength(1);
+    expect(streams[0]).toMatchObject({ streamEvents: [], durationMs: expect.any(Number) });
+    expect(streams[0]).not.toHaveProperty('input');
   });
 
   it('stops inspecting stream payloads once the capture ceiling is reached', async () => {

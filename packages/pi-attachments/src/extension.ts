@@ -168,15 +168,11 @@ export default function piAttachmentsExtension(pi: ExtensionAPI): void {
 
         if (kind === 'image') {
           try {
-            if (stats.size > remainingImageBytes) {
-              items.push({
-                kind: 'notice',
-                block: `## ${name}: ${absolutePath}\n[Image omitted: input image budget is 20 MiB.]`,
-              });
-              continue;
-            }
-            const bytes = await readFilePrefix(absolutePath, remainingImageBytes + 1);
-            if (bytes.length > remainingImageBytes) {
+            const bytes =
+              stats.size <= remainingImageBytes
+                ? await readFilePrefix(absolutePath, remainingImageBytes + 1)
+                : undefined;
+            if (!bytes || bytes.length > remainingImageBytes) {
               items.push({
                 kind: 'notice',
                 block: `## ${name}: ${absolutePath}\n[Image omitted: input image budget is 20 MiB.]`,

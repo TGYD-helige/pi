@@ -41,7 +41,8 @@ describe('resolveFfmpeg platform package', () => {
       spawn: vi.fn(),
       execFile: Object.assign(vi.fn(), {
         [promisify.custom]: async (path: string) => {
-          if (path !== 'ffmpeg') throw new Error('not runnable');
+          if (path !== 'ffmpeg')
+            throw Object.assign(new Error('not runnable'), { code: 'ENOEXEC' });
           return { stdout: '' };
         },
       }),

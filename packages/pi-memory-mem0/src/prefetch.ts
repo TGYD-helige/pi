@@ -40,14 +40,14 @@ export class Prefetch {
   }
 
   /** Phase 1: kick off a background search (called on input with user text). */
-  queue(query: string, signal?: AbortSignal): void {
-    if (!query.trim()) return;
+  queue(query: string, signal?: AbortSignal): boolean {
+    if (!query.trim()) return false;
     this.cancel();
     // shortcut: embedded searches cannot be aborted; pass signals when its SDK supports them.
-    if (this.searchState.active && !this.provider.supportsSearchCancellation) return;
+    if (this.searchState.active && !this.provider.supportsSearchCancellation) return false;
     const controller = new AbortController();
     const combined = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal;
-    if (combined.aborted) return;
+    if (combined.aborted) return false;
     const promise = this.provider.search(query, {
       userId: this.userId,
       ...(this.agentId ? { agentId: this.agentId } : {}),
@@ -60,6 +60,7 @@ export class Prefetch {
       if (this.searchState.active === promise) this.searchState.active = undefined;
     };
     void promise.then(settled, settled);
+    return true;
   }
 
   cancel(): void {

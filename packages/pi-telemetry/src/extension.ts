@@ -339,11 +339,6 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   });
 
   pi.on('session_start', async (_event, ctx) => {
-    // Keep the runtime peer optional for callers importing programmatic exporters.
-    const runtime = await import('@earendil-works/pi-coding-agent');
-    const [major = 0, minor = 0, patch = 0] = runtime.VERSION.split('.').map(Number);
-    supportsSettlement = major > 0 || minor > 84 || (minor === 84 && patch >= 2);
-    convertMessages = runtime.convertToLlm;
     localSessionId = ctx.sessionManager?.getSessionId() ?? randomUUID();
     sessionId = isSubagent && inheritedSessionId ? inheritedSessionId : localSessionId;
     currentTraceId = isSubagent ? inheritedTraceId : undefined;
@@ -355,9 +350,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     contextHistory = undefined;
     hasFullContext = false;
     systemPrompt = undefined;
-    promptNumber = (ctx.sessionManager?.getEntries?.() ?? []).filter(
-      (entry) => entry.type === 'message' && entry.message.role === 'user',
-    ).length;
+    promptNumber = 0;
     inputNumbered = false;
     generationOpen = false;
     boundaryFailure = {};
@@ -375,7 +368,26 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     enabled = exporter.getStatus?.().enabled !== false;
     capturePayloads = enabled && config.includePayloads === true;
     mediaEnabled = config.includePayloads === true && config.mediaUploadEnabled === true;
+    streamInput = undefined;
+    streamStartedAt = undefined;
+    streamEvents = [];
+    streamBytes = 0;
+    streamTruncated = false;
+    completionStartTime = undefined;
+    compactionStartedAt = undefined;
+    branchSummaryStartedAt = undefined;
+    supportsSettlement = false;
+    convertMessages = undefined;
     showStatus(ctx);
+    if (!enabled) return;
+    // Keep the runtime peer optional for callers importing programmatic exporters.
+    const runtime = await import('@earendil-works/pi-coding-agent');
+    const [major = 0, minor = 0, patch = 0] = runtime.VERSION.split('.').map(Number);
+    supportsSettlement = major > 0 || minor > 84 || (minor === 84 && patch >= 2);
+    convertMessages = runtime.convertToLlm;
+    promptNumber = (ctx.sessionManager?.getEntries?.() ?? []).filter(
+      (entry) => entry.type === 'message' && entry.message.role === 'user',
+    ).length;
   });
 
   pi.on('input', async (event) => {
@@ -841,7 +853,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     requestParameters = modelParameters(event.payload, ctx.thinkingLevel);
     if (capturePayloads) systemPrompt = ctx.getSystemPrompt?.() ?? systemPrompt;
     completionStartTime = undefined;
-    streamStartedAt = capturePayloads ? Date.now() : undefined;
+    streamStartedAt = Date.now();
     streamInput = capturePayloads ? (event.payload as JsonValue) : undefined;
     streamEvents = [];
     streamBytes = 0;
