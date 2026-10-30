@@ -1,5 +1,6 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { createCloudBrowserAdapter } from './adapter.js';
 import type { BrowserSessionConfig } from './session-backend.js';
 
 /** Vision model used by the optional analyze_screenshot tool. */
@@ -162,15 +163,16 @@ export function resolveConfig(config?: BrowserUseConfig): BrowserUseConfig {
     throw new Error('Browser session.enabled must be true or false');
 
   if (resolved.session?.enabled) {
-    const { key, retentionMs, backend, adapterModule } = resolved.session;
+    const { key, retentionMs, backend, adapterModule, provider } = resolved.session;
     if (typeof key !== 'string' || !key.trim() || key.length > 512)
       throw new Error(
         'Browser session.key must be a non-empty logical session identifier (max 512 characters)',
       );
     if (!Number.isInteger(retentionMs) || retentionMs < 1 || retentionMs > 86_400_000)
       throw new Error('Browser session.retentionMs must be between 1 and 86400000');
-    if (backend && adapterModule)
-      throw new Error('Choose a browser session backend or adapterModule, not both');
+    if ([backend, adapterModule, provider].filter(Boolean).length > 1)
+      throw new Error('Choose one browser session provider, backend, or adapterModule');
+    if (provider) createCloudBrowserAdapter(provider);
     if (backend && Object.hasOwn(backend, 'sessionId'))
       throw new Error(
         'Provider sessionId is runtime state; supply a runtime binding instead of settings',

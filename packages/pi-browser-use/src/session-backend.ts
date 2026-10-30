@@ -1,10 +1,12 @@
+import type { CloudBrowserProvider } from './adapter.js';
 import type { BrowserUseConfig } from './config.js';
 import { parseBrowserHeaders } from './session-connection.js';
 import { BrowserSessionError } from './session-control.js';
 
 export interface ManagedBrowser {
+  /** Provider ID, or a private reference for a direct adapter. */
   id: string;
-  connection: Pick<BrowserUseConfig, 'wsEndpoint' | 'browserUrl' | 'wsHeaders'>;
+  connection: Omit<BrowserUseConfig, 'session'>;
   /** Absolute provider deadline, not a promise that the provider will extend it. */
   expiresAt?: number;
 }
@@ -19,7 +21,9 @@ export class BrowserAcquisitionError extends BrowserSessionError {
 }
 
 /** Loaded in the independent session process, so cleanup survives the Pi client. */
-export interface BrowserLifecycleAdapter {
+export interface BrowserAdapter {
+  /** Built-in direct connections declare ownership; managed backends default to adapter-owned. */
+  readonly ownership?: 'local' | 'external' | 'adapter';
   acquire(config: BrowserUseConfig, signal: AbortSignal): Promise<ManagedBrowser>;
   describe?(
     browser: ManagedBrowser,
@@ -33,6 +37,9 @@ export interface BrowserLifecycleAdapter {
   /** Ends an adapter-owned browser. Must preserve reusable profiles unless explicitly configured otherwise. */
   release(browser: ManagedBrowser, signal: AbortSignal): Promise<void>;
 }
+
+/** Compatibility name for existing custom lifecycle modules and SDK callers. */
+export type BrowserLifecycleAdapter = BrowserAdapter;
 
 export interface HttpSessionRequest {
   url: string;
@@ -57,6 +64,8 @@ export interface HttpBrowserBackend {
 }
 
 export type BrowserSessionConfig = {
+  /** Built-in cloud lifecycle integration; mutually exclusive with backend and adapterModule. */
+  provider?: CloudBrowserProvider;
   backend?: HttpBrowserBackend;
   /** Trusted absolute module exporting createBrowserLifecycleAdapter(). */
   adapterModule?: string;
@@ -79,7 +88,10 @@ export function validateBrowserExpiry(value: unknown) {
     throw new BrowserSessionError('The browser backend returned an invalid expiry.');
 }
 
-export function validateBrowserBinding(browser: ManagedBrowser) {
+export function validateBrowserBinding(
+  browser: ManagedBrowser,
+  ownership: NonNullable<BrowserAdapter['ownership']> = 'adapter',
+) {
   try {
     if (
       !browser ||
@@ -87,18 +99,25 @@ export function validateBrowserBinding(browser: ManagedBrowser) {
       !browser.id.trim() ||
       browser.id.length > 1024 ||
       !browser.connection ||
-      typeof browser.connection !== 'object'
+      typeof browser.connection !== 'object' ||
+      Array.isArray(browser.connection) ||
+      Object.hasOwn(browser.connection, 'session')
     )
       throw new Error();
     validateBrowserExpiry(browser.expiresAt);
     const { wsEndpoint, browserUrl, wsHeaders } = browser.connection;
-    if ([wsEndpoint, browserUrl].some((value) => value !== undefined && typeof value !== 'string'))
-      throw new Error();
-    const endpoint = new URL(wsEndpoint || browserUrl || '');
     if (
-      !(wsEndpoint ? ['ws:', 'wss:'] : ['http:', 'https:']).includes(endpoint.protocol) ||
-      (wsHeaders !== undefined && typeof wsHeaders !== 'string')
+      [wsEndpoint, browserUrl, wsHeaders].some(
+        (value) => value !== undefined && typeof value !== 'string',
+      )
     )
+      throw new Error();
+    if (ownership !== 'adapter' && !wsEndpoint && !browserUrl) {
+      parseBrowserHeaders(wsHeaders);
+      return;
+    }
+    const endpoint = new URL(wsEndpoint || browserUrl || '');
+    if (!(wsEndpoint ? ['ws:', 'wss:'] : ['http:', 'https:']).includes(endpoint.protocol))
       throw new Error();
     parseBrowserHeaders(wsHeaders);
   } catch {
@@ -141,6 +160,50 @@ function deadline(value: unknown): number | undefined {
     typeof value === 'number' ? value : typeof value === 'string' ? Date.parse(value) : NaN;
   validateBrowserExpiry(parsed);
   return parsed;
+}
+
+/** Shared bounded transport for generic and built-in lifecycle adapters. */
+export async function requestBrowserManagement(
+  spec: HttpSessionRequest,
+  signal: AbortSignal,
+  timeoutMs: number,
+): Promise<unknown> {
+  const boundedSignal = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
+  try {
+    const response = await fetch(spec.url, {
+      method: spec.method ?? 'POST',
+      headers: { 'Content-Type': 'application/json', ...spec.headers },
+      ...(spec.body === undefined ? {} : { body: JSON.stringify(spec.body) }),
+      signal: boundedSignal,
+      redirect: 'error',
+    });
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new BrowserSessionError(`Browser management request failed (HTTP ${response.status}).`);
+    }
+    const reader = response.body?.getReader();
+    if (!reader) return {};
+    const chunks: Uint8Array[] = [];
+    let bytes = 0;
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      bytes += chunk.value.byteLength;
+      if (bytes > 65_536) {
+        await reader.cancel();
+        throw new BrowserSessionError('Browser management response exceeded 64 KiB.');
+      }
+      chunks.push(chunk.value);
+    }
+    const text = Buffer.concat(chunks).toString('utf8');
+    return text ? (JSON.parse(text) as unknown) : {};
+  } catch (error) {
+    if (signal.aborted) throw signal.reason;
+    if (error instanceof BrowserSessionError) throw error;
+    throw new BrowserSessionError(
+      'Browser management request failed; its outcome may be unknown. Inspect the provider before retrying.',
+    );
+  }
 }
 
 export function createHttpBrowserAdapter(
@@ -220,44 +283,15 @@ export function createHttpBrowserAdapter(
         return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, map(child)]));
       return value;
     };
-    const boundedSignal = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
-    try {
-      const response = await fetch(replace(spec.url, true), {
-        method: spec.method ?? 'POST',
-        headers: { 'Content-Type': 'application/json', ...spec.headers },
-        ...(spec.body === undefined ? {} : { body: JSON.stringify(map(spec.body)) }),
-        signal: boundedSignal,
-        redirect: 'error',
-      });
-      if (!response.ok) {
-        await response.body?.cancel();
-        throw new BrowserSessionError(
-          `Browser management request failed (HTTP ${response.status}).`,
-        );
-      }
-      const reader = response.body?.getReader();
-      if (!reader) return {};
-      const chunks: Uint8Array[] = [];
-      let bytes = 0;
-      while (true) {
-        const chunk = await reader.read();
-        if (chunk.done) break;
-        bytes += chunk.value.byteLength;
-        if (bytes > 65_536) {
-          await reader.cancel();
-          throw new BrowserSessionError('Browser management response exceeded 64 KiB.');
-        }
-        chunks.push(chunk.value);
-      }
-      const text = Buffer.concat(chunks).toString('utf8');
-      return text ? (JSON.parse(text) as unknown) : {};
-    } catch (error) {
-      if (signal.aborted) throw signal.reason;
-      if (error instanceof BrowserSessionError) throw error;
-      throw new BrowserSessionError(
-        'Browser management request failed; its outcome may be unknown. Inspect the provider before retrying.',
-      );
-    }
+    return requestBrowserManagement(
+      {
+        ...spec,
+        url: replace(spec.url, true),
+        ...(spec.body === undefined ? {} : { body: map(spec.body) }),
+      },
+      signal,
+      timeoutMs,
+    );
   }
 
   return {

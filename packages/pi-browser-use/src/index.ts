@@ -38,7 +38,13 @@ import { augmentToolDescription } from './tool-augment.js';
 import { buildGroups, CORE_TOOLS, GROUP_SUMMARIES, loadCategoryMap } from './tool-groups.js';
 import { toToolContent } from './tool-result.js';
 
+export {
+  type CloudBrowserProvider,
+  createBrowserAdapter,
+  createCloudBrowserAdapter,
+} from './adapter.js';
 export type {
+  BrowserAdapter,
   BrowserLifecycleAdapter,
   BrowserSessionConfig,
   HttpBrowserBackend,

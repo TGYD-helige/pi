@@ -6,6 +6,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { resolveHome } from '@amaster.ai/pi-shared/settings';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+import { createCloudBrowserAdapter } from './adapter.js';
 import type { BrowserUseConfig } from './config.js';
 import { buildSubprocessEnv } from './config.js';
 import type { DevToolsClient } from './index.js';
@@ -46,11 +47,12 @@ export class BrowserSessionClient {
     if (!config.session?.enabled)
       throw new BrowserSessionError('Browser session retention is not configured.');
     if (browser) {
-      if (!config.session.backend || config.session.adapterModule)
+      if ((!config.session.backend && !config.session.provider) || config.session.adapterModule)
         throw new BrowserSessionError(
-          'A runtime browser binding requires an HTTP lifecycle backend.',
+          'A runtime browser binding requires an HTTP lifecycle backend or built-in provider.',
         );
-      createHttpBrowserAdapter(config.session.backend, browser);
+      if (config.session.provider) createCloudBrowserAdapter(config.session.provider, browser);
+      else createHttpBrowserAdapter(config.session.backend!, browser);
     }
     const identity = createHash('sha256').update(config.session.key).digest('hex');
     this.path = join(resolveHome(), 'browser-sessions', identity, 'session.json');

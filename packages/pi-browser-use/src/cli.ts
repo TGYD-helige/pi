@@ -125,6 +125,9 @@ export function parseArgs(argv: string[]): BrowserUseConfig {
     if (Object.entries(headers).some(([name, value]) => resolved[name] !== value))
       config.wsHeaders = JSON.stringify(resolved);
   }
+  const provider = config.session?.enabled ? config.session.provider : undefined;
+  if (provider && typeof provider.apiKey === 'string')
+    provider.apiKey = resolveAuthentication(provider.apiKey);
   const backend = config.session?.enabled ? config.session.backend : undefined;
   for (const request of [backend?.create, backend?.status, backend?.retain, backend?.release]) {
     if (!request) continue;

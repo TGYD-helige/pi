@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       browser_session_only:
-        description: Run only Browserless session lifecycle checks after the shared approval gate
+        description: Run only Browserless session lifecycle and real Pi model handoff checks
         type: boolean
         default: false
 
@@ -45,6 +45,7 @@ jobs:
         env:
           INTEGRATION_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           INTEGRATION_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          BROWSER_SESSION_ONLY: ${{ inputs.browser_session_only }}
         run: node .github/scripts/integration-matrix.mjs
 
   # ──────────────────────────────────────────────────────────────────────
@@ -186,6 +187,9 @@ jobs:
   # Wait for Stage C to release its Browserless connections before lifecycle checks.
   browserless-session-e2e:
     name: Browserless Cloud session lifecycle
+    concurrency:
+      group: browserless-cloud
+      queue: max
     needs: [detect-extension-matrix, integration-approval, extension-tool-matrix]
     if: >
       always() && !cancelled() &&
@@ -352,10 +356,12 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────
   extension-tool-matrix:
     name: Extension E2E (${{ matrix.extension }}${{ matrix.provider && format('-{0}', matrix.provider) || '' }}${{ matrix.scenario && format('-{0}', matrix.scenario) || '' }})
+    concurrency:
+      group: ${{ matrix.extension == 'pi-browser-use' && 'browserless-cloud' || format('extension-{0}-{1}', github.run_id, strategy.job-index) }}
+      queue: max
     needs: [detect-extension-matrix, integration-approval]
     if: >
       needs.detect-extension-matrix.outputs.has_extensions == 'true' &&
-      !inputs.browser_session_only &&
       vars.PI_INTEGRATION_SKIP_STAGE_C != 'true'
     runs-on: ${{ matrix.scenario == 'macos' && 'macos-15' || matrix.scenario == 'windows' && 'windows-2025' || 'ubuntu-latest' }}
     timeout-minutes: 15
@@ -916,6 +922,12 @@ jobs:
           LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
         run: |
           set -euo pipefail
+          # Run the two model-backed Pi clients directly; an outer model's bash
+          # output is not evidence that the lifecycle test actually ran.
+          if [ "${{ matrix.extension }}" = "pi-browser-use" ] && [ "${{ matrix.scenario }}" = "session" ]; then
+            node .github/scripts/browser-session-model-e2e.mjs
+            exit 0
+          fi
           # Provider-backed scenarios are merge gates: missing credentials are
           # configuration failures, not successful skips.
           if [ "${{ matrix.provider }}" = "firecrawl" ] && [ -z "${FIRECRAWL_API_KEY:-}" ]; then

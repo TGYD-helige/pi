@@ -198,6 +198,10 @@ export const fullMatrix = [
     assert_tool_pattern: '(VISUAL CHECK 7391[\\s\\S]*(blue|#1457d9)|(blue|#1457d9)[\\s\\S]*VISUAL CHECK 7391)',
     assert_tool_count: 1,
   },
+  {
+    extension: 'pi-browser-use',
+    scenario: 'session',
+  },
 ];
 
 const fullRunPaths = [
@@ -210,7 +214,8 @@ const fullRunPaths = [
 const packageAliases = new Map([['pi-memory-mem0', 'pi-memory']]);
 const testedExtensions = new Set(fullMatrix.map((entry) => entry.extension));
 
-export function selectIntegrationMatrix(changedFiles, { forceAll = false } = {}) {
+export function selectIntegrationMatrix(changedFiles, { forceAll = false, browserSessionOnly = false } = {}) {
+  if (browserSessionOnly) return fullMatrix.filter(entry => entry.extension === 'pi-browser-use' && entry.scenario === 'session');
   if (forceAll || changedFiles.some((file) => fullRunPaths.some((pattern) => pattern.test(file)))) {
     return fullMatrix;
   }
@@ -226,7 +231,7 @@ export function selectIntegrationMatrix(changedFiles, { forceAll = false } = {})
     if (file.startsWith('tests/computer-use-') || file.startsWith('.github/scripts/computer-use-') || file.startsWith('.github/scripts/fixtures/computer-use-')) selected.add('pi-computer-use');
     if (file.startsWith('.github/scripts/telemetry-')) selected.add('pi-telemetry');
     if (file === '.github/scripts/pi-memory-snapshot-e2e.mjs') selected.add('pi-memory');
-    if (file === '.github/scripts/browserless-session-e2e.mjs' || file.startsWith('tests/browser-session-') || file.startsWith('tests/fixtures/browser-session-')) selected.add('pi-browser-use');
+    if (file.startsWith('.github/scripts/browser-session-') || file === '.github/scripts/browserless-session-e2e.mjs' || file.startsWith('tests/browser-session-') || file.startsWith('tests/fixtures/browser-session-')) selected.add('pi-browser-use');
   }
   return fullMatrix.filter((entry) => selected.has(entry.extension));
 }
@@ -246,7 +251,12 @@ function run() {
   const head = process.env.INTEGRATION_HEAD_SHA || '';
   const forceAll = eventName === 'workflow_dispatch' || !base || !head || /^0+$/.test(base);
   const files = forceAll ? [] : changedFiles(base, head, eventName);
-  const include = selectIntegrationMatrix(files, { forceAll });
+  let include = selectIntegrationMatrix(files, { forceAll, browserSessionOnly: process.env.BROWSER_SESSION_ONLY === 'true' });
+  // pull_request_target executes base YAML; it cannot run a newly added scenario.
+  if (eventName === 'pull_request_target') {
+    const workflow = execFileSync('git', ['show', `${process.env.GITHUB_WORKFLOW_SHA}:.github/workflows/integration.yml`], { encoding: 'utf8' });
+    if (!workflow.includes('node .github/scripts/browser-session-model-e2e.mjs')) include = include.filter(entry => entry.extension !== 'pi-browser-use' || entry.scenario !== 'session');
+  }
   const output = [`matrix=${JSON.stringify({ include })}`, `has_extensions=${include.length > 0}`].join('\n');
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `${output}\n`);
   else process.stdout.write(`${output}\n`);
