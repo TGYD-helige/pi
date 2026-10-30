@@ -1,5 +1,6 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import type { BrowserSessionConfig } from './session-backend.js';
 
 /** Vision model used by the optional analyze_screenshot tool. */
 export interface VisionModelConfig {
@@ -11,6 +12,7 @@ export type BrowserSessionMode = 'persistent' | 'isolated' | 'existing';
 
 /** Configuration for the chrome-devtools-mcp upstream process. */
 export interface BrowserUseConfig {
+  session?: BrowserSessionConfig;
   sessionMode?: BrowserSessionMode;
   headless?: boolean;
   channel?: 'canary' | 'dev' | 'beta' | 'stable';
@@ -155,6 +157,49 @@ const DEFAULTS: Partial<BrowserUseConfig> = {
 /** Merge user config over sane defaults. */
 export function resolveConfig(config?: BrowserUseConfig): BrowserUseConfig {
   const resolved = { ...DEFAULTS, ...config };
+
+  if (resolved.session && typeof resolved.session.enabled !== 'boolean')
+    throw new Error('Browser session.enabled must be true or false');
+
+  if (resolved.session?.enabled) {
+    const { key, retentionMs, backend, adapterModule } = resolved.session;
+    if (typeof key !== 'string' || !key.trim() || key.length > 512)
+      throw new Error(
+        'Browser session.key must be a non-empty logical session identifier (max 512 characters)',
+      );
+    if (!Number.isInteger(retentionMs) || retentionMs < 1 || retentionMs > 86_400_000)
+      throw new Error('Browser session.retentionMs must be between 1 and 86400000');
+    if (backend && adapterModule)
+      throw new Error('Choose a browser session backend or adapterModule, not both');
+    if (backend && Object.hasOwn(backend, 'sessionId'))
+      throw new Error(
+        'Provider sessionId is runtime state; supply a runtime binding instead of settings',
+      );
+    if (resolved.slim || resolved.experimentalPageIdRouting === false)
+      throw new Error('Browser sessions require page ID routing and cannot use slim mode');
+    if (
+      resolved.extraArgs?.some(
+        (arg) =>
+          /^-[uwe]/.test(arg) ||
+          [
+            'browserurl',
+            'wsendpoint',
+            'wsheaders',
+            'autoconnect',
+            'userdatadir',
+            'isolated',
+            'executablepath',
+            'channel',
+            'slim',
+            'experimentalpageidrouting',
+          ].includes(arg.split('=')[0]!.replaceAll('-', '').toLowerCase().replace(/^no/, '')),
+      )
+    ) {
+      throw new Error(
+        'Use structured browser connection settings instead of extraArgs overrides with browser sessions',
+      );
+    }
+  }
 
   if (resolved.allowedUrlPattern?.length && resolved.blockedUrlPattern?.length) {
     throw new Error('allowedUrlPattern and blockedUrlPattern cannot be used together');

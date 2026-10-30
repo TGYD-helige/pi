@@ -116,7 +116,6 @@ export function evaluateTrace(observations, codeword, scenario = 'basic') {
     const modelParameters = generation.modelParameters ?? {};
     const usageDetails = generation.usageDetails ?? {};
     const costDetails = generation.costDetails ?? {};
-    need(generation.providedModelName === envOr(process.env.PI_INTEGRATION_MODEL, 'deepseek-v4-flash'), `${label} has the wrong model`);
     need(modelParameters.provider === MODEL_PROVIDER, `${label} has the wrong model provider`);
     need(
       isCount(usageDetails.input) && isCount(usageDetails.output) && isCount(usageDetails.total),

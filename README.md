@@ -18,7 +18,7 @@ This repository contains the open-source runtime contracts, adapters, and orches
 | Extension | `@amaster.ai/pi-telemetry` | Runtime traces, TTFT, token/cost accounting and diagnostics with Langfuse and OpenTelemetry exporters. |
 | Extension | `@amaster.ai/pi-task-scheduler` | Cron-based scheduled task management with LLM-callable tools. |
 | Extension | `@amaster.ai/pi-goal` | Derives a goal from the conversation and keeps the agent working until the condition is met, with iteration/token backstops. |
-| Extension | `@amaster.ai/pi-browser-use` | Browser automation wrapping chrome-devtools-mcp with `browser_`-prefixed tools. |
+| Extension | `@amaster.ai/pi-browser-use` | Browser automation via chrome-devtools-mcp, with opt-in live-session retention and cloud lifecycle adapters. |
 | Extension | `@amaster.ai/pi-web-access` | Web search (including Cloudflare), URL content extraction, and image search across configurable providers. |
 | Extension | `@amaster.ai/pi-computer-use` | Cross-platform computer-use tools for desktop automation. |
 | Extension | `@amaster.ai/pi-channels` | Native messaging channels: Feishu, WeCom, and webhooks. |

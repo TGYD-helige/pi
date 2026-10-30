@@ -1,7 +1,7 @@
 {
   "name": "@amaster.ai/pi-browser-use",
   "version": "0.1.2-beta.15",
-  "description": "Pi extension for browser automation via chrome-devtools-mcp with browser_ prefixed tools",
+  "description": "Pi browser automation via chrome-devtools-mcp with opt-in live sessions and cloud lifecycle adapters",
   "keywords": ["pi-package", "pi", "extension", "browser", "automation", "chrome-devtools", "mcp"],
   "license": "Apache-2.0",
   "type": "module",

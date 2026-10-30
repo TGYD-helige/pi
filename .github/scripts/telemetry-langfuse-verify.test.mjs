@@ -390,7 +390,7 @@ it('evaluateTrace rejects missing trace and generation semantics', () => {
   assert.ok(problems.some((problem) => problem.includes('sessionId')));
   assert.ok(problems.some((problem) => problem.includes('service tag')));
   assert.ok(problems.some((problem) => problem.includes('serviceName metadata')));
-  assert.ok(problems.some((problem) => problem.includes('model')));
+  assert.ok(problems.some((problem) => problem.includes('model provider')));
   assert.ok(problems.some((problem) => problem.includes('usage')));
   assert.ok(problems.some((problem) => problem.includes('cost')));
 });
@@ -411,19 +411,15 @@ it('derives the Langfuse trace id used by the exporter', () => {
 });
 
 
-it('verifies the configured integration model instead of a fixed DeepSeek name', () => {
-  const previous = process.env.PI_INTEGRATION_MODEL;
-  try {
-    process.env.PI_INTEGRATION_MODEL = 'custom-model';
-    assert.ok(evaluateTrace(fullTrace(), CODEWORD).some((error) => error.includes('wrong model')));
-    const observations = fullTrace();
-    for (const item of observations) {
-      if (item.providedModelName) item.providedModelName = 'custom-model';
-    }
-    assert.deepEqual(evaluateTrace(observations, CODEWORD), []);
-  } finally {
-    if (previous === undefined) delete process.env.PI_INTEGRATION_MODEL;
-    else process.env.PI_INTEGRATION_MODEL = previous;
+it.each(['gateway-served-model', '', undefined])('does not constrain generation model names (%s)', (model) => {
+  for (const [scenario, createTrace] of [
+    ['basic', fullTrace],
+    ['hierarchy', hierarchyTrace],
+    ['redacted', redactedTrace],
+  ]) {
+    const observations = createTrace().map((observation) => observation.type === 'GENERATION'
+      ? { ...observation, providedModelName: model } : observation);
+    assert.deepEqual(evaluateTrace(observations, CODEWORD, scenario), []);
   }
 });
 

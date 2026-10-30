@@ -1,6 +1,6 @@
 const { piVersion } = vi.hoisted(() => ({ piVersion: { value: '1.2.0' } }));
 
-import { beforeEach, describe, expect, it, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, test, vi } from 'vitest';
 
 // --- Mocks ---
 
@@ -142,7 +142,8 @@ const mockPi = {
   }),
 };
 
-const { default: browserUseExtension } = await import('../index.js');
+const { default: browserUseExtension, BrowserSessionClient } = await import('../index.js');
+const fs = await import('node:fs');
 
 /** Register the extension and fire session_start. */
 async function startExtension(config?: Record<string, unknown>) {
@@ -175,6 +176,11 @@ async function shutdownExtension() {
 
 describe('browserUseExtension', () => {
   beforeEach(() => {
+    vi.mocked(fs.readFileSync)
+      .mockReset()
+      .mockImplementation(() => {
+        throw new Error('ENOENT');
+      });
     piVersion.value = '1.2.0';
     registeredTools.clear();
     sessionStartHandlers.length = 0;
@@ -190,6 +196,8 @@ describe('browserUseExtension', () => {
     mockPrepareBrowserProfile.mockClear();
   });
 
+  afterEach(() => vi.restoreAllMocks());
+
   test('registers session_start and session_shutdown handlers', () => {
     browserUseExtension(mockPi as any);
 
@@ -198,6 +206,37 @@ describe('browserUseExtension', () => {
   });
 
   describe('config loading', () => {
+    it.each([
+      '界'.repeat(30000),
+      'row\n'.repeat(3000),
+    ])('bounds session-mode tool text before returning it to Pi', async (large) => {
+      vi.spyOn(BrowserSessionClient.prototype, 'connect').mockResolvedValue();
+      vi.spyOn(BrowserSessionClient.prototype, 'listAllTools').mockImplementation(mockListAllTools);
+      vi.spyOn(BrowserSessionClient.prototype, 'close').mockResolvedValue();
+      vi.spyOn(BrowserSessionClient.prototype, 'callTool').mockResolvedValue({
+        content: [
+          { type: 'text', text: large },
+          { type: 'text', text: large },
+        ],
+      });
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        JSON.stringify({
+          'pi-browser-use': {
+            session: { enabled: true, key: 'bounded-output', retentionMs: 1000 },
+          },
+        }),
+      );
+      await startExtension();
+      const result = await registeredTools
+        .get('browser_take_snapshot')!
+        .execute('test', {}, undefined, undefined, {});
+      const output = result as { content: Array<{ text?: string }>; details?: unknown };
+      const text = output.content.map((item) => item.text ?? '').join('\n');
+      expect(Buffer.byteLength(text)).toBeLessThanOrEqual(50 * 1024);
+      expect(text.split('\n').length).toBeLessThanOrEqual(2000);
+      expect(output.details).toBeUndefined();
+      await shutdownExtension();
+    });
     test('uses defaults when config.json is missing', async () => {
       await startExtension();
       // Should still register tools — no crash
@@ -219,6 +258,68 @@ describe('browserUseExtension', () => {
   });
 
   describe('tool registration (session_start)', () => {
+    it('hides session controls after switching from enabled to disabled sessions', async () => {
+      vi.spyOn(BrowserSessionClient.prototype, 'connect').mockResolvedValue();
+      vi.spyOn(BrowserSessionClient.prototype, 'listAllTools').mockImplementation(mockListAllTools);
+      vi.spyOn(BrowserSessionClient.prototype, 'close').mockResolvedValue();
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        JSON.stringify({
+          'pi-browser-use': { session: { enabled: true, key: 'switch-test', retentionMs: 1000 } },
+        }),
+      );
+      await startExtension();
+      expect(mockPi.getActiveTools()).toContain('browser_session');
+
+      await shutdownExtension();
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        JSON.stringify({ 'pi-browser-use': { session: { enabled: false } } }),
+      );
+      await sessionStartHandlers[0]!({ type: 'session_start' }, { cwd: process.cwd() });
+
+      expect(mockPi.getActiveTools()).not.toContain('browser_session');
+      expect(registeredTools.get('browser_session')!.prepareLoadout?.({ declared: [] })).toEqual({
+        hiddenDeclarations: ['browser_session'],
+      });
+    });
+
+    it('cancels slash-command session operations with the Pi context signal', async () => {
+      vi.spyOn(BrowserSessionClient.prototype, 'connect').mockResolvedValue();
+      vi.spyOn(BrowserSessionClient.prototype, 'listAllTools').mockImplementation(mockListAllTools);
+      vi.spyOn(BrowserSessionClient.prototype, 'control').mockImplementation((_action, signal) => {
+        if (!signal) return Promise.resolve({ state: 'retained' });
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        });
+      });
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        JSON.stringify({
+          'pi-browser-use': { session: { enabled: true, key: 'command-test', retentionMs: 1000 } },
+        }),
+      );
+      await startExtension();
+      const command = mockPi.registerCommand.mock.calls.find(
+        ([name]) => name === 'browser-session',
+      );
+      const controller = new AbortController();
+      const notify = vi.fn();
+      const result = command![1].handler('retain', {
+        signal: controller.signal,
+        ui: { notify },
+      });
+      controller.abort();
+
+      await expect(result).rejects.toBe(controller.signal.reason);
+      expect(notify).not.toHaveBeenCalled();
+    });
+
+    it('keeps session controls disabled for ordinary direct browser connections', async () => {
+      await startExtension();
+      expect(registeredTools.has('browser_session')).toBe(false);
+      expect(mockPi.registerCommand.mock.calls.some(([name]) => name === 'browser-session')).toBe(
+        false,
+      );
+    });
+
     test('connects to chrome-devtools-mcp subprocess', async () => {
       await startExtension();
       expect(mockConnect).toHaveBeenCalledTimes(1);

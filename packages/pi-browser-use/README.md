@@ -11,6 +11,7 @@ pi-coding-agent extension that wraps [chrome-devtools-mcp](https://github.com/Ch
 - **Reproducible MCP runtime** — launches the installed chrome-devtools-mcp entrypoint with the current Node executable instead of downloading `@latest` through ambient `npx`
 - **Page-scoped routing** — routes page tools by explicit `pageId` instead of shared selected-page state
 - **Connection recovery** — detects closed or unhealthy MCP transports and reconnects before the next call
+- **Optional live sessions** — retain the original browser across Pi processes only when requested, with bounded expiry and configurable cloud lifecycle adapters
 - **Navigation safety** — supports URL allow/block patterns and redacts sensitive network headers by default
 - **Tool description augmentation** — adds usage hints for key tools (click, fill, press_key, etc.)
 - **Result post-processing** — strips embedded snapshots, detects overlay/stale element issues
@@ -25,7 +26,7 @@ bun add @amaster.ai/pi-browser-use
 
 Requires Node.js `^20.19.0 || ^22.12.0 || >=23`, Chrome (stable or newer), and `@earendil-works/pi-coding-agent >= 0.74.0`.
 
-`chrome-devtools-mcp` is a compatible runtime dependency and its installed entrypoint is resolved when the extension module loads. A missing or malformed installation fails extension loading immediately; the extension does not download a replacement at connection time. Connection failures expose only allowlisted system error codes or Chrome startup categories, not raw subprocess stderr.
+`chrome-devtools-mcp` uses the compatible `^1.6.0` range and its installed entrypoint is resolved when the extension connects. A missing or malformed installation fails connection; the extension does not download a replacement at connection time. Connection failures expose only allowlisted system error codes or Chrome startup categories, not raw subprocess stderr.
 
 Hosts where `process.execPath` is not a directly executable Node runtime can set `PI_BROWSER_USE_NODE` to the Node command used for the MCP subprocess.
 
@@ -69,6 +70,10 @@ Or with a config file:
 npx @amaster.ai/pi-browser-use --config path/to/config.json
 ```
 
+Standalone `--config` supports `${ENV_VAR}` references in `wsEndpoint`, `browserUrl`, `wsHeaders` values, and enabled `session.backend` request URLs/header values (`create`, `status`, `retain`, `release`). For example, use `"Authorization": "Bearer ${BROWSER_API_KEY}"` rather than storing the key in JSON. Missing or empty referenced variables stop startup with `BrowserAuthEnvironmentError`; resolved headers are validated to reject newline injection. URL substitutions are literal, so supply a valid, appropriately URL-encoded value. Request bodies, session keys, file paths, executable arguments, bare `$ENV_VAR`, and other settings remain literal. Disabled backend credentials are not resolved. Header JSON spelling and formatting are preserved when no value changes, keeping existing session configuration hashes compatible. Global/agent-dir extension settings retain their existing interpolation rules; project settings never gain environment access. Startup logs report safe error classes/system codes without printing config contents, credentials, or raw exceptions.
+
+The extension and standalone MCP CLI share the same result processing: aggregate text is bounded below 50 KiB / 2,000 lines with a truncation notice, and structured content uses the shared 12 KiB limiter. Screenshot image blocks and tool error status are preserved.
+
 ## Configuration
 
 ### Session Mode
@@ -105,6 +110,223 @@ npx @amaster.ai/pi-browser-use --config path/to/config.json
 | `acceptInsecureCerts` | `boolean` | `false` | Ignore invalid or self-signed certificate errors; use with caution |
 | `envAllowlist` | `string[]` | — | Extra env var names the MCP subprocess may inherit, on top of the built-in allowlist (`PATH`, `HOME`, `DISPLAY`, `XAUTHORITY`, proxy variables, ...). Everything else is stripped, so secrets in the host environment stay out of the subprocess |
 | `envBlocklist` | `string[]` | — | Env var names the MCP subprocess must never receive; wins over the built-in allowlist and `envAllowlist` |
+
+### Live Browser Sessions (Opt-in)
+
+Live sessions are disabled by default. Leave them disabled when attaching to your own running Chrome: Pi can disconnect while you keep Chrome open. Authentication/profile reuse is independent of live-session retention.
+
+To enable cross-process human handoffs, configure **user or agent settings**, not project settings:
+
+```json
+{
+  "pi-browser-use": {
+    "sessionMode": "existing",
+    "wsEndpoint": "${BROWSER_CDP_URL}",
+    "session": {
+      "enabled": true,
+      "key": "${BROWSER_CONVERSATION_ID}",
+      "retentionMs": 120000
+    }
+  }
+}
+```
+
+`key` must identify one logical conversation across Pi processes. The host must supply a different value for unrelated conversations; do not share a constant key across agents or projects. One client owns a session at a time. Keep the resolved configuration unchanged when resuming. For a plugin-launched headless browser, omit `wsEndpoint` and use the usual local launch settings instead.
+
+| Setting | Default | Meaning |
+|---------|---------|---------|
+| `session.enabled` | `false` | Enables the independent session process and session tool/command; `false` keeps direct connections and hides the controls |
+| `session.key` | Required when enabled | Stable host-supplied logical conversation identifier |
+| `session.retentionMs` | Required when enabled | Maximum handoff window, 1–86400000 ms; does **not** enable ordinary idle retention |
+| `session.backend` | — | Optional HTTP lifecycle adapter for a created or explicitly delegated existing cloud instance |
+| `session.adapterModule` | — | Optional absolute path to a trusted custom adapter module; mutually exclusive with `backend` |
+
+The enabled tool is `browser_session({"action":"retain" | "status" | "release"})`; users can invoke `/browser-session retain`, `/browser-session status`, and `/browser-session release`. SDK hosts can call `DevToolsClient.sessionControl(action, signal)` directly, including from an application-defined automatic handoff policy. The model never needs to send periodic renewals.
+
+Disabling sessions on a later Pi session removes the tool from the model's available tools. Pi has no command-unregister API, so a previously registered slash command may remain listed until restart; invoking it while disabled returns a configuration error.
+
+1. Use the browser normally. No cloud instance is created merely by discovering tools.
+2. Before waiting for a QR scan, MFA, or another operation needing the original page, call `retain` and check success. A separate process keeps the same MCP/CDP connection alive after Pi exits. This works with local headless Chrome, open-source Browserless, and CDP gateways that reclaim Chrome after disconnect, without requiring a commercial reconnect API.
+3. A later Pi process with the same key reconnects to that process. Re-list pages before continuing; do not navigate or refresh the pending login page. Verify the website's actual login result.
+4. Call `release` after completion or cancellation. This cancels cross-process retention; the current client may continue using the browser. Once the client disconnects, local resources are cleaned up and an adapter-owned cloud browser is released. A browser reached through a plain external CDP address is only disconnected, never forcibly terminated.
+
+`retentionMs` is an upper bound, not a minimum paid period. Ordinary disconnects have no retention window. Repeated `retain` calls within one handoff do not renew its deadline. The process detects exited local clients and tracks client liveness independently; heartbeats never extend retention. Provider hard timeouts, explicit termination/revocation, and host/container shutdown still apply. `providerDeadlineKnown: false` means the backend did not supply its hard expiry; the displayed retention expiry is only the local upper bound.
+
+Status includes `resumed: true` after a client attaches to a previously retained session. A retention deadline that has elapsed is reported as `state: "expired"`, including its original `expiresAt`, even before background cleanup runs. While a local handoff has no attached client, the worker probes its marker tab every second with a five-second timeout and stops if identity verification fails.
+
+There is no general provider-capability discovery API in this version. All enabled sessions support bounded local retain/status/release; repeated retain does not renew a handoff. An adapter may additionally implement `describe` (provider liveness/deadline) and `retain` (provider retention), while `release` is required. These operations cannot recover after the holding worker exits or promise an extension beyond provider limits. Capability negotiation remains follow-up work in [#273](https://github.com/TGYD-helige/pi/issues/273).
+
+Holding CDP does not override provider inactivity or WebSocket idle limits. Configure the provider's supported lifetime options when acquiring the browser, and report any shorter effective deadline through the adapter. Use structured browser connection settings; `extraArgs` cannot override them (including short aliases), enable slim mode, or change page ID routing when live sessions are enabled.
+
+Remote sessions use a single-use WebSocket tunnel: losing the original CDP connection cannot silently redial a provider launch URL and allocate a replacement browser. Local launch/discovery uses a small blank marker tab to verify live browser identity; leave that tab open during retention. No website page is refreshed to perform this check. Expired/lost sessions report failure instead of presenting a new browser/profile as restored live state.
+
+The MCP dependency accepts compatible 1.x updates. Marker verification depends on the installed MCP runtime's `new_page` page-list text and `evaluate_script` JSON result format. The lifecycle CI job runs the real local-Chrome E2E against that installed runtime before Cloud checks, covering marker creation, cross-process continuation, and verification. Incompatible output fails retention explicitly instead of treating a fresh browser as recovery. For auto-connected external Chrome, expiry and shutdown remove only the verified helper marker through its original MCP connection before disconnecting; cleanup never reconnects to reuse an old page ID. When cleanup is attempted, a missing connection, a helper that is the last remaining page, or failed marker cleanup is recorded as `cleanup-failed`; known-lost sessions are not reconnected.
+
+Resume credentials are kept in owner-only session directories and 0600 records under `resolveHome()/browser-sessions/`, outside model-visible results. This is same-host, same-runtime-home continuation across Pi/MCP clients, not recovery after the independent session process, container, or machine disappears. Failed or ambiguous provider creation/cleanup retains a protected record and blocks automatic recreation. Inspect the provider and that record before manually resetting an uncertain session. An expired/lost session whose cleanup completed can be reset with `DevToolsClient.sessionControl('release')` or a new logical key.
+
+### Cloud Lifecycle and Custom Backends
+
+An existing cloud CDP endpoint can use the held-connection strategy above, but connecting to a browser does not grant permission to create or terminate it. To delegate instance management to the plugin, configure `backend.release` and either `backend.create` or a host-supplied runtime binding. Configuring release explicitly authorizes termination of that instance during cleanup, including an instance originally created by the host. Plain CDP connections without a backend remain disconnect-only.
+
+| Backend | Integration path |
+|---------|------------------|
+| Open-source Browserless, custom gateways | Existing CDP endpoint; keep the original connection open only for an explicit handoff. No dependency on Browserless Cloud Session API |
+| Browser Use Cloud browser infrastructure | HTTP/custom adapter creates a browser, maps its ID and CDP URL, and stops that browser on cleanup; hosted-agent run options are a separate API |
+| Browserbase | HTTP/custom adapter creates the session and explicitly requests release on cleanup; creation settings and hard timeout remain provider-specific |
+| Steel, Hyperbrowser, Anchor, and other CDP clouds | Existing CDP connection or an adapter for the provider's create/describe/release operations; lifetime extension is supported only when the provider actually offers it |
+| User-managed local Chrome | Normally leave `session.enabled` false; if enabled, closing the session only disconnects from Chrome |
+
+These are adapter paths, not claims of live verification or bundled SDKs for every provider. The HTTP adapter requires `release` and exactly one of `create` or a runtime browser binding, with optional `status` and `retain`, per-request `url`, `method`, `headers`, and JSON `body`, and a `fields` mapping. Response field paths use dotted object keys; they are not JSONPath expressions. `{sessionId}` substitutes the supplied or returned ID (URL-encoded in URLs); `{expiresAt}` substitutes an absolute Unix-millisecond deadline. Request timeouts are bounded, redirects are rejected, and management response bodies are limited to 64 KiB and never exposed in errors.
+
+If the host already created the instance, settings contain only the static lifecycle templates and policy:
+
+```json
+{
+  "pi-browser-use": {
+    "sessionMode": "existing",
+    "session": {
+      "enabled": true,
+      "key": "${BROWSER_CONVERSATION_ID}",
+      "retentionMs": 120000,
+      "backend": {
+        "release": {
+          "url": "https://browser-api.example/sessions/{sessionId}/stop",
+          "method": "POST",
+          "headers": { "Authorization": "Bearer ${BROWSER_API_KEY}" }
+        }
+      }
+    }
+  }
+}
+```
+
+The provider instance ID is runtime state, not a settings key; `backend.sessionId` is rejected. SDK hosts pass the exported `ManagedBrowser` as the second argument, scoped to that client:
+
+```ts
+const client = new DevToolsClient(config, {
+  id: providerSession.id,
+  connection: { wsEndpoint: providerSession.cdpUrl },
+  // expiresAt: providerSession.expiresAtMs, // optional absolute Unix milliseconds
+});
+```
+
+For a Pi extension or standalone MCP process, the host can inject `PI_BROWSER_USE_SESSION_BINDING` at process launch instead. Its JSON payload must contain the matching logical conversation key and browser reference:
+
+```json
+{
+  "key": "conversation-123",
+  "browser": {
+    "id": "provider-instance-456",
+    "connection": { "wsEndpoint": "wss://browser.example/instance-456" }
+  }
+}
+```
+
+The payload's `key` must exactly match the resolved `session.key`; a mismatch fails closed. SDK clients never implicitly read this process-global environment variable, so multiple clients in one host can bind different instances. The ID must be a non-empty string of at most 1024 characters, distinct from Pi's logical key and page IDs. `connection` requires an explicit `wsEndpoint` or `browserUrl`, with optional `wsHeaders`; optional `expiresAt` is an absolute Unix-millisecond number. The host must supply the CDP address of that exact instance, not a generic launch URL that allocates a different instance on every connection. Creation and a runtime binding are mutually exclusive. This mode needs no `fields` unless configuring `status` or `retain`.
+
+The binding is sent to the independent worker and saved only in its owner-only runtime record. A later client using the same logical key and unchanged settings can resume without reinjecting the binding; injecting a different ID or connection is rejected. Once cleanup deletes the record, starting another existing-instance session requires a fresh runtime binding. No provider IDs are inferred from CDP addresses or exposed in model tool parameters/results. Discovery alone does not adopt or release the host's instance; adoption happens on the first actual browser operation. Adapter-managed connection addresses and CDP headers are authoritative and do not inherit static connection fields; supply any CDP authentication headers in the runtime binding or custom adapter's returned `connection.wsHeaders`.
+
+For example, a simple custom management API can use:
+
+```json
+{
+  "enabled": true,
+  "key": "${BROWSER_CONVERSATION_ID}",
+  "retentionMs": 120000,
+  "backend": {
+    "create": {
+      "url": "https://browser-api.example/sessions",
+      "method": "POST",
+      "headers": { "Authorization": "Bearer ${BROWSER_API_KEY}" },
+      "body": { "headless": true }
+    },
+    "release": {
+      "url": "https://browser-api.example/sessions/{sessionId}/stop",
+      "method": "POST",
+      "headers": { "Authorization": "Bearer ${BROWSER_API_KEY}" }
+    },
+    "fields": { "id": "id", "wsEndpoint": "cdpUrl", "expiresAt": "expiresAt" }
+  }
+}
+```
+
+Place this object at `pi-browser-use.session`. Adapt endpoint paths and response fields to the actual provider. Never map ordinary release to deleting a reusable profile or authentication store. The optional `status` request additionally requires `fields.status` and `fields.liveStatus`; optional `retain` must return the effective expiry through `fields.expiresAt`. Expiries are ISO timestamps or Unix milliseconds. Fixed request bodies can set creation-time provider options; the adapter cannot promise to extend a provider's immutable hard lifetime.
+
+For SDK signing, Unix sockets, RPC, or multi-step flows, set `adapterModule` to a trusted absolute `.mjs` path exporting `createBrowserLifecycleAdapter()`. It returns the exported `BrowserLifecycleAdapter`: `acquire(config, signal)` returns `{id, connection: {wsEndpoint}, expiresAt?}`, optional `describe` returns `{alive, expiresAt?}`, optional `retain` returns `{expiresAt}`, and `release(browser, signal)` ends only the adapter-owned browser. The module runs in the independent process, so cleanup is available after a Pi client exits. Additional module environment variables must be explicitly included in `envAllowlist`. Long-lived SDK hosts may instead inject an adapter into exported `serveBrowserSession(config, token, {adapter})`; `token` must be a random 32-byte hex value. Management adapters are trusted host/user configuration and are never loaded from project settings or model arguments.
+
+Adapters must provide callable acquire/release methods and a valid explicit CDP connection; invalid results fail instead of launching a local browser. Describe results require a boolean `alive`, and all programmatic expiries must be numeric Unix milliseconds within the JavaScript Date range. Acquire/describe/retain waits honor cancellation and the 60-second operation limit even if an SDK ignores its signal. Shutdown waits at most 15 seconds for pending acquisition and separately bounds the provider release wait to 15 seconds. A timeout cannot prove that a provider operation stopped: uncertain outcomes keep protected recovery metadata and block automatic recreation. Adapters should still honor their supplied signal to stop the actual remote work.
+
+#### HTTP Backend Contract
+
+This is pi-browser-use's configurable adapter contract, not an industry-standard browser management API. Browser automation uses CDP; lifecycle operations use your service's HTTP API. Routes, methods, authentication headers, request bodies, and response field names are configurable. An existing provider fits directly only when its API can be expressed by these mappings; otherwise use `adapterModule` or a small gateway. No provider is required to implement the example routes below.
+
+| Operation | Required | Request and response contract |
+|-----------|----------|-------------------------------|
+| `create` | Unless a runtime binding is supplied | Mutually exclusive with a runtime binding. Called lazily on the first browser operation. Return a non-empty string ID (at most 1024 characters) and the instance's CDP connection address. Map them with `fields.id` and `fields.wsEndpoint`. The address may use `ws:`/`wss:`, or `http:`/`https:` for discovery at `/json/version`. Optional `fields.expiresAt` supplies the provider deadline. |
+| `release` | Yes | Stop the instance identified by `{sessionId}` and release its resources. Return a successful status with an empty body or valid JSON; no response fields are required. Do not delete reusable profiles or stored authentication. |
+| `status` | No | Inspect the same instance without creating a replacement. Return a status value at `fields.status`; it is alive only when that value exactly equals the configured `fields.liveStatus` string. An optional expiry uses `fields.expiresAt`. |
+| `retain` | No | Apply the requested absolute deadline `{expiresAt}` to the same instance. Return the actual effective deadline at `fields.expiresAt`; this mapping is required when configuring `retain`. The plugin uses the earliest of its requested deadline, the returned deadline, and any known provider deadline. |
+
+For example, a new custom service could implement:
+
+```text
+POST /sessions
+  request:  {"headless":true}
+  response: 201 {"id":"b123","cdpUrl":"ws://browser-service:9222/devtools/browser/abc"}
+
+DELETE /sessions/b123
+  response: 204 (empty)
+
+GET /sessions/b123                         # optional
+  response: 200 {"status":"running"}
+
+POST /sessions/b123/retain                 # optional
+  request:  {"expiresAt":1893456000000}
+  response: 200 {"expiresAt":1893456000000}
+```
+
+The create/release example above already shows the minimum configuration. To map these optional operations, add the following properties inside `session.backend`, including the same authentication headers as your service requires:
+
+```json
+{
+  "status": {
+    "url": "http://browser-service:3000/sessions/{sessionId}",
+    "method": "GET"
+  },
+  "retain": {
+    "url": "http://browser-service:3000/sessions/{sessionId}/retain",
+    "method": "POST",
+    "body": { "expiresAt": "{expiresAt}" }
+  },
+  "fields": {
+    "id": "id",
+    "wsEndpoint": "cdpUrl",
+    "expiresAt": "expiresAt",
+    "status": "status",
+    "liveStatus": "running"
+  }
+}
+```
+
+All management requests use HTTP(S), default to `POST`, and support `GET`, `POST`, `PATCH`, `PUT`, and `DELETE`. `GET` must have no body. Request bodies are JSON and headers default to `Content-Type: application/json`; add authentication through `headers`. `{sessionId}` and `{expiresAt}` are substituted in URLs and JSON body values, not headers. IDs are URL-encoded in URLs; a whole JSON value of `"{expiresAt}"` becomes a number. Response field paths are dotted own-property paths such as `data.id`, not JSONPath. Expiries are absolute Unix milliseconds or ISO timestamps, never relative durations.
+
+Every operation requires a 2xx response and an empty body or valid JSON, limited to 64 KiB. Redirects are rejected. `backend.timeoutMs` defaults to 15000 and accepts 1–60000 milliseconds; caller cancellation also applies. Non-2xx responses, malformed responses, and timeouts fail the operation without exposing response bodies or automatically retrying creation. In particular, a release returning 404 is a cleanup failure; services that treat an already-stopped instance as released should return 2xx. Make release idempotent where possible. Ambiguous creation/cleanup keeps a protected record for inspection rather than silently creating another paid instance.
+
+There is no required `resume` HTTP operation: the independent process holds the original CDP connection, and the next Pi client reconnects to that process. Without `status` or `retain`, existing-CDP retention still works, but cannot extend a provider's hard lifetime. The public `browser_session release` cancels the handoff window; the backend `release` runs during final cleanup after the active client disconnects. This contract supports continuation on the same host/runtime home, not migration to another machine or restoration after the holding process disappears.
+
+### Live-session Verification
+
+```sh
+pnpm --filter @amaster.ai/pi-browser-use build
+pnpm exec vitest run packages/pi-browser-use/src/__tests__
+node tests/browser-session-e2e.mjs
+```
+
+The E2E check uses actual headless Chrome and separate Pi client processes. It verifies an in-memory handshake and running polling loop through the public tool, a CDP gateway that closes browsers one second after disconnect, normal cleanup without retention, lost-connection handling without replacement, and expiry. Set `PI_BROWSER_TEST_EXECUTABLE` if Chrome is installed at a custom path. `PI_BROWSER_TEST_GATEWAY_MODULE` can point to a trusted module exporting the MirrorX `createGateway` function to run against that gateway implementation instead of the small test proxy. No cloud credentials or paid provider calls are needed.
+
+The dedicated `Browserless Cloud session lifecycle` job in `.github/workflows/integration.yml` runs the same public-tool handshake/polling protocol against `production-sfo.browserless.io/chrome`, using the existing `BROWSERLESS_TOKEN` secret after the shared integration approval gate. It waits for Stage C to finish so its Browserless connections do not overlap with the other browser tests. It requires no LLM or local Chrome installation, fails when the token is missing, and bounds each cloud connection to 60 seconds. Browser package changes and lifecycle test-script changes select this job. To run it manually with a token already in your environment: `node .github/scripts/browserless-session-e2e.mjs`. The offline E2E also exercises this CI script against its local real-Chrome gateway fixture.
+
+Integration uses `pull_request_target`, so GitHub loads its workflow definition from the default branch even when checkout uses PR code. A newly added job therefore does not appear in the automatic PR run before merge. Maintainers can validate the PR branch's workflow with `gh workflow run integration.yml --ref <branch> -f browser_session_only=true` and find the `Browserless Cloud session lifecycle` job in that manual run. This keeps runtime loading and the existing environment approval gate, while skipping unrelated model/platform suites; see [GitHub's event documentation](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request_target).
 
 ### Categories
 

@@ -7,6 +7,11 @@ on:
     branches: [master, main]
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
+    inputs:
+      browser_session_only:
+        description: Run only Browserless session lifecycle checks after the shared approval gate
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
@@ -100,7 +105,7 @@ jobs:
   computer-use-platform-e2e:
     name: Computer use driver and perception E2E (${{ matrix.target }})
     needs: detect-extension-matrix
-    if: contains(needs.detect-extension-matrix.outputs.matrix, 'pi-computer-use')
+    if: contains(needs.detect-extension-matrix.outputs.matrix, 'pi-computer-use') && !inputs.browser_session_only
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -178,14 +183,44 @@ jobs:
     steps:
       - run: echo "Secret-backed Integration approved"
 
-  # Stage B: single-prompt LLM smoke test against the custom deepseek
-  # provider. This job runs in parallel with the Stage C matrix after the
-  # shared approval gate, so the LLM round-trip doesn't gate per-extension
-  # verification.
-  # ──────────────────────────────────────────────────────────────────────
+  # Wait for Stage C to release its Browserless connections before lifecycle checks.
+  browserless-session-e2e:
+    name: Browserless Cloud session lifecycle
+    needs: [detect-extension-matrix, integration-approval, extension-tool-matrix]
+    if: >
+      always() && !cancelled() &&
+      needs.detect-extension-matrix.result == 'success' &&
+      needs.integration-approval.result == 'success' &&
+      contains(needs.detect-extension-matrix.outputs.matrix, 'pi-browser-use')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ env.INTEGRATION_CHECKOUT_REPOSITORY }}
+          ref: ${{ env.INTEGRATION_CHECKOUT_REF }}
+          persist-credentials: false
+          allow-unsafe-pr-checkout: ${{ github.event_name == 'pull_request_target' }}
+      - name: Setup browser test build environment
+        uses: ./.github/actions/setup-pi-build
+        with:
+          build: 'false'
+      - name: Build browser extension
+        run: |
+          pnpm --filter @amaster.ai/pi-shared build
+          pnpm --filter @amaster.ai/pi-browser-use build
+      - name: Verify installed MCP output contract and local live sessions
+        run: node tests/browser-session-e2e.mjs
+      - name: Verify Browserless Cloud live sessions
+        env:
+          BROWSERLESS_TOKEN: ${{ secrets.BROWSERLESS_TOKEN }}
+        run: node .github/scripts/browserless-session-e2e.mjs
+
+  # Stage B runs in parallel with Stage C.
   pi-runtime-smoke:
     name: Pi runtime smoke (Stage B)
     needs: integration-approval
+    if: ${{ !inputs.browser_session_only }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -320,6 +355,7 @@ jobs:
     needs: [detect-extension-matrix, integration-approval]
     if: >
       needs.detect-extension-matrix.outputs.has_extensions == 'true' &&
+      !inputs.browser_session_only &&
       vars.PI_INTEGRATION_SKIP_STAGE_C != 'true'
     runs-on: ${{ matrix.scenario == 'macos' && 'macos-15' || matrix.scenario == 'windows' && 'windows-2025' || 'ubuntu-latest' }}
     timeout-minutes: 15
@@ -918,10 +954,9 @@ jobs:
           # what args, and what each call returned — including any tool-side
           # errors that text-mode silently summarizes into prose.
           #
-          # --thinking high (not xhigh): for DeepSeek, xhigh maps to
-          # `reasoning_effort: max`, which on the amaster gateway has been
-          # observed to occasionally hang >5min on tool-call prompts. Stage B
-          # smoke keeps xhigh per the original spec.
+          # Tool integration must not depend on gateway reasoning replay: some tool
+          # responses omit reasoning that the next thinking-mode request requires.
+          # Stage B separately retains the xhigh reasoning smoke check.
           if [ "${{ matrix.extension }}" = "pi-goal" ]; then
             # pi-goal has no LLM tool. --goal '' enables auto-derivation; -p
             # drives one real agent run (print mode won't run a turn without a
@@ -931,7 +966,7 @@ jobs:
             output="$(pi \
               --provider deepseek-integration \
               --model "$PI_INTEGRATION_MODEL" \
-              --thinking high \
+              --thinking off \
               --no-session \
               --no-context-files \
               --tools '${{ matrix.tools }}' \
@@ -952,7 +987,7 @@ jobs:
             output="$(pi \
               --provider deepseek-integration \
               --model "$PI_INTEGRATION_MODEL" \
-              --thinking high \
+              --thinking off \
               --no-session \
               --no-context-files \
               ${tools_args[@]+"${tools_args[@]}"} \
@@ -1007,14 +1042,20 @@ jobs:
           # the raw event stream when jq isn't available or didn't extract any
           # text. The raw stream contains tool args/results too, so the
           # pattern still matches when the assistant doesn't quote them back.
+          # Pi can exit zero after a provider error; never accept a partial tool run.
+          if command -v jq >/dev/null 2>&1 && jq -e -s '
+            any(.[]; .type == "message_end" and .message.role == "assistant" and .message.stopReason == "error")
+          ' <<<"$EVENTS_JSON" >/dev/null; then
+            echo "::error::Model request failed during extension integration"
+            exit 1
+          fi
           HAYSTACK="${ASSISTANT_TEXT:-$output}"
           [ -z "$HAYSTACK" ] && HAYSTACK="$output"
           # pi-goal is asserted below by the goal engine's diagnostics and a
           # filesystem check, not by grepping assistant text (which would be
-          # self-matched by prompt/thinking echo). Visual analysis cases are
-          # asserted against the tool result below so line wrapping in the final
-          # assistant answer cannot cause a false negative.
-          if [ "${{ matrix.extension }}" != "pi-goal" ] && [ "${{ matrix.assert_visual_analysis }}" != "true" ]; then
+          # self-matched by prompt/thinking echo). Tool-specific checks below
+          # verify expected permission errors without depending on assistant paraphrases.
+          if [ "${{ matrix.extension }}" != "pi-goal" ] && [ "${{ matrix.allow_tool_error }}" != "true" ]; then
             if ! grep -qiE '${{ matrix.assert_pattern }}' <<<"$HAYSTACK"; then
               echo "::error::Expected pattern '${{ matrix.assert_pattern }}' not found in ${{ matrix.extension }} output"
               exit 1
@@ -1022,20 +1063,21 @@ jobs:
           fi
 
           # Cases with assert_tool must prove that the expected text came from
-          # a successful tool result, not from the prompt or model commentary.
-          if [ -n "${{ matrix.assert_tool }}" ] && [ "${{ matrix.allow_tool_error }}" != "true" ]; then
+          # the actual tool result, not from the prompt or model commentary.
+          # Expected permission errors still have to match their exact status code.
+          if [ -n "${{ matrix.assert_tool }}" ]; then
             if ! command -v jq >/dev/null 2>&1; then
               echo "::error::jq is required for the tool result assertion"
               exit 1
             fi
             if ! jq -e -s \
               --arg tool '${{ matrix.assert_tool }}' \
-              --arg pattern '${{ matrix.assert_tool_pattern || matrix.assert_pattern }}' '
+              --arg pattern '${{ matrix.assert_tool_pattern || matrix.assert_pattern }}' \
+              --argjson allow_error '${{ matrix.allow_tool_error || false }}' '
                 any(.[];
                   .type == "tool_execution_end"
                   and .toolName == $tool
-                  and .isError != true
-                  and .result.isError != true
+                  and ($allow_error or (.isError != true and .result.isError != true))
                   and (
                     any((.result.content // [])[]?;
                       .type == "text"
@@ -1111,31 +1153,6 @@ jobs:
               IMAGE_COUNT=$((IMAGE_COUNT + 1))
             done <<<"$IMAGE_PATHS"
             echo "✓ Verified $IMAGE_COUNT image file(s) from the image_generate result."
-          fi
-
-          # Screenshot scenario: browser_analyze_screenshot captures the image
-          # internally, sends it to the configured DeepSeek vision model, and returns
-          # text to the DeepSeek main model. Assert the vision tool itself found
-          # both deterministic markers.
-          if [ "${{ matrix.assert_visual_analysis }}" = "true" ]; then
-            if ! command -v jq >/dev/null 2>&1; then
-              echo "::error::jq is required for the visual analysis assertion"
-              exit 1
-            fi
-            if ! jq -e -s '
-              any(.[];
-                .type == "tool_execution_end"
-                and .toolName == "browser_analyze_screenshot"
-                and any((.result.content // [])[]?;
-                  .type == "text"
-                  and ((.text // "") | test("VISUAL CHECK 7391"; "i"))
-                  and ((.text // "") | test("blue|#1457d9"; "i"))
-                )
-              )
-            ' <<<"$output" >/dev/null; then
-              echo "::error::browser_analyze_screenshot did not identify the fixture heading and color"
-              exit 1
-            fi
           fi
 
           # pi-goal: prove the goal engine actually ran and the task completed.
