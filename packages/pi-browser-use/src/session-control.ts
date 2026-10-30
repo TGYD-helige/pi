@@ -1,4 +1,5 @@
 import { StringEnum } from '@earendil-works/pi-ai';
+import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import { Type } from 'typebox';
 
 export const SESSION_DESCRIPTION =
@@ -38,3 +39,16 @@ export async function sessionToolResult(
 }
 
 export class BrowserSessionError extends Error {}
+
+export function scriptValue(value: unknown): unknown {
+  const result = CallToolResultSchema.parse(value);
+  const text =
+    result.content
+      ?.filter((item) => item.type === 'text')
+      .map((item) => item.text ?? '')
+      .join('\n') ?? '';
+  const match = /```json\s*([\s\S]*?)\s*```/.exec(text);
+  if (result.isError || !match)
+    throw new BrowserSessionError('The original browser page could not be verified.');
+  return JSON.parse(match[1]!);
+}

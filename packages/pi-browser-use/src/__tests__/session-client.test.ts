@@ -39,6 +39,58 @@ describe('BrowserSessionClient', () => {
     vi.mocked(spawn).mockClear();
   });
 
+  it('keeps a reconnected client alive when an older heartbeat fails later', async () => {
+    const config = {
+      session: { enabled: true as const, key: 'heartbeat-race', retentionMs: 1000 },
+    };
+    const directory = join(
+      root,
+      'browser-sessions',
+      createHash('sha256').update(config.session.key).digest('hex'),
+    );
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await writeFile(
+      join(directory, 'session.json'),
+      JSON.stringify({
+        token: 'a'.repeat(64),
+        configHash: createHash('sha256').update(JSON.stringify(config)).digest('hex'),
+        port: 12345,
+      }),
+      { mode: 0o600 },
+    );
+    const rejectHeartbeats: Array<(error: Error) => void> = [];
+    let heartbeats = 0;
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      const { action } = JSON.parse(String(init?.body));
+      if (action === 'heartbeat' && ++heartbeats <= 2) {
+        return new Promise<Response>((_resolve, reject) => rejectHeartbeats.push(reject));
+      }
+      return Response.json({ result: {} });
+    });
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const client = new BrowserSessionClient(config);
+    try {
+      await client.connect();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(heartbeats).toBe(2);
+      rejectHeartbeats[0]!(new Error('first heartbeat connection failed'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(client.getState()).toBe('disconnected');
+      await client.connect();
+      expect(client.getState()).toBe('ready');
+      rejectHeartbeats[1]!(new Error('stale heartbeat connection failed'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(client.getState()).toBe('ready');
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(heartbeats).toBe(3);
+    } finally {
+      for (const reject of rejectHeartbeats) reject(new Error('test cleanup'));
+      await client.close();
+      vi.useRealTimers();
+      fetch.mockRestore();
+    }
+  });
+
   it.each([
     'expired',
     'lost',

@@ -23,6 +23,85 @@ function deferred() {
 
 describe('browser session shutdown', () => {
   it.each([
+    { reason: 'expired', cleanup: 'success' },
+    { reason: 'closed', cleanup: 'success' },
+    { reason: 'lost', cleanup: 'skip' },
+    { reason: 'expired', cleanup: 'error' },
+    { reason: 'expired', cleanup: 'pending' },
+    { reason: 'expired', cleanup: 'disconnected' },
+  ] as const)('cleans only its external-browser marker: $reason / $cleanup', async ({
+    reason,
+    cleanup,
+  }) => {
+    const token = randomBytes(32).toString('hex');
+    const owner = randomBytes(32).toString('hex');
+    const markerClosing = deferred();
+    const markerClosed = deferred();
+    const connect = vi.spyOn(DevToolsClient.prototype, 'connect').mockResolvedValue();
+    const close = vi.spyOn(DevToolsClient.prototype, 'close').mockResolvedValue();
+    const state = vi.spyOn(DevToolsClient.prototype, 'getState').mockReturnValue('ready');
+    const removeMarker = vi
+      .spyOn(DevToolsClient.prototype, 'removeSessionMarker')
+      .mockImplementation(async () => {
+        markerClosing.resolve();
+        if (cleanup === 'pending') await markerClosed.promise;
+        if (cleanup === 'error') throw new Error('marker cleanup failed');
+      });
+    vi.spyOn(DevToolsClient.prototype, 'callTool').mockImplementation(async (name, args) => ({
+      content: [
+        {
+          type: 'text',
+          text: name === 'new_page' ? `2: ${args.url} [selected]` : '```json\ntrue\n```',
+        },
+      ],
+    }));
+    const onStop = vi.fn();
+    const server = await serveBrowserSession(
+      {
+        sessionMode: 'existing',
+        autoConnect: true,
+        session: { enabled: true, key: 'external-marker', retentionMs: 30_000 },
+      },
+      token,
+      { onStop },
+    );
+    const request = (action: string, args: object = {}) =>
+      fetch(`http://127.0.0.1:${server.port}/`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action, owner, ...args }),
+      });
+    try {
+      await request('attach');
+      await request('call', { name: 'list_pages', args: {} });
+      expect((await request('retain')).status).toBe(200);
+      if (cleanup === 'disconnected') state.mockReturnValue('disconnected');
+      if (cleanup === 'pending') vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const stopping = server.stop(reason);
+      if (cleanup === 'pending') {
+        await markerClosing.promise;
+        await vi.advanceTimersByTimeAsync(5001);
+      }
+      await stopping;
+      expect(removeMarker.mock.calls).toEqual(
+        cleanup === 'skip' || cleanup === 'disconnected'
+          ? []
+          : [[2, expect.stringMatching(/^[a-f0-9]{48}$/), expect.any(AbortSignal)]],
+      );
+      expect(onStop).toHaveBeenCalledWith(
+        ['error', 'pending', 'disconnected'].includes(cleanup) ? 'cleanup-failed' : reason,
+      );
+      expect(connect).toHaveBeenCalledOnce();
+      expect(close).toHaveBeenCalled();
+    } finally {
+      markerClosed.resolve();
+      await server.stop();
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it.each([
     { completion: 'resolve', cleanup: 'resolve' },
     { completion: 'reject', cleanup: 'resolve' },
     { completion: 'resolve', cleanup: 'pending' },
@@ -192,7 +271,8 @@ describe('browser session shutdown', () => {
         content: [
           {
             type: 'text',
-            text: name === 'new_page' ? `2: ${args.url}` : `\`\`\`json\n${alive}\n\`\`\``,
+            text:
+              name === 'new_page' ? `2: ${args.url} [selected]` : `\`\`\`json\n${alive}\n\`\`\``,
           },
         ],
       }));
@@ -236,7 +316,10 @@ describe('browser session shutdown', () => {
       .spyOn(DevToolsClient.prototype, 'callTool')
       .mockImplementation(async (name, args) => ({
         content: [
-          { type: 'text', text: name === 'new_page' ? `2: ${args.url}` : '```json\ntrue\n```' },
+          {
+            type: 'text',
+            text: name === 'new_page' ? `2: ${args.url} [selected]` : '```json\ntrue\n```',
+          },
         ],
       }));
     const server = await serveBrowserSession(

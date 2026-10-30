@@ -8,7 +8,7 @@ import {
 import type { TextContent as AiTextContent } from '@earendil-works/pi-ai';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+import { CallToolResultSchema, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import { Type } from 'typebox';
 import {
   handleAnalyzeScreenshot,
@@ -27,7 +27,13 @@ import { prepareBrowserProfile } from './profile.js';
 import { type ManagedBrowser, readBrowserSessionBinding } from './session-backend.js';
 import { BrowserSessionClient } from './session-client.js';
 import type { SessionAction } from './session-control.js';
-import { SESSION_DESCRIPTION, sessionParameters, sessionToolResult } from './session-control.js';
+import {
+  BrowserSessionError,
+  SESSION_DESCRIPTION,
+  scriptValue,
+  sessionParameters,
+  sessionToolResult,
+} from './session-control.js';
 import { augmentToolDescription } from './tool-augment.js';
 import { buildGroups, CORE_TOOLS, GROUP_SUMMARIES, loadCategoryMap } from './tool-groups.js';
 import { toToolContent } from './tool-result.js';
@@ -347,6 +353,39 @@ export class DevToolsClient {
       console.error(`[pi-browser-use] upstream tool call failed (${errorName})`);
       throw new Error('Browser tool call failed.');
     }
+  }
+
+  /** Cleanup must keep the original MCP connection and its page IDs. */
+  async removeSessionMarker(pageId: number, nonce: string, signal: AbortSignal): Promise<void> {
+    const client = this.client;
+    if (this.state !== 'ready' || !client)
+      throw new BrowserSessionError('The marker connection is no longer available.');
+    const pages = CallToolResultSchema.parse(
+      await client.callTool(
+        { name: 'list_pages', arguments: {} },
+        undefined,
+        requestOptions(MCP_TIMEOUT_MS, signal),
+      ),
+    );
+    const pageList = pages.content
+      .filter((item) => item.type === 'text')
+      .map((item) => item.text)
+      .join('\n');
+    if (pages.isError || (pageList.match(/^\d+: /gm)?.length ?? 0) < 2)
+      throw new BrowserSessionError('Cannot safely remove the last browser page.');
+    const result = await client.callTool(
+      {
+        name: 'evaluate_script',
+        arguments: {
+          pageId,
+          function: `() => { if (globalThis.__piBrowserRetention !== ${JSON.stringify(nonce)}) return false; window.close(); return window.closed; }`,
+        },
+      },
+      undefined,
+      requestOptions(MCP_TIMEOUT_MS, signal),
+    );
+    if (scriptValue(result) !== true)
+      throw new BrowserSessionError('The original browser marker could not be removed.');
   }
 
   async close(): Promise<void> {

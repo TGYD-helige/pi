@@ -261,13 +261,16 @@ export class BrowserSessionClient {
     this.attachAttempted = true;
     await this.request('attach', { pid: process.pid }, signal);
     this.connected = true;
-    this.heartbeat = setInterval(() => {
+    const heartbeat = setInterval(() => {
       void this.request('heartbeat').catch(() => {
+        if (this.heartbeat !== heartbeat) return;
         this.connected = false;
-        clearInterval(this.heartbeat);
+        clearInterval(heartbeat);
+        this.heartbeat = undefined;
       });
     }, 5000);
-    this.heartbeat.unref();
+    this.heartbeat = heartbeat;
+    heartbeat.unref();
   }
 
   private async request<T = unknown>(
@@ -365,6 +368,7 @@ export class BrowserSessionClient {
     // A failed attach response may still have established ownership in the worker.
     await this.connecting?.catch(() => undefined);
     clearInterval(this.heartbeat);
+    this.heartbeat = undefined;
     if (!this.record?.port || !this.attachAttempted) return;
     try {
       await this.request('detach');

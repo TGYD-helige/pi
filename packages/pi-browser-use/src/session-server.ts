@@ -13,7 +13,7 @@ import {
   validateBrowserExpiry,
 } from './session-backend.js';
 import { createBrowserConnection } from './session-connection.js';
-import { BrowserSessionError } from './session-control.js';
+import { BrowserSessionError, scriptValue } from './session-control.js';
 
 const MAX_BYTES = 32 * 1024 * 1024;
 const OPERATION_MS = 60_000;
@@ -55,18 +55,6 @@ function hasKnownId(browser: ManagedBrowser) {
   return (
     typeof browser?.id === 'string' && browser.id.trim().length > 0 && browser.id.length <= 1024
   );
-}
-
-function scriptValue(result: Awaited<ReturnType<DevToolsClient['callTool']>>): unknown {
-  const text =
-    result.content
-      ?.filter((item) => item.type === 'text')
-      .map((item) => item.text ?? '')
-      .join('\n') ?? '';
-  const match = /```json\s*([\s\S]*?)\s*```/.exec(text);
-  if (result.isError || !match)
-    throw new BrowserSessionError('The original browser page could not be verified.');
-  return JSON.parse(match[1]!);
 }
 
 /** SDK hosts can run this in their own long-lived process and inject an adapter. */
@@ -216,6 +204,20 @@ export async function serveBrowserSession(
           outcome = 'cleanup-failed';
         }
       }
+      if (
+        marker &&
+        reason !== 'lost' &&
+        (config.autoConnect || config.sessionMode === 'existing')
+      ) {
+        try {
+          if (client.getState() !== 'ready')
+            throw new BrowserSessionError('The marker connection is no longer available.');
+          await bounded(removeMarker(AbortSignal.timeout(5000)), 5000);
+        } catch {
+          outcome = 'cleanup-failed';
+          console.error('[pi-browser-use] could not remove the browser session marker');
+        }
+      }
       await closeBrowser(client, connection);
       if (browserCleanupFailed) outcome = 'cleanup-failed';
       try {
@@ -356,7 +358,7 @@ export async function serveBrowserSession(
 
   async function removeMarker(signal: AbortSignal) {
     if (!marker) return;
-    await client.callTool('close_page', { pageId: marker.pageId }, signal);
+    await client.removeSessionMarker(marker.pageId, marker.nonce, signal);
     marker = undefined;
   }
 
@@ -405,13 +407,17 @@ export async function serveBrowserSession(
       if (!marker && !connection) {
         const nonce = randomBytes(24).toString('hex');
         const url = `about:blank#pi-retained-session-${nonce}`;
-        const result = await client.callTool('new_page', { url, background: true }, signal);
+        const result = await client.callTool(
+          'new_page',
+          { url: 'about:blank', background: true },
+          signal,
+        );
         const text =
           result.content
             ?.filter((item) => item.type === 'text')
             .map((item) => item.text)
             .join('\n') ?? '';
-        const match = new RegExp(`^(\\d+): ${url}`, 'm').exec(text);
+        const match = /^(\d+): about:blank \[selected\]/m.exec(text);
         if (result.isError || !match)
           throw new BrowserSessionError(
             'Could not establish live-browser identity; retention was not enabled.',
@@ -422,7 +428,7 @@ export async function serveBrowserSession(
             'evaluate_script',
             {
               pageId: marker.pageId,
-              function: `() => { globalThis.__piBrowserRetention = ${JSON.stringify(nonce)}; return true; }`,
+              function: `() => { history.replaceState(null, "", ${JSON.stringify(url)}); globalThis.__piBrowserRetention = ${JSON.stringify(nonce)}; return true; }`,
             },
             signal,
           ),

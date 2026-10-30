@@ -1,4 +1,5 @@
 import { PassThrough } from 'node:stream';
+import { runInNewContext } from 'node:vm';
 import { beforeEach, describe, expect, it, test, vi } from 'vitest';
 
 const mockClientConnect = vi.fn(() => Promise.resolve());
@@ -202,6 +203,73 @@ describe('DevToolsClient', () => {
       await client.listAllTools();
 
       expect(mockClientConnect).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('removeSessionMarker()', () => {
+    it.each([
+      'success',
+      'lost-transport',
+      'changed-marker',
+      'close-error',
+      'last-page',
+    ] as const)('uses only the original transport and marker identity: %s', async (scenario) => {
+      const client = new DevToolsClient({ sessionMode: 'existing', autoConnect: true });
+      await client.connect();
+      const signal = AbortSignal.timeout(1000);
+      mockCallTool.mockImplementationOnce(async () => {
+        if (scenario === 'lost-transport') {
+          mockTransports[0]!.onclose?.();
+          throw new Error('original transport lost');
+        }
+        return {
+          content: [
+            {
+              type: 'text',
+              text:
+                scenario === 'last-page'
+                  ? '42: about:blank [selected]'
+                  : '1: https://user.example/\n42: about:blank [selected]',
+            },
+          ],
+        };
+      });
+      const markerWindow = {
+        closed: false,
+        close: vi.fn(() => {
+          markerWindow.closed = true;
+        }),
+      };
+      mockCallTool.mockImplementationOnce(async (input) => {
+        if (scenario === 'close-error') return { content: [], isError: true };
+        const result = runInNewContext(`(${input.arguments.function})()`, {
+          __piBrowserRetention: scenario === 'changed-marker' ? 'another-page' : 'known-marker',
+          window: markerWindow,
+        });
+        return {
+          content: [{ type: 'text', text: `\`\`\`json\n${JSON.stringify(result)}\n\`\`\`` }],
+        };
+      });
+      const removing = client.removeSessionMarker(42, 'known-marker', signal);
+      try {
+        if (scenario === 'success') await expect(removing).resolves.toBeUndefined();
+        else await expect(removing).rejects.toThrow();
+        expect(mockClientConnect).toHaveBeenCalledOnce();
+        expect(mockClientPing).not.toHaveBeenCalled();
+        expect(mockCallTool.mock.calls.some(([input]) => input.name === 'close_page')).toBe(false);
+        expect(markerWindow.close).toHaveBeenCalledTimes(scenario === 'success' ? 1 : 0);
+        const evaluations = mockCallTool.mock.calls.filter(
+          ([input]) => input.name === 'evaluate_script',
+        );
+        expect(evaluations).toHaveLength(
+          scenario === 'lost-transport' || scenario === 'last-page' ? 0 : 1,
+        );
+        if (evaluations.length) expect(evaluations[0]![0].arguments.pageId).toBe(42);
+      } finally {
+        await client.close();
+        mockCallTool.mockReset();
+        mockCallTool.mockResolvedValue({ content: [{ type: 'text', text: 'done' }] });
+      }
     });
   });
 
