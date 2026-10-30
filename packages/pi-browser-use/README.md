@@ -70,7 +70,7 @@ Or with a config file:
 npx @amaster.ai/pi-browser-use --config path/to/config.json
 ```
 
-Standalone `--config` supports `${ENV_VAR}` references in `wsEndpoint`, `browserUrl`, `wsHeaders` values, and enabled `session.backend` request URLs/header values (`create`, `status`, `retain`, `release`). For example, use `"Authorization": "Bearer ${BROWSER_API_KEY}"` rather than storing the key in JSON. Missing or empty referenced variables stop startup with `BrowserAuthEnvironmentError`; resolved headers are validated to reject newline injection. URL substitutions are literal, so supply a valid, appropriately URL-encoded value. Request bodies, session keys, file paths, executable arguments, bare `$ENV_VAR`, and other settings remain literal. Disabled backend credentials are not resolved. Header JSON spelling and formatting are preserved when no value changes, keeping existing session configuration hashes compatible. Global/agent-dir extension settings retain their existing interpolation rules; project settings never gain environment access. Startup logs report safe error classes/system codes without printing config contents, credentials, or raw exceptions.
+Standalone `--config` supports `${ENV_VAR}` references in `wsEndpoint`, `browserUrl`, `wsHeaders` values, enabled `session.provider.apiKey`, and enabled `session.backend` request URLs/header values (`create`, `status`, `retain`, `release`). For example, use `"Authorization": "Bearer ${BROWSER_API_KEY}"` rather than storing the key in JSON. Missing or empty referenced variables stop startup with `BrowserAuthEnvironmentError`; resolved headers are validated to reject newline injection. URL substitutions are literal, so supply a valid, appropriately URL-encoded value. Request bodies, session keys, file paths, executable arguments, bare `$ENV_VAR`, and other settings remain literal. Disabled lifecycle credentials are not resolved. Header JSON spelling and formatting are preserved when no value changes, keeping existing session configuration hashes compatible. Global/agent-dir extension settings retain their existing interpolation rules; project settings never gain environment access. Startup logs report safe error classes/system codes without printing config contents, credentials, or raw exceptions.
 
 The extension and standalone MCP CLI share the same result processing: aggregate text is bounded below 50 KiB / 2,000 lines with a truncation notice, and structured content uses the shared 12 KiB limiter. Screenshot image blocks and tool error status are preserved.
 
@@ -138,8 +138,9 @@ To enable cross-process human handoffs, configure **user or agent settings**, no
 | `session.enabled` | `false` | Enables the independent session process and session tool/command; `false` keeps direct connections and hides the controls |
 | `session.key` | Required when enabled | Stable host-supplied logical conversation identifier |
 | `session.retentionMs` | Required when enabled | Maximum handoff window, 1–86400000 ms; does **not** enable ordinary idle retention |
+| `session.provider` | — | Built-in `browserbase`, `browser-use`, `steel`, or `browserless` cloud lifecycle adapter |
 | `session.backend` | — | Optional HTTP lifecycle adapter for a created or explicitly delegated existing cloud instance |
-| `session.adapterModule` | — | Optional absolute path to a trusted custom adapter module; mutually exclusive with `backend` |
+| `session.adapterModule` | — | Optional absolute path to a trusted custom adapter module; mutually exclusive with `backend` and `provider` |
 
 The enabled tool is `browser_session({"action":"retain" | "status" | "release"})`; users can invoke `/browser-session retain`, `/browser-session status`, and `/browser-session release`. SDK hosts can call `DevToolsClient.sessionControl(action, signal)` directly, including from an application-defined automatic handoff policy. The model never needs to send periodic renewals.
 
@@ -171,14 +172,72 @@ An existing cloud CDP endpoint can use the held-connection strategy above, but c
 | Backend | Integration path |
 |---------|------------------|
 | Open-source Browserless, custom gateways | Existing CDP endpoint; keep the original connection open only for an explicit handoff. No dependency on Browserless Cloud Session API |
-| Browser Use Cloud browser infrastructure | HTTP/custom adapter creates a browser, maps its ID and CDP URL, and stops that browser on cleanup; hosted-agent run options are a separate API |
-| Browserbase | HTTP/custom adapter creates the session and explicitly requests release on cleanup; creation settings and hard timeout remain provider-specific |
-| Steel, Hyperbrowser, Anchor, and other CDP clouds | Existing CDP connection or an adapter for the provider's create/describe/release operations; lifetime extension is supported only when the provider actually offers it |
+| Browserless Cloud | Built-in `browserless` provider builds an authenticated standard Cloud CDP connection; disconnect releases its connection-owned browser |
+| Browser Use Cloud browser infrastructure | Built-in `browser-use` adapter uses API v4 `/browsers` for create/status/stop; hosted-agent tasks are a separate API |
+| Browserbase | Built-in `browserbase` adapter creates/inspects the session and sends `REQUEST_RELEASE` on cleanup |
+| Steel Cloud | Built-in `steel` adapter creates/inspects/releases sessions and constructs the authenticated cloud CDP URL |
+| Hyperbrowser, Anchor, and other CDP clouds | Existing CDP connection or an HTTP/custom lifecycle adapter |
 | User-managed local Chrome | Normally leave `session.enabled` false; if enabled, closing the session only disconnects from Chrome |
 
-These are adapter paths, not claims of live verification or bundled SDKs for every provider. The HTTP adapter requires `release` and exactly one of `create` or a runtime browser binding, with optional `status` and `retain`, per-request `url`, `method`, `headers`, and JSON `body`, and a `fields` mapping. Response field paths use dotted object keys; they are not JSONPath expressions. `{sessionId}` substitutes the supplied or returned ID (URL-encoded in URLs); `{expiresAt}` substitutes an absolute Unix-millisecond deadline. Request timeouts are bounded, redirects are rejected, and management response bodies are limited to 64 KiB and never exposed in errors.
+Browserbase, Browser Use Cloud, and Steel adapters have offline protocol tests against local HTTP fixtures; they have not been validated against real accounts. The underlying Browserless CDP connection and self-hosted runtime were verified live previously; this change covers the named Browserless provider offline. No cloud SDK dependency is required. The HTTP adapter requires `release` and exactly one of `create` or a runtime browser binding, with optional `status` and `retain`, per-request `url`, `method`, `headers`, and JSON `body`, and a `fields` mapping. Response field paths use dotted object keys; they are not JSONPath expressions. `{sessionId}` substitutes the supplied or returned ID (URL-encoded in URLs); `{expiresAt}` substitutes an absolute Unix-millisecond deadline. Request timeouts are bounded, redirects are rejected, and management response bodies are limited to 64 KiB and never exposed in errors.
 
-If the host already created the instance, settings contain only the static lifecycle templates and policy:
+### Unified browser adapters
+
+`createBrowserAdapter(config, options?)` is the shared SDK entry point for local Chrome launches, existing CDP endpoints (local Chrome, sidecars, or open-source Browserless), built-in cloud providers (including Browserless Cloud), and custom HTTP/module backends. The session worker uses this same factory for every connection. Existing configuration keys and the exported `BrowserLifecycleAdapter`, `createCloudBrowserAdapter`, and `createHttpBrowserAdapter` remain compatible.
+
+```ts
+const adapter = await createBrowserAdapter(config);
+const browser = await adapter.acquire(config, signal);
+// Pass browser.connection to the MCP/CDP transport, which owns its connection/process cleanup.
+await adapter.release(browser, signal); // after closing that transport
+```
+
+The common `BrowserAdapter` interface provides `acquire`, optional `describe`/`retain`, and `release`. Acquisition returns `{ id, connection, expiresAt? }`: HTTP-managed providers supply their actual ID and explicit CDP connection; connection-owned Browserless and direct adapters generate a private local reference and return the existing connection or local MCP launch configuration. `ownership` is `local` for plugin-launched Chrome, `external` for existing CDP/discovery connections, and defaults to `adapter` for managed/custom backends. A managed backend without an explicit CDP connection fails instead of falling back to local Chrome. SDK hosts can inject an adapter through the factory's `options.adapter`; delegated instances use `options.browser` with a configured management backend.
+
+MCP/CDP transport cleanup closes plugin-launched processes and detaches external connections. The direct adapter has no additional resource to release; managed adapters then stop only the instances they own. The session manager owns cross-process retention, marker verification, deadlines, and cancellation. `session.enabled: false` keeps ordinary direct connections without a holding worker. The named Browserless provider and direct CDP connections share the same connection lifecycle; this does not enable Browserless persistent-profile REST sessions or add a paid idle retention window.
+
+### Built-in cloud providers
+
+Configure exactly one of `session.provider`, `session.backend`, or `session.adapterModule`. The following goes in global/agent settings (management configuration is ignored in project settings):
+
+```json
+{
+  "pi-browser-use": {
+    "sessionMode": "existing",
+    "session": {
+      "enabled": true,
+      "key": "${BROWSER_CONVERSATION_ID}",
+      "retentionMs": 120000,
+      "provider": {
+        "name": "browserbase",
+        "apiKey": "${BROWSERBASE_API_KEY}",
+        "create": { "projectId": "your-project-id", "timeout": 180 }
+      }
+    }
+  }
+}
+```
+
+Replace the `provider` object for another service:
+
+| Service | `name` | `apiKey` example | `create` example | Native timeout unit |
+|---------|--------|------------------|------------------|---------------------|
+| Browserless Cloud | `browserless` | `${BROWSERLESS_TOKEN}` | `{ "timeout": 180000, "launch": { "headless": true } }` | Milliseconds |
+| Browserbase | `browserbase` | `${BROWSERBASE_API_KEY}` | `{ "projectId": "your-project-id", "timeout": 180 }` | Seconds |
+| Browser Use Cloud | `browser-use` | `${BROWSER_USE_API_KEY}` | `{ "timeout": 3 }` | Minutes |
+| Steel Cloud | `steel` | `${STEEL_API_KEY}` | `{ "timeout": 180000 }` | Milliseconds |
+
+Browserless Cloud uses standard CDP at `/chrome`, with `provider.region` set to `sfo` (default), `lon`, or `ams`. `create` values become native connection query parameters; nested values such as `launch` are JSON-encoded. The connection timeout defaults to 60000 ms and supplies a conservative deadline from acquisition time. Its private `id` is a local reference, not a returned REST session ID. No browser is allocated until CDP connects; final transport disconnection releases the standard browser. There is no extra management `describe` or `retain` call: the shared worker checks the original connection. Persistent Session API options (`session`, `ttl`, `processKeepAlive`) are rejected. Existing runtime bindings must refer to connection-owned browsers; persistent-profile sessions need a custom management adapter. See the official [connection URL](https://docs.browserless.io/baas/connection-url-patterns) and [launch parameter](https://docs.browserless.io/overview/launch-parameters) references.
+
+`create` is optional. The three HTTP providers pass native JSON parameters through unchanged and use service defaults when omitted; Browserless uses the query mapping and explicit 60000 ms default above. Browserbase can infer the project from the API key when `projectId` is omitted. Region, profiles, proxy options, and other creation settings follow the provider's API. `provider.timeoutMs` bounds each HTTP management request (default 15000, range 1–60000 ms; not used by connection-owned Browserless), independently of browser lifetime. Standalone CLI `--config` resolves `${ENV_VAR}` in `provider.apiKey`, but leaves the `create` body literal; extension settings follow the shared settings loader's interpolation rules.
+
+The first browser operation acquires one cloud instance lazily (Browserless launches on CDP connection). The independent worker holds its original CDP connection through an explicit handoff, and final cleanup calls the HTTP provider's stop/release API or disconnects the connection-owned Browserless browser. These adapters do not implement live deadline extension, so there is no backend `retain` request or automatic renewal. Browserbase and Browser Use report their absolute deadlines; Steel's deadline is derived from the returned `createdAt` plus `timeout`. Earlier inactivity limits or provider termination still apply. The adapter does not turn on Browserbase `keepAlive` by default; set `create.keepAlive` only if your application needs persistence after the provider CDP connection disconnects. This may require a paid plan and does not allow recovery after this plugin's holding worker exits.
+
+SDK users can call the exported `createCloudBrowserAdapter(provider, browser?)` or use `session.provider` with `DevToolsClient`. To adopt an instance already created by the host, omit `provider.create` and pass the runtime `ManagedBrowser` binding described below; the provider ID stays outside settings and model tools. The supplied binding connection is authoritative, including Steel connections. These built-ins target the public cloud API endpoints; self-hosted services and gateways can use `backend` or `adapterModule`.
+
+### Custom HTTP lifecycle APIs and runtime bindings
+
+If the host already created the instance, settings contain only the static lifecycle configuration and policy:
 
 ```json
 {
@@ -324,7 +383,9 @@ node tests/browser-session-e2e.mjs
 
 The E2E check uses actual headless Chrome and separate Pi client processes. It verifies an in-memory handshake and running polling loop through the public tool, a CDP gateway that closes browsers one second after disconnect, normal cleanup without retention, lost-connection handling without replacement, and expiry. Set `PI_BROWSER_TEST_EXECUTABLE` if Chrome is installed at a custom path. `PI_BROWSER_TEST_GATEWAY_MODULE` can point to a trusted module exporting the MirrorX `createGateway` function to run against that gateway implementation instead of the small test proxy. No cloud credentials or paid provider calls are needed.
 
-The dedicated `Browserless Cloud session lifecycle` job in `.github/workflows/integration.yml` runs the same public-tool handshake/polling protocol against `production-sfo.browserless.io/chrome`, using the existing `BROWSERLESS_TOKEN` secret after the shared integration approval gate. It waits for Stage C to finish so its Browserless connections do not overlap with the other browser tests. It requires no LLM or local Chrome installation, fails when the token is missing, and bounds each cloud connection to 60 seconds. Browser package changes and lifecycle test-script changes select this job. To run it manually with a token already in your environment: `node .github/scripts/browserless-session-e2e.mjs`. The offline E2E also exercises this CI script against its local real-Chrome gateway fixture.
+The `Extension E2E (pi-browser-use-session)` matrix scenario runs two real Pi CLI processes with the integration model against the named Browserless Cloud provider. The first model run creates a unique blank page, initializes an in-memory marker/polling counter, and calls `browser_session retain`. The second receives a fresh conversation, lists the existing page, reads its marker/counter without rewriting them, and releases the handoff. Assertions inspect actual tool events and results, not assistant claims; provider/tool errors, missing retention/release, replacement pages, and stopped polling fail the job. The cloud connection is capped at 120 seconds and cleanup releases the held connection. It shares the existing integration approval/credentials gate and loads only the browser extension inside the two tested Pi processes. Run it with configured Pi model credentials and `BROWSERLESS_TOKEN`: `node .github/scripts/browser-session-model-e2e.mjs`. The manual `browser_session_only=true` workflow includes this model scenario alongside the dedicated lifecycle job. Before the new workflow is merged, use branch `workflow_dispatch` for authoritative CI evidence: automatic PR runs use the default-branch workflow and omit the new scenario until that workflow supports it.
+
+The dedicated `Browserless Cloud session lifecycle` job in `.github/workflows/integration.yml` runs the same public-tool handshake/polling protocol through `session.provider.name: "browserless"` against `production-sfo.browserless.io/chrome`, using the existing `BROWSERLESS_TOKEN` secret after the shared integration approval gate. It waits for Stage C to finish so its Browserless connections do not overlap with the other browser tests. It requires no LLM or local Chrome installation, fails when the token is missing, and bounds each cloud connection to 60 seconds. Browser package changes and lifecycle test-script changes select this job. To run it manually with a token already in your environment: `node .github/scripts/browserless-session-e2e.mjs`. The offline E2E also exercises this CI script against its local real-Chrome gateway fixture.
 
 Integration uses `pull_request_target`, so GitHub loads its workflow definition from the default branch even when checkout uses PR code. A newly added job therefore does not appear in the automatic PR run before merge. Maintainers can validate the PR branch's workflow with `gh workflow run integration.yml --ref <branch> -f browser_session_only=true` and find the `Browserless Cloud session lifecycle` job in that manual run. This keeps runtime loading and the existing environment approval gate, while skipping unrelated model/platform suites; see [GitHub's event documentation](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request_target).
 

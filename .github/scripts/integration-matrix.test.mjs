@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { test } from 'vitest';
 import { fullMatrix, selectIntegrationMatrix } from './integration-matrix.mjs';
 
@@ -185,7 +188,7 @@ test('routes browser lifecycle scripts and shared fixtures to browser integratio
 test('can isolate manual Browserless session runs while preserving the shared approval gate', async () => {
   const workflow = await readFile(new URL('../workflows/integration.yml', import.meta.url), 'utf8');
   assert.match(workflow, /workflow_dispatch:\s+inputs:\s+browser_session_only:[\s\S]*?type: boolean/);
-  for (const name of ['computer-use-platform-e2e', 'pi-runtime-smoke', 'extension-tool-matrix']) {
+  for (const name of ['computer-use-platform-e2e', 'pi-runtime-smoke']) {
     const job = workflow.slice(workflow.indexOf(`  ${name}:`)).split(/\n  [\w-]+:/)[0];
     assert.match(job, /!inputs\.browser_session_only/);
   }
@@ -195,6 +198,18 @@ test('can isolate manual Browserless session runs while preserving the shared ap
   assert.match(job, /needs\.integration-approval\.result == 'success'/);
   assert.match(job, /needs\.detect-extension-matrix\.result == 'success'/);
   assert.doesNotMatch(job, /!inputs\.browser_session_only/);
+  const matrix = workflow.slice(workflow.indexOf('  extension-tool-matrix:'));
+  assert.match(job, /concurrency:\s+group: browserless-cloud\s+queue: max/);
+  assert.match(matrix, /concurrency:\s+group: \$\{\{ matrix\.extension == 'pi-browser-use' && 'browserless-cloud' \|\| format\('extension-\{0\}-\{1\}', github\.run_id, strategy\.job-index\) \}\}\s+queue: max/);
+  assert.doesNotMatch(matrix, /!inputs\.browser_session_only/);
+  assert.match(workflow, /BROWSER_SESSION_ONLY: \$\{\{ inputs\.browser_session_only \}\}/);
+  const invocation = matrix.slice(matrix.indexOf('          # Run the two model-backed'), matrix.indexOf('          # Provider-backed scenarios'))
+    .replaceAll('${{ matrix.extension }}', 'pi-browser-use').replaceAll('${{ matrix.scenario }}', 'session');
+  for (const code of [0, 7]) {
+    const run = () => execFileSync('bash', ['-c', `set -euo pipefail\nnode() { echo "$*"; return ${code}; }\n${invocation}\nexit 99`], { encoding: 'utf8', stdio: 'pipe' });
+    if (code === 0) assert.equal(run().trim(), '.github/scripts/browser-session-model-e2e.mjs');
+    else assert.throws(run, error => error.status === code);
+  }
 });
 
 test('checks screenshot tool results even when stderr diagnostics are mixed into the event stream', async () => {
@@ -327,4 +342,35 @@ test('threads the integration model through generated configs and skill evaluati
     // false in the workflow before the heredoc runs.
     assert.equal(settings['pi-telemetry'].includePayloads, true);
   }
+});
+
+test('selects the real Pi model session scenario for browser code and model test changes', () => {
+  for (const file of ['packages/pi-browser-use/src/adapter.ts', '.github/scripts/browser-session-model-e2e.mjs']) {
+    const scenarios = selectIntegrationMatrix([file]);
+    assert.ok(scenarios.some(({ extension, scenario }) => extension === 'pi-browser-use' && scenario === 'session'));
+  }
+  const sessionOnly = selectIntegrationMatrix([], { forceAll: true, browserSessionOnly: true });
+  assert.equal(sessionOnly.length, 1);
+  assert.equal(sessionOnly[0].extension, 'pi-browser-use');
+  assert.equal(sessionOnly[0].scenario, 'session');
+});
+
+test('omits the model scenario when pull_request_target still executes an older workflow', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-integration-workflow-'));
+  const script = fileURLToPath(new URL('./integration-matrix.mjs', import.meta.url));
+  const git = (...args) => execFileSync('git', args, { cwd: root, env: { PATH: process.env.PATH }, encoding: 'utf8', stdio: 'pipe' });
+  try {
+    git('init', '-q');
+    await mkdir(join(root, '.github/workflows'), { recursive: true });
+    for (const supported of [false, true]) {
+      await writeFile(join(root, '.github/workflows/integration.yml'), supported ? 'node .github/scripts/browser-session-model-e2e.mjs' : 'old workflow');
+      git('add', '.');
+      git('-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'workflow');
+      const result = execFileSync(process.execPath, [script], { cwd: root, encoding: 'utf8', env: {
+        PATH: process.env.PATH, GITHUB_EVENT_NAME: 'pull_request_target', GITHUB_WORKFLOW_SHA: git('rev-parse', 'HEAD').trim(),
+      }, stdio: ['ignore', 'pipe', 'pipe'] });
+      const { include } = JSON.parse(result.split('\n')[0].slice('matrix='.length));
+      assert.equal(include.some(entry => entry.extension === 'pi-browser-use' && entry.scenario === 'session'), supported);
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

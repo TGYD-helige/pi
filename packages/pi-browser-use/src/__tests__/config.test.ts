@@ -24,6 +24,26 @@ describe('browser session configuration', () => {
     );
   });
 
+  it('accepts built-in providers but rejects ambiguous lifecycle ownership', () => {
+    const provider = { name: 'steel' as const, apiKey: 'test-key' };
+    const session = { enabled: true as const, key: 'cloud', retentionMs: 1000, provider };
+    expect(resolveConfig({ session }).session?.provider).toEqual(provider);
+    expect(() =>
+      resolveConfig({ session: { ...session, adapterModule: '/tmp/custom.mjs' } }),
+    ).toThrow('Choose');
+    expect(() =>
+      resolveConfig({
+        session: { ...session, backend: { release: { url: 'https://example.test' } } },
+      }),
+    ).toThrow('Choose');
+    expect(() =>
+      resolveConfig({ session: { ...session, provider: { ...provider, apiKey: '' } } }),
+    ).toThrow('API key');
+    expect(() =>
+      resolveConfig({ session: { enabled: false, provider: { ...provider, apiKey: '' } } }),
+    ).not.toThrow();
+  });
+
   it('defaults to direct connections and ignores disabled session options', () => {
     expect(resolveConfig().session).toBeUndefined();
     expect(resolveConfig({ session: { enabled: false }, slim: true }).slim).toBe(true);

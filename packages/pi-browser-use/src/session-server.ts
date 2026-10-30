@@ -1,13 +1,12 @@
 import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
-import { isAbsolute } from 'node:path';
-import { pathToFileURL } from 'node:url';
-import type { BrowserUseConfig } from './config.js';
+import { isDeepStrictEqual } from 'node:util';
+import { createBrowserAdapter } from './adapter.js';
+import { type BrowserUseConfig, resolveConfig } from './config.js';
 import { DevToolsClient } from './index.js';
 import {
   BrowserAcquisitionError,
   type BrowserLifecycleAdapter,
-  createHttpBrowserAdapter,
   type ManagedBrowser,
   validateBrowserBinding,
   validateBrowserExpiry,
@@ -74,28 +73,7 @@ export async function serveBrowserSession(
   if (!/^[a-f0-9]{64}$/.test(token))
     throw new BrowserSessionError('Browser session transport requires a random 32-byte hex token.');
   const retentionMs = session.retentionMs;
-  if (options.browser && (options.adapter || session.adapterModule || !session.backend))
-    throw new BrowserSessionError('A runtime browser binding requires an HTTP lifecycle backend.');
-  let adapter = options.adapter;
-  if (!adapter && session.adapterModule) {
-    if (!isAbsolute(session.adapterModule))
-      throw new BrowserSessionError(
-        'Browser adapterModule must be an absolute trusted module path.',
-      );
-    const module = await import(pathToFileURL(session.adapterModule).href);
-    adapter = await module.createBrowserLifecycleAdapter();
-  }
-  if (!adapter && session.backend)
-    adapter = createHttpBrowserAdapter(session.backend, options.browser);
-  if (
-    (options.adapter !== undefined || session.adapterModule || session.backend) &&
-    (!adapter ||
-      typeof adapter.acquire !== 'function' ||
-      typeof adapter.release !== 'function' ||
-      (adapter.describe !== undefined && typeof adapter.describe !== 'function') ||
-      (adapter.retain !== undefined && typeof adapter.retain !== 'function'))
-  )
-    throw new BrowserSessionError('Invalid browser lifecycle adapter.');
+  const adapter = await createBrowserAdapter(config, options);
   let managed: ManagedBrowser | undefined;
   let acquiring: Promise<void> | undefined;
   let releasing: Promise<void> | undefined;
@@ -133,7 +111,7 @@ export async function serveBrowserSession(
   }
 
   function releaseManaged() {
-    if (adapter && managed)
+    if (managed)
       releasing ??= bounded(
         Promise.resolve().then(() => adapter!.release(managed!, AbortSignal.timeout(15_000))),
         15_000,
@@ -165,14 +143,7 @@ export async function serveBrowserSession(
       state,
       resumed,
       strategy: 'held-connection',
-      ownership: adapter
-        ? 'adapter'
-        : config.wsEndpoint ||
-            config.browserUrl ||
-            config.autoConnect ||
-            config.sessionMode === 'existing'
-          ? 'external'
-          : 'local',
+      ownership: adapter.ownership ?? 'adapter',
       providerDeadlineKnown: hardDeadline !== undefined,
       ...(expiresAt ? { expiresAt: new Date(expiresAt).toISOString() } : {}),
       ...(hardDeadline ? { providerExpiresAt: new Date(hardDeadline).toISOString() } : {}),
@@ -204,11 +175,7 @@ export async function serveBrowserSession(
           outcome = 'cleanup-failed';
         }
       }
-      if (
-        marker &&
-        reason !== 'lost' &&
-        (config.autoConnect || config.sessionMode === 'existing')
-      ) {
+      if (marker && reason !== 'lost' && adapter.ownership === 'external') {
         try {
           if (client.getState() !== 'ready')
             throw new BrowserSessionError('The marker connection is no longer available.');
@@ -245,13 +212,13 @@ export async function serveBrowserSession(
       throw new BrowserSessionError(
         'Browser creation had an uncertain outcome. Inspect the provider before starting another session.',
       );
-    if (adapter && !managed) {
+    if (!managed) {
       try {
         acquiring = (async () => {
           try {
             const acquired = await adapter.acquire(config, signal);
             if (hasKnownId(acquired)) managed = acquired;
-            validateBrowserBinding(acquired);
+            validateBrowserBinding(acquired, adapter.ownership);
             hardDeadline = acquired.expiresAt;
           } catch (error) {
             if (error instanceof BrowserAcquisitionError && hasKnownId(error.browser))
@@ -274,47 +241,61 @@ export async function serveBrowserSession(
     }
     signal.throwIfAborted();
     if (!browserUsed) {
-      const resolved = managed?.connection ?? directConfig;
-      if (resolved.wsEndpoint || resolved.browserUrl) {
-        replacing = (async () => {
-          const nextConnection = await createBrowserConnection(resolved, signal);
-          const {
-            wsEndpoint: _ws,
-            browserUrl: _url,
-            wsHeaders: _headers,
-            userDataDir: _profile,
-            executablePath: _executable,
-            channel: _channel,
-            isolated: _isolated,
-            autoConnect: _autoConnect,
-            ...localConfig
-          } = directConfig;
-          // Provider connections must not inherit local-launch/discovery flags.
-          let nextClient: DevToolsClient | undefined;
-          try {
-            signal.throwIfAborted();
-            if (stopped) throw new BrowserSessionError('The browser session has ended.');
-            await client.close();
-            nextClient = new DevToolsClient({
-              ...localConfig,
-              sessionMode: 'existing',
-              wsEndpoint: nextConnection.wsEndpoint,
-            });
-            await nextClient.connect(signal);
-            signal.throwIfAborted();
-            if (stopped) throw new BrowserSessionError('The browser session has ended.');
-            client = nextClient;
-            connection = nextConnection;
-          } catch (error) {
-            await closeBrowser(nextClient, nextConnection);
-            throw error;
-          }
-        })();
+      const resolved = managed!.connection;
+      // Keep the discovery transport when the acquired launch configuration is unchanged.
+      if (
+        !resolved.wsEndpoint &&
+        !resolved.browserUrl &&
+        isDeepStrictEqual(resolveConfig(resolved), resolveConfig(directConfig))
+      ) {
+        browserUsed = true;
+        return;
+      }
+      replacing = (async () => {
+        const nextConnection =
+          resolved.wsEndpoint || resolved.browserUrl
+            ? await createBrowserConnection(resolved, signal)
+            : undefined;
+        const {
+          wsEndpoint: _ws,
+          browserUrl: _url,
+          wsHeaders: _headers,
+          userDataDir: _profile,
+          executablePath: _executable,
+          channel: _channel,
+          isolated: _isolated,
+          autoConnect: _autoConnect,
+          ...localConfig
+        } = directConfig;
+        // Provider connections must not inherit local-launch/discovery flags.
+        let nextClient: DevToolsClient | undefined;
         try {
-          await replacing;
-        } finally {
-          replacing = undefined;
+          signal.throwIfAborted();
+          if (stopped) throw new BrowserSessionError('The browser session has ended.');
+          await client.close();
+          nextClient = new DevToolsClient(
+            nextConnection
+              ? {
+                  ...localConfig,
+                  sessionMode: 'existing',
+                  wsEndpoint: nextConnection.wsEndpoint,
+                }
+              : resolved,
+          );
+          if (nextConnection) await nextClient.connect(signal);
+          signal.throwIfAborted();
+          if (stopped) throw new BrowserSessionError('The browser session has ended.');
+          client = nextClient;
+          connection = nextConnection;
+        } catch (error) {
+          await closeBrowser(nextClient, nextConnection);
+          throw error;
         }
+      })();
+      try {
+        await replacing;
+      } finally {
+        replacing = undefined;
       }
     }
     browserUsed = true;
@@ -325,7 +306,7 @@ export async function serveBrowserSession(
       throw new BrowserSessionError(
         'The original CDP connection was lost. No replacement browser was created.',
       );
-    if (adapter?.describe && managed) {
+    if (adapter.describe && managed) {
       const description = await abortable(adapter.describe(managed, signal), signal);
       if (!description || typeof description.alive !== 'boolean')
         throw new BrowserSessionError('The browser backend returned an invalid live status.');
@@ -436,7 +417,7 @@ export async function serveBrowserSession(
       }
       // Repeated retain is idempotent, not an unbounded renewal mechanism.
       let effective = expiresAt ?? Date.now() + retentionMs;
-      if (adapter?.retain && managed && !expiresAt) {
+      if (adapter.retain && managed && !expiresAt) {
         const retained = await abortable(adapter.retain(managed, effective, signal), signal);
         if (!retained || retained.expiresAt === undefined)
           throw new BrowserSessionError('The browser backend returned no retention deadline.');

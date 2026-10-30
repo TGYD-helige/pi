@@ -12,25 +12,25 @@ import {
 
 /** An explicit endpoint lets the same cloud protocol test run against a local CDP fixture. */
 export async function runBrowserlessSessionE2E(endpoint) {
-  if (!endpoint) {
-    if (!process.env.BROWSERLESS_TOKEN)
-      throw Error('BROWSERLESS_TOKEN is required for Browserless Cloud lifecycle E2E.');
-    const url = new URL('wss://production-sfo.browserless.io/chrome');
-    url.searchParams.set('token', process.env.BROWSERLESS_TOKEN);
-    url.searchParams.set('timeout', '60000');
-    endpoint = url.href;
-  }
+  if (!endpoint && !process.env.BROWSERLESS_TOKEN)
+    throw Error('BROWSERLESS_TOKEN is required for Browserless Cloud lifecycle E2E.');
+  const provider = {
+    name: 'browserless',
+    apiKey: endpoint ? 'local-fixture' : process.env.BROWSERLESS_TOKEN,
+    ...(endpoint ? {} : { create: { timeout: 60000 } }),
+  };
+  const binding = (key) => endpoint ? { key, browser: { id: 'browserless-fixture', connection: { wsEndpoint: endpoint } } } : undefined;
   const root = await mkdtemp(join(tmpdir(), 'pi-browser-use-cloud-'));
   const configPath = join(root, 'config.json');
   // Cloud Chrome cannot reach the runner's loopback HTTP server.
   const runner = createBrowserSessionRunner(root, configPath, 'about:blank#pi-cloud-handshake');
   let phase = 'configure';
   let sessionEnabled = false;
-  const base = { sessionMode: 'existing', wsEndpoint: endpoint };
+  const base = { sessionMode: 'existing', ...(endpoint ? { wsEndpoint: endpoint } : {}) };
   const recordPath = (key) =>
     join(root, 'browser-sessions', createHash('sha256').update(key).digest('hex'), 'session.json');
   async function configure(session) {
-    const config = { ...base, session };
+    const config = { ...base, session: { ...session, provider } };
     await writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
     await writeFile(join(root, 'settings.json'), JSON.stringify({ 'pi-browser-use': config }), {
       mode: 0o600,
@@ -40,7 +40,7 @@ export async function runBrowserlessSessionE2E(endpoint) {
   try {
     phase = 'retain-and-resume';
     await configure({ enabled: true, key: 'cloud-handoff', retentionMs: 15000 });
-    const first = await runner.run('retain');
+    const first = await runner.run('retain', binding('cloud-handoff'));
     await delay(1500);
     const second = await runner.run('resume');
     assert.equal(first.state, 'retained');
@@ -54,13 +54,13 @@ export async function runBrowserlessSessionE2E(endpoint) {
 
     phase = 'ordinary-cleanup';
     await configure({ enabled: true, key: 'cloud-ordinary', retentionMs: 15000 });
-    assert.equal((await runner.run('ordinary')).state, 'active');
+    assert.equal((await runner.run('ordinary', binding('cloud-ordinary'))).state, 'active');
     await assert.rejects(readFile(recordPath('cloud-ordinary')), { code: 'ENOENT' });
     console.log('PASS: ordinary Browserless use has no retention window.');
 
     phase = 'expiry';
     await configure({ enabled: true, key: 'cloud-expiry', retentionMs: 200 });
-    await runner.run('retain');
+    await runner.run('retain', binding('cloud-expiry'));
     assert.equal(await waitForSessionEnd(recordPath('cloud-expiry')), 'expired');
     await assert.rejects(runner.run('resume'));
     await runner.run('cleanup');

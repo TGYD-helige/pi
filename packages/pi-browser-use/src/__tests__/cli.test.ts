@@ -242,6 +242,30 @@ describe('parseArgs', () => {
       parseArgs(['--ws-headers={"Authorization":"${PI_BROWSER_CLI_TEST_TOKEN}"}']),
     ).toThrow('valid HTTP header');
   });
+  it('resolves built-in provider credentials while leaving native creation parameters untouched', () => {
+    vi.stubEnv('PI_BROWSER_PROVIDER_TEST_KEY', 'private-key');
+    const file = join(directory, 'provider.json');
+    const session = {
+      enabled: true,
+      key: 'provider',
+      retentionMs: 1000,
+      provider: {
+        name: 'steel',
+        apiKey: '${PI_BROWSER_PROVIDER_TEST_KEY}',
+        create: { userAgent: '$RAW' },
+      },
+    };
+    writeFileSync(file, JSON.stringify({ session }));
+    expect(parseArgs(['--config', file]).session?.provider).toEqual({
+      ...session.provider,
+      apiKey: 'private-key',
+    });
+    vi.stubEnv('PI_BROWSER_PROVIDER_TEST_KEY', undefined);
+    expect(() => parseArgs(['--config', file])).toThrow('missing or empty');
+    writeFileSync(file, JSON.stringify({ session: { ...session, enabled: false } }));
+    expect(() => parseArgs(['--config', file])).not.toThrow();
+  });
+
   it('does not resolve unused backend credentials when sessions are disabled', () => {
     const file = join(directory, 'config.json');
     writeFileSync(
