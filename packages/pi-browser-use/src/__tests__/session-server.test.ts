@@ -23,9 +23,15 @@ function deferred() {
 
 describe('browser session shutdown', () => {
   it.each([
-    'resolve',
-    'reject',
-  ] as const)('waits for candidate cleanup when connect ignores shutdown and later %ss', async (completion) => {
+    { completion: 'resolve', cleanup: 'resolve' },
+    { completion: 'reject', cleanup: 'resolve' },
+    { completion: 'resolve', cleanup: 'pending' },
+    { completion: 'reject', cleanup: 'client-reject' },
+    { completion: 'reject', cleanup: 'tunnel-reject' },
+  ] as const)('cleans up shutdown candidate: $completion / $cleanup', async ({
+    completion,
+    cleanup: cleanupMode,
+  }) => {
     const token = randomBytes(32).toString('hex');
     const owner = randomBytes(32).toString('hex');
     const { promise: started, resolve: entered } = deferred();
@@ -36,6 +42,13 @@ describe('browser session shutdown', () => {
     const tunnels: Awaited<ReturnType<typeof createConnection>>[] = [];
     vi.spyOn(connectionModule, 'createBrowserConnection').mockImplementation(async (...args) => {
       const tunnel = await createConnection(...args);
+      if (cleanupMode === 'tunnel-reject') {
+        const closeTunnel = tunnel.close;
+        tunnel.close = async () => {
+          await closeTunnel();
+          throw new Error('tunnel cleanup failed');
+        };
+      }
       tunnels.push(tunnel);
       return tunnel;
     });
@@ -77,6 +90,7 @@ describe('browser session shutdown', () => {
       await request('attach');
       const call = request('call', { name: 'list_pages', args: {} });
       await started;
+      if (cleanupMode === 'pending') vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       const shutdown = server.stop('lost').then(() => {
         stopped = true;
       });
@@ -88,19 +102,24 @@ describe('browser session shutdown', () => {
       await cleaning.promise;
       expect(stopped).toBe(false);
       expect(onStop).not.toHaveBeenCalled();
-      cleanup.resolve();
+      if (cleanupMode === 'pending') await vi.advanceTimersByTimeAsync(15_001);
+      else if (cleanupMode === 'client-reject') cleanup.reject(new Error('client cleanup failed'));
+      else cleanup.resolve();
       await shutdown;
+      expect(tunnels[0]!.alive).toBe(false);
+      cleanup.resolve();
       expect((await call).status).toBe(409);
       expect(callTool).not.toHaveBeenCalled();
       expect(tunnels).toHaveLength(1);
       expect(tunnels[0]!.alive).toBe(false);
       expect(close.mock.contexts).toContain(candidate);
-      expect(onStop).toHaveBeenCalledWith('lost');
+      expect(onStop).toHaveBeenCalledWith(cleanupMode === 'resolve' ? 'lost' : 'cleanup-failed');
     } finally {
       pending.resolve();
       cleanup.resolve();
       await server.stop();
-      for (const tunnel of tunnels) await tunnel.close();
+      for (const tunnel of tunnels) await tunnel.close().catch(() => {});
+      vi.useRealTimers();
       vi.restoreAllMocks();
     }
   });

@@ -113,6 +113,7 @@ export async function serveBrowserSession(
   let releasing: Promise<void> | undefined;
   let replacing: Promise<void> | undefined;
   let acquisitionFailed = false;
+  let browserCleanupFailed = false;
   let browserUsed = false;
   let connection: Awaited<ReturnType<typeof createBrowserConnection>> | undefined;
   const startupSignal = AbortSignal.timeout(OPERATION_MS);
@@ -150,6 +151,23 @@ export async function serveBrowserSession(
         15_000,
       );
     return releasing;
+  }
+
+  async function closeBrowser(
+    closingClient: DevToolsClient | undefined,
+    closingConnection: Awaited<ReturnType<typeof createBrowserConnection>> | undefined,
+  ) {
+    const results = await Promise.allSettled(
+      [() => closingClient?.close(), () => closingConnection?.close()].map((close) =>
+        bounded(Promise.resolve().then(close), 15_000),
+      ),
+    );
+    if (results.some((result) => result.status === 'rejected')) {
+      browserCleanupFailed = true;
+      console.error(
+        '[pi-browser-use] browser session cleanup failed; provider inspection may be required',
+      );
+    }
   }
 
   function status() {
@@ -198,15 +216,8 @@ export async function serveBrowserSession(
           outcome = 'cleanup-failed';
         }
       }
-      try {
-        await client.close();
-      } catch {
-        outcome = 'cleanup-failed';
-        console.error(
-          '[pi-browser-use] browser session cleanup failed; provider inspection may be required',
-        );
-      }
-      await connection?.close();
+      await closeBrowser(client, connection);
+      if (browserCleanupFailed) outcome = 'cleanup-failed';
       try {
         await releaseManaged();
       } catch {
@@ -293,11 +304,7 @@ export async function serveBrowserSession(
             client = nextClient;
             connection = nextConnection;
           } catch (error) {
-            try {
-              await nextClient?.close();
-            } finally {
-              await nextConnection.close();
-            }
+            await closeBrowser(nextClient, nextConnection);
             throw error;
           }
         })();
