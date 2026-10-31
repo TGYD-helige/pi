@@ -96,6 +96,8 @@ export default function piTeamworkExtension(pi: ExtensionAPI): void {
   let provider: TeamworkProvider | undefined;
   let readyPromise: Promise<void> | undefined;
   let sessionGeneration = 0;
+  let sessionAbort: AbortController | undefined;
+  let active = false;
   const registeredToolNames = new Set<string>();
   const suspendedToolNames = new Set<string>();
 
@@ -127,6 +129,10 @@ export default function piTeamworkExtension(pi: ExtensionAPI): void {
 
   pi.on('session_start', async (_event, ctx) => {
     const generation = ++sessionGeneration;
+    sessionAbort?.abort();
+    const controller = new AbortController();
+    sessionAbort = controller;
+    active = false;
     provider = undefined;
     readyPromise = undefined;
 
@@ -144,16 +150,26 @@ export default function piTeamworkExtension(pi: ExtensionAPI): void {
       return;
     }
 
+    active = true;
+    registerProviderTools();
+    let initDeadline: number | undefined = Date.now() + 10_000;
+    const startupSignal = ctx.signal
+      ? AbortSignal.any([ctx.signal, controller.signal])
+      : controller.signal;
     const exec: ExecFn = async (command, args) => {
-      const result = await pi.exec(command, args, { cwd: ctx.cwd });
+      const signal = initDeadline === undefined ? controller.signal : startupSignal;
+      signal.throwIfAborted();
+      const timeout = initDeadline === undefined ? 30_000 : initDeadline - Date.now();
+      if (timeout <= 0) throw new Error('Teamwork initialization timed out.');
+      const result = await pi.exec(command, args, { cwd: ctx.cwd, signal, timeout });
       return { stdout: result.stdout, stderr: result.stderr, code: result.code };
     };
 
     readyPromise = (async () => {
       const { adapter, installResult } = await initMulticaProvider(config.multica ?? {}, exec);
-      if (generation !== sessionGeneration) return;
+      if (generation !== sessionGeneration || startupSignal.aborted || Date.now() >= initDeadline!)
+        return;
       provider = adapter;
-      registerProviderTools();
 
       if (!installResult.installed) {
         ctx.ui.notify(
@@ -179,24 +195,27 @@ export default function piTeamworkExtension(pi: ExtensionAPI): void {
       }
 
       ctx.ui.setStatus(STATUS_KEY, `teamwork: ${adapter.name}`);
-    })().catch((err) => {
-      if (generation !== sessionGeneration) return;
-      ctx.ui.setStatus(
-        STATUS_KEY,
-        `teamwork: multica (error: ${err instanceof Error ? err.message : String(err)})`,
-      );
-    });
+    })()
+      .catch(() => {
+        if (generation !== sessionGeneration) return;
+        console.error('[pi-teamwork] initialization failed');
+        ctx.ui.setStatus(STATUS_KEY, 'teamwork: multica initialization failed');
+      })
+      .finally(() => {
+        initDeadline = undefined;
+      });
   });
 
   pi.on('session_shutdown', async () => {
     sessionGeneration++;
+    sessionAbort?.abort();
+    active = false;
     provider = undefined;
     readyPromise = undefined;
   });
 
   pi.on('before_agent_start', async (event) => {
-    if (readyPromise) await readyPromise;
-    if (!provider) return;
+    if (!active) return;
     return {
       systemPrompt: event.systemPrompt
         ? `${event.systemPrompt}\n\n${TEAMWORK_GUIDANCE}`

@@ -1,4 +1,5 @@
 import { readdirSync, readFileSync } from 'node:fs';
+import { readdir, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 
@@ -180,4 +181,42 @@ export function loadPiPolicyProfiles<T>(options?: PiSettingsOptions): Record<str
       : ({} as Record<string, T>);
 
   return { ...globalPolicies, ...configPolicies, ...projectPolicies };
+}
+
+/** Read current policies without blocking the event loop or caching revoked rules. */
+export async function loadPiPolicyProfilesAsync<T>(
+  options?: PiSettingsOptions,
+): Promise<Record<string, T>> {
+  const globalDir = resolve(join(homedir(), '.pi', 'agent', 'policy'));
+  const configDir = resolve(join(resolveConfigDir(options?.configDir), 'policy'));
+  const dirs = [
+    globalDir,
+    ...(configDir === globalDir ? [] : [configDir]),
+    ...(options?.projectTrusted === true
+      ? [resolve(join(options.cwd ?? process.cwd(), '.pi', 'policy'))]
+      : []),
+  ];
+  const result: Record<string, T> = {};
+  for (const dir of dirs) {
+    let entries: string[];
+    try {
+      entries = await readdir(dir);
+    } catch (error) {
+      if (!['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? ''))
+        console.error('[pi-shared] unable to read policy directory');
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.endsWith('.json')) continue;
+      try {
+        const parsed = JSON.parse(await readFile(join(dir, entry), 'utf-8'));
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
+          result[basename(entry, '.json')] = parsed;
+      } catch (error) {
+        if (!(error instanceof SyntaxError) && (error as NodeJS.ErrnoException).code !== 'ENOENT')
+          console.error('[pi-shared] unable to read policy profile');
+      }
+    }
+  }
+  return result;
 }

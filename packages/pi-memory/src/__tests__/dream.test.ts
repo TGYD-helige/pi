@@ -1,4 +1,5 @@
-import { rmSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
+import { utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { SessionManager } from '@earendil-works/pi-coding-agent';
@@ -6,9 +7,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runDream } from '../dream.js';
 import { writeDreamingState } from '../dreaming-state.js';
 
-const { runConsolidationMock } = vi.hoisted(() => ({
+const { runConsolidationMock, metadata, openFile } = vi.hoisted(() => ({
   runConsolidationMock: vi.fn(),
+  metadata: vi.fn(),
+  openFile: vi.fn(),
 }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  metadata.mockImplementation(actual.stat);
+  openFile.mockImplementation(actual.open);
+  return { ...actual, stat: metadata, open: openFile };
+});
 
 vi.mock('../consolidation.js', () => ({
   runConsolidation: runConsolidationMock,
@@ -21,8 +30,11 @@ describe('runDream', () => {
   let originalAgentDir: string | undefined;
 
   beforeEach(() => {
+    metadata.mockClear();
+    openFile.mockClear();
     originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-    home = path.join(tmpdir(), `pi-memory-dream-test-${Date.now()}-${Math.random()}`);
+    home = path.join(tmpdir(), 'pi-memory-dream-test');
+    rmSync(home, { recursive: true, force: true });
     process.env.PI_CODING_AGENT_DIR = path.join(home, 'pi-agent');
     sessionDir = path.join(home, 'sessions');
     session = SessionManager.create(home, sessionDir, { id: 'dream-test' });
@@ -34,6 +46,173 @@ describe('runDream', () => {
     if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
     rmSync(home, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('skips history discovery when the consolidation model is unavailable', async () => {
+    const registry = modelRegistry();
+    registry.find.mockReturnValue(undefined as never);
+
+    await expect(
+      runDream({ memoryDir: path.join(home, 'memories'), modelRegistry: registry, sessionDir }),
+    ).resolves.toBe(false);
+    expect(metadata).not.toHaveBeenCalled();
+    expect(openFile).not.toHaveBeenCalled();
+    expect(runConsolidationMock).not.toHaveBeenCalled();
+  });
+
+  it('skips history when the model exists but credentials are unavailable', async () => {
+    const registry = modelRegistry();
+    registry.getApiKeyAndHeaders.mockResolvedValue({ ok: false, apiKey: '' });
+    await expect(
+      runDream({ memoryDir: path.join(home, 'memories'), modelRegistry: registry, sessionDir }),
+    ).resolves.toBe(false);
+    expect(metadata).not.toHaveBeenCalled();
+    expect(openFile).not.toHaveBeenCalled();
+    expect(runConsolidationMock).not.toHaveBeenCalled();
+  });
+
+  it('opens only the 32 newest files after filtering their metadata', async () => {
+    const base = Date.now();
+    for (let i = 0; i < 35; i++) {
+      const recent = SessionManager.create(home, sessionDir, { id: `window-${i}` });
+      appendTurn(recent, i);
+      await utimes(recent.getSessionFile()!, new Date(base + i + 1000), new Date(base + i + 1000));
+    }
+    await expect(
+      runDream({
+        dreaming: { minTurnsSinceLastRun: 1 },
+        memoryDir: path.join(home, 'memories'),
+        modelRegistry: modelRegistry(),
+        sessionDir,
+      }),
+    ).resolves.toBe(true);
+    expect(openFile).toHaveBeenCalledTimes(32);
+    const turns = runConsolidationMock.mock.calls[0]![0].turns;
+    expect(turns).toHaveLength(32);
+    expect(turns.some((turn: { sessionId: string }) => turn.sessionId === 'window-0')).toBe(false);
+    expect(turns.some((turn: { sessionId: string }) => turn.sessionId === 'window-34')).toBe(true);
+  });
+
+  it('reads a bounded tail and follows the active branch after a large old entry', async () => {
+    session.appendMessage({ role: 'user', content: 'x'.repeat(400_000), timestamp: Date.now() });
+    appendTurn(session, 2);
+    const branchPoint = session.getLeafId()!;
+    appendTurn(session, 3);
+    session.branch(branchPoint);
+    appendTurn(session, 4);
+    const bytes: number[] = [];
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    openFile.mockImplementationOnce(async (file: string, flags: string) => {
+      const handle = await actual.open(file, flags);
+      const read = vi.spyOn(handle, 'read');
+      const close = handle.close.bind(handle);
+      handle.close = async () => {
+        for (const call of read.mock.calls) {
+          const args: readonly unknown[] = call;
+          bytes.push(Number(args[2]));
+        }
+        await close();
+      };
+      return handle;
+    });
+    await expect(
+      runDream({
+        dreaming: { minTurnsSinceLastRun: 1 },
+        memoryDir: path.join(home, 'memories'),
+        modelRegistry: modelRegistry(),
+        sessionDir,
+      }),
+    ).resolves.toBe(true);
+    expect(bytes).toEqual([256 * 1024, 64 * 1024]);
+    expect(
+      runConsolidationMock.mock.calls[0]![0].turns.map(
+        (turn: { userMessage: string }) => turn.userMessage,
+      ),
+    ).toEqual(['Remember preference 2', 'Remember preference 4']);
+  });
+
+  it('does not start a header read after a cancelled tail read eventually settles', async () => {
+    session.appendMessage({ role: 'user', content: 'x'.repeat(400_000), timestamp: Date.now() });
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    let finish!: () => void;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const blocked = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    let reads = 0;
+    openFile.mockImplementationOnce(async (file: string, flags: string) => {
+      const handle = await actual.open(file, flags);
+      const read = vi.spyOn(handle, 'read');
+      read.mockImplementationOnce(async () => {
+        markStarted();
+        await blocked;
+        return { bytesRead: 0, buffer: Buffer.alloc(0) };
+      });
+      const close = handle.close.bind(handle);
+      handle.close = async () => {
+        reads = read.mock.calls.length;
+        await close();
+      };
+      return handle;
+    });
+    const controller = new AbortController();
+    const memoryDir = path.join(home, 'memories');
+    const pending = runDream({
+      dreaming: { minTurnsSinceLastRun: 1 },
+      memoryDir,
+      modelRegistry: modelRegistry(),
+      sessionDir,
+      signal: controller.signal,
+    });
+    await started;
+    controller.abort();
+    await expect(pending).resolves.toBe(false);
+    finish();
+    await vi.waitFor(() => expect(existsSync(`${memoryDir}.lock`)).toBe(false));
+    expect(reads).toBe(1);
+    expect(runConsolidationMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'caller',
+    'deadline',
+  ])('ends the %s wait but holds the lock until stalled metadata settles', async (kind) => {
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    const result = await actual.stat(session.getSessionFile()!);
+    let finish!: (value: typeof result) => void;
+    metadata.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const controller = new AbortController();
+    if (kind === 'deadline')
+      vi.spyOn(AbortSignal, 'timeout').mockReturnValueOnce(controller.signal);
+    const options = {
+      dreaming: { minTurnsSinceLastRun: 1 },
+      memoryDir: path.join(home, 'memories'),
+      modelRegistry: modelRegistry(),
+      sessionDir,
+    };
+    const pending = runDream({
+      ...options,
+      ...(kind === 'caller' ? { signal: controller.signal } : {}),
+    });
+    await vi.waitFor(() => expect(metadata).toHaveBeenCalledTimes(1));
+    controller.abort();
+    await expect(pending).resolves.toBe(false);
+    await expect(runDream(options)).resolves.toBe(false);
+    expect(metadata).toHaveBeenCalledTimes(1);
+    expect(openFile).not.toHaveBeenCalled();
+    finish(result);
+    await vi.waitFor(() => expect(existsSync(`${options.memoryDir}.lock`)).toBe(false));
+    expect(openFile).not.toHaveBeenCalled();
+    await expect(runDream(options)).resolves.toBe(true);
   });
 
   it('reads default Pi sessions across project directories', async () => {
@@ -192,8 +371,8 @@ describe('runDream', () => {
 
 function modelRegistry() {
   return {
-    find: vi.fn(),
-    getApiKeyAndHeaders: vi.fn(),
+    find: vi.fn(() => ({ id: 'test-model' })),
+    getApiKeyAndHeaders: vi.fn().mockResolvedValue({ ok: true, apiKey: 'test' }),
   };
 }
 

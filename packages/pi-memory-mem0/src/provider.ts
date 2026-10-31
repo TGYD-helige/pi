@@ -38,6 +38,8 @@ const SELF_HOSTED_DEDUP_LIMIT = 1000;
 export interface Mem0Provider {
   /** True only when aborting search stops the underlying request. */
   readonly supportsSearchCancellation?: boolean;
+  /** True only when aborting add stops the underlying request. */
+  readonly supportsAddCancellation?: boolean;
   add(
     messages: Array<{ role: string; content: string }>,
     opts: Mem0AddOptions,
@@ -226,6 +228,7 @@ interface PlatformClient {
 
 class PlatformProvider implements Mem0Provider {
   readonly supportsSearchCancellation = true;
+  readonly supportsAddCancellation = true;
   private client: PlatformClient | undefined;
   private initPromise: Promise<void> | null = null;
   private readonly requestSignal = new AsyncLocalStorage<AbortSignal>();
@@ -390,6 +393,7 @@ class PlatformProvider implements Mem0Provider {
 
 class SelfHostedProvider implements Mem0Provider {
   readonly supportsSearchCancellation = true;
+  readonly supportsAddCancellation = true;
   private readonly baseUrl: string;
 
   constructor(

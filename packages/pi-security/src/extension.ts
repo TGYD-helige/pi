@@ -24,7 +24,7 @@ import {
   SecurityGate,
   securityEvaluationDetails,
 } from './index.js';
-import { loadFilePolicies } from './policy-loader.js';
+import { loadFilePoliciesAsync } from './policy-loader.js';
 
 const SETTINGS_KEY = 'pi-security';
 const EXTENSION_STATUS_KEY = 'pi-security';
@@ -139,7 +139,7 @@ export async function authorizePiToolCall(
     return undefined;
   }
   const toolCall = toolCallFromPiEvent(event);
-  const evaluation = await createGate(ctx, state).authorize({
+  const evaluation = await (await createGate(ctx, state)).authorize({
     request: requestFromContext(ctx),
     toolCall,
     workspaceDir: ctx.cwd,
@@ -168,7 +168,7 @@ export async function authorizeUserBash(
       excludeFromContext: event.excludeFromContext,
     },
   };
-  const evaluation = await createGate(ctx, state).authorize({
+  const evaluation = await (await createGate(ctx, state)).authorize({
     request: requestFromContext(ctx),
     toolCall,
     workspaceDir: ctx.cwd,
@@ -205,15 +205,20 @@ export function resolvePiSecurityConfig(
   };
 }
 
-function createGate(ctx: ExtensionContext, state: PiSecurityExtensionState): SecurityGate {
+async function createGate(
+  ctx: ExtensionContext,
+  state: PiSecurityExtensionState,
+): Promise<SecurityGate> {
+  const projectTrusted = isProjectTrusted(ctx);
+  const options = { cwd: ctx.cwd, configDir: getAgentDir(), projectTrusted };
+  let filePolicies = await loadFilePoliciesAsync(options);
+  if (projectTrusted && !isProjectTrusted(ctx)) {
+    filePolicies = await loadFilePoliciesAsync({ ...options, projectTrusted: false });
+  }
   return new SecurityGate({
     profile: state.config.profile,
     ...(state.config.security ? { config: state.config.security } : {}),
-    filePolicies: loadFilePolicies({
-      cwd: ctx.cwd,
-      configDir: getAgentDir(),
-      projectTrusted: isProjectTrusted(ctx),
-    }),
+    filePolicies,
     approvalHandler: async ({ toolCall, decision, evaluation }) =>
       resolveApproval(ctx, state, toolCall, decision, evaluation),
     auditSink: (event) => {

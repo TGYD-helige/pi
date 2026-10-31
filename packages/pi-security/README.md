@@ -120,3 +120,5 @@ type SecurityRule = {
 This module is an execution gate, not a filesystem sandbox by itself. Deny and approval decisions are enforceable because they run before Pi tool execution; sandbox enforcement still depends on the runtime that executes the tool.
 
 Sensitive paths such as SSH keys, `.env`, credentials, tokens, private keys, and `secrets/` directories are denied by baseline policy across all profiles. Audit entries include tool names, resource summaries, risk level, and decision metadata, but they should not include plaintext secrets.
+
+The extension reads file policies asynchronously for each authorization decision. Policy changes, deletion, and project trust changes apply to the next decision; authorization profiles are not held in a TTL cache.

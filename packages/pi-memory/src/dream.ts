@@ -1,5 +1,12 @@
-import { mkdir } from 'node:fs/promises';
-import { SessionManager, type SessionMessageEntry } from '@earendil-works/pi-coding-agent';
+import { mkdir, open, opendir, stat } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+import { resolveConfigDir } from '@amaster.ai/pi-shared/settings';
+import {
+  migrateSessionEntries,
+  parseSessionEntries,
+  type SessionEntry,
+  type SessionMessageEntry,
+} from '@earendil-works/pi-coding-agent';
 import lockfile from 'proper-lockfile';
 import {
   type ConsolidationModelRegistry,
@@ -37,6 +44,10 @@ export async function runDream(options: RunDreamOptions): Promise<boolean> {
   const config = options.dreaming ?? {};
   if (config.enabled === false || options.signal?.aborted) return false;
 
+  const modelConfig = config.model ?? DEFAULT_MODEL;
+  const model = options.modelRegistry.find(modelConfig.provider, modelConfig.model);
+  if (!model) return false;
+
   await mkdir(options.memoryDir, { recursive: true });
 
   let release: (() => Promise<void>) | undefined;
@@ -47,6 +58,7 @@ export async function runDream(options: RunDreamOptions): Promise<boolean> {
     throw error;
   }
 
+  const discovery: { active?: Promise<unknown> } = {};
   try {
     const state = await readDreamingState(options.memoryDir);
     const now = Date.now();
@@ -61,12 +73,9 @@ export async function runDream(options: RunDreamOptions): Promise<boolean> {
     }
 
     // Gate check: enough Pi session turns since last run?
-    const turns = await readPiSessionTurns(
-      options.sessionDir,
-      state.lastConsolidatedAt,
-      options.includeGlobalSessions ?? false,
-    );
-    if (turns.length < minTurns || options.signal?.aborted) return false;
+    const inputs = await readDreamInputs(options, state.lastConsolidatedAt, model, discovery);
+    if (!inputs || inputs.turns.length < minTurns || options.signal?.aborted) return false;
+    const { turns, credentials } = inputs;
 
     // Consolidation
     let succeeded = false;
@@ -74,8 +83,8 @@ export async function runDream(options: RunDreamOptions): Promise<boolean> {
       succeeded = await runConsolidation({
         memoryDir: options.memoryDir,
         turns,
-        modelConfig: config.model ?? DEFAULT_MODEL,
-        modelRegistry: options.modelRegistry,
+        modelConfig,
+        modelRegistry: { find: () => model, getApiKeyAndHeaders: async () => credentials },
         ...(options.signal ? { signal: options.signal } : {}),
       });
     } catch (error) {
@@ -97,38 +106,163 @@ export async function runDream(options: RunDreamOptions): Promise<boolean> {
     );
     return true;
   } finally {
-    try {
-      await release();
-    } catch {
-      // Lock was already released.
-    }
+    const unlock = async () => {
+      try {
+        await release();
+      } catch {
+        console.error('[pi-memory] unable to release dreaming lock');
+      }
+    };
+    // Keep uncancellable metadata I/O single-flight after the caller stops waiting.
+    if (discovery.active) void discovery.active.then(unlock, unlock);
+    else await unlock();
   }
 }
 
-async function readPiSessionTurns(
+// Consolidation already uses a recent transcript window; bound discovery and decoding too.
+const MAX_SESSION_FILES = 32;
+const MAX_SESSION_BYTES = 256 * 1024;
+
+async function readDreamInputs(
+  options: RunDreamOptions,
+  lastConsolidatedAt: string | null,
+  model: unknown,
+  discovery: { active?: Promise<unknown> },
+) {
+  const signal = AbortSignal.any([
+    AbortSignal.timeout(5_000),
+    ...(options.signal ? [options.signal] : []),
+  ]);
+  if (signal.aborted) return undefined;
+  const operation = (async () => {
+    const credentials = await options.modelRegistry.getApiKeyAndHeaders(model);
+    if (!credentials.ok || signal.aborted) return undefined;
+    const turns = await scanPiSessionTurns(
+      options.sessionDir,
+      lastConsolidatedAt,
+      options.includeGlobalSessions ?? false,
+      signal,
+    );
+    return signal.aborted ? undefined : { turns, credentials };
+  })();
+  discovery.active = operation;
+  void operation.then(
+    () => {
+      delete discovery.active;
+    },
+    () => {
+      delete discovery.active;
+    },
+  );
+  let onAbort = () => {};
+  const cancelled = new Promise<undefined>((resolve) => {
+    onAbort = () => resolve(undefined);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([operation, cancelled]);
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+  }
+}
+
+async function* directoryEntries(path: string) {
+  const dir = await opendir(path).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR')
+      console.error('[pi-memory] unable to read session directory');
+    return undefined;
+  });
+  if (dir) yield* dir;
+}
+
+async function scanPiSessionTurns(
   sessionDir: string | undefined,
   lastConsolidatedAt: string | null,
   includeGlobalSessions: boolean,
+  signal?: AbortSignal,
 ): Promise<DreamTurn[]> {
   const since = lastConsolidatedAt ? new Date(lastConsolidatedAt).getTime() : undefined;
-  const sessionGroups = await Promise.all([
-    ...(includeGlobalSessions ? [SessionManager.listAll()] : []),
-    ...(sessionDir ? [SessionManager.listAll(sessionDir)] : []),
-  ]);
-  const sessions = [
-    ...new Map(sessionGroups.flat().map((session) => [session.path, session])).values(),
-  ];
-  const turns = sessions.flatMap((session) => {
-    if (since !== undefined && session.modified.getTime() <= since) return [];
-    return sessionEntriesToTurns(SessionManager.open(session.path).getBranch(), session.id, since);
-  });
-  return turns.sort(
-    (left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime(),
-  );
+  const dirs = new Set(sessionDir ? [resolve(sessionDir)] : []);
+  if (includeGlobalSessions) {
+    const root = join(resolveConfigDir(), 'sessions');
+    for await (const entry of directoryEntries(root)) {
+      if (signal?.aborted) return [];
+      if (entry.isDirectory()) dirs.add(join(root, entry.name));
+    }
+  }
+  const files: Array<{ path: string; modified: number }> = [];
+  for (const dir of dirs) {
+    for await (const entry of directoryEntries(dir)) {
+      const name = entry.name;
+      if (signal?.aborted) return [];
+      if (!name.endsWith('.jsonl')) continue;
+      const path = join(dir, name);
+      const metadata = await stat(path).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR')
+          console.error('[pi-memory] unable to inspect session file');
+        return undefined;
+      });
+      if (signal?.aborted) return [];
+      if (!metadata?.isFile() || (since !== undefined && metadata.mtimeMs <= since)) continue;
+      files.push({ path, modified: metadata.mtimeMs });
+      files.sort((a, b) => b.modified - a.modified);
+      if (files.length > MAX_SESSION_FILES) files.pop();
+    }
+  }
+  const turns: DreamTurn[] = [];
+  for (const file of files) {
+    if (signal?.aborted) return [];
+    const handle = await open(file.path, 'r').catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ENOENT') console.error('[pi-memory] unable to open session file');
+      return undefined;
+    });
+    if (!handle) continue;
+    try {
+      if (signal?.aborted) return [];
+      const metadata = await handle.stat();
+      if (signal?.aborted) return [];
+      const start = Math.max(0, metadata.size - MAX_SESSION_BYTES);
+      const buffer = Buffer.alloc(Math.min(metadata.size, MAX_SESSION_BYTES));
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, start);
+      if (signal?.aborted) return [];
+      let content = buffer.subarray(0, bytesRead).toString('utf8');
+      if (start > 0) {
+        const header = Buffer.alloc(64 * 1024);
+        const first = await handle.read(header, 0, header.length, 0);
+        const headerText = header.subarray(0, first.bytesRead).toString('utf8');
+        const headerEnd = headerText.indexOf('\n');
+        if (headerEnd < 0) continue;
+        content = `${headerText.slice(0, headerEnd)}\n${content.slice(content.indexOf('\n') + 1)}`;
+      }
+      if (signal?.aborted) return [];
+      const entries = parseSessionEntries(content);
+      migrateSessionEntries(entries);
+      const header = entries[0];
+      if (header?.type !== 'session') continue;
+      const byId = new Map<string, SessionEntry>();
+      let leaf: SessionEntry | undefined;
+      for (const entry of entries) {
+        if (entry.type === 'session') continue;
+        byId.set(entry.id, entry);
+        leaf = entry;
+      }
+      const branch: SessionEntry[] = [];
+      const visited = new Set<string>();
+      while (leaf && !visited.has(leaf.id)) {
+        visited.add(leaf.id);
+        branch.push(leaf);
+        leaf = leaf.parentId ? byId.get(leaf.parentId) : undefined;
+      }
+      turns.push(...sessionEntriesToTurns(branch.reverse(), header.id, since));
+    } finally {
+      await handle.close();
+    }
+  }
+  return turns.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
 }
 
 function sessionEntriesToTurns(
-  entries: ReturnType<SessionManager['getBranch']>,
+  entries: SessionEntry[],
   sessionId: string,
   since: number | undefined,
 ): DreamTurn[] {
