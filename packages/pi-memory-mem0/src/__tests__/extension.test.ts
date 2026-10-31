@@ -971,6 +971,67 @@ describe('mem0Extension recallFrequency', () => {
     }
   });
 
+  it.each([
+    { resume: false, matches: true },
+    { resume: true, matches: true },
+    { resume: false, matches: false },
+  ])('preserves embedded session recall after warmup times out (%j)', async ({
+    resume,
+    matches,
+  }) => {
+    vi.useFakeTimers();
+    let initialize!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      initialize = resolve;
+    });
+    const search = vi.fn(async () => {
+      await ready;
+      return matches ? [{ id: '1', memory: 'prefers TypeScript' }] : [];
+    });
+    mockActiveProvider({ supportsSearchCancellation: false, search });
+    vi.mocked(loadPiSettings).mockReturnValue({
+      mode: 'embedded',
+      autoCapture: false,
+      recallFrequency: 'session',
+    });
+    const { pi, handlers } = createMockPi();
+    mem0Extension(pi as never);
+    let ctx = createMockCtx();
+    try {
+      await handlers.session_start![0]!({}, ctx);
+      await handlers.input![0]!({ text: 'first' }, ctx);
+      const first = handlers.before_agent_start![0]!({}, ctx);
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(await first).toBeUndefined();
+      expect(pi.appendEntry).not.toHaveBeenCalled();
+      initialize();
+      await vi.advanceTimersByTimeAsync(0);
+      if (resume) {
+        await handlers.session_shutdown![0]!({}, ctx);
+        ctx = createMockCtx();
+        await handlers.session_start![0]!({}, ctx);
+      }
+      await handlers.input![0]!({ text: 'second' }, ctx);
+      const recalled = await handlers.before_agent_start![0]!({}, ctx);
+      if (matches)
+        expect(recalled).toMatchObject({
+          message: { content: expect.stringContaining('prefers TypeScript') },
+        });
+      else expect(recalled).toBeUndefined();
+      expect(pi.appendEntry).toHaveBeenCalledExactlyOnceWith('mem0-session-recall', 'session-1');
+      await handlers.input![0]!({ text: 'third' }, ctx);
+      await handlers.before_agent_start![0]!({}, ctx);
+      await handlers.input![0]!({ text: 'fourth' }, ctx);
+      await handlers.before_agent_start![0]!({}, ctx);
+      expect(search).toHaveBeenCalledTimes(2);
+      expect(pi.appendEntry).toHaveBeenCalledOnce();
+    } finally {
+      initialize();
+      await handlers.session_shutdown![0]!({}, ctx);
+      vi.useRealTimers();
+    }
+  });
+
   it('user-input recalls once for each user input', async () => {
     const provider = mockActiveProvider();
     const { pi, handlers } = createMockPi();

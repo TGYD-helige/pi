@@ -299,7 +299,8 @@ export default function mem0Extension(pi: ExtensionAPI): void {
 
     if (activeRecallFrequency === 'session') {
       recallQueuedThisSession = true;
-      pi.appendEntry(SESSION_RECALL_ENTRY, ctx.sessionManager.getSessionId());
+      if (activeMode !== 'embedded')
+        pi.appendEntry(SESSION_RECALL_ENTRY, ctx.sessionManager.getSessionId());
     }
   });
 
@@ -339,10 +340,17 @@ export default function mem0Extension(pi: ExtensionAPI): void {
     }
   });
 
-  pi.on('before_agent_start', async (event) => {
-    if (!prefetch || event.messageType === 'custom') return;
+  pi.on('before_agent_start', async (event, ctx) => {
+    if (!prefetch?.hasPending || event.messageType === 'custom') return;
 
-    const recalled = await prefetch.consume();
+    const current = prefetch;
+    const recalled = await current.consume();
+    if (prefetch !== current) return;
+    if (activeRecallFrequency === 'session' && activeMode === 'embedded') {
+      recallQueuedThisSession = recalled !== undefined;
+      if (recallQueuedThisSession)
+        pi.appendEntry(SESSION_RECALL_ENTRY, ctx.sessionManager.getSessionId());
+    }
     if (!recalled) return;
 
     return {

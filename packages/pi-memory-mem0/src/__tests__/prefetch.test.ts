@@ -30,7 +30,7 @@ describe('Prefetch', () => {
     prefetch.queue('query');
     const result = prefetch.consume();
     await vi.advanceTimersByTimeAsync(3000);
-    expect(await result).toBe('');
+    expect(await result).toBeUndefined();
     expect(search.mock.calls[0]![1].signal?.aborted).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -41,10 +41,10 @@ describe('Prefetch', () => {
     prefetch.queue('first');
     const result = prefetch.consume();
     await vi.advanceTimersByTimeAsync(3000);
-    expect(await result).toBe('');
+    expect(await result).toBeUndefined();
     prefetch.queue('second');
     expect(search).toHaveBeenCalledOnce();
-    expect(await prefetch.consume()).toBe('');
+    expect(await prefetch.consume()).toBeUndefined();
     finish();
     await Promise.resolve();
     prefetch.queue('third');
@@ -95,7 +95,7 @@ describe('Prefetch', () => {
     prefetch.queue('query', controller.signal);
     const result = prefetch.consume();
     controller.abort();
-    expect(await result).toBe('');
+    expect(await result).toBeUndefined();
     expect(search.mock.calls[0]![1].signal?.aborted).toBe(true);
     finish();
   });
@@ -105,11 +105,11 @@ describe('Prefetch', () => {
     prefetch.queue('old');
     const oldResult = prefetch.consume();
     prefetch.queue('new');
-    expect(await oldResult).toBe('');
+    expect(await oldResult).toBeUndefined();
     expect(search.mock.calls[0]![1].signal?.aborted).toBe(true);
     const newResult = prefetch.consume();
     prefetch.cancel();
-    expect(await newResult).toBe('');
+    expect(await newResult).toBeUndefined();
     expect(search.mock.calls[1]![1].signal?.aborted).toBe(true);
     finish();
   });
