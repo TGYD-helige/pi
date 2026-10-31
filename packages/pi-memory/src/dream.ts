@@ -187,7 +187,7 @@ async function scanPiSessionTurns(
     const root = join(resolveConfigDir(), 'sessions');
     for await (const entry of directoryEntries(root)) {
       if (signal?.aborted) return [];
-      if (entry.isDirectory()) dirs.add(join(root, entry.name));
+      if (entry.isDirectory() || entry.isSymbolicLink()) dirs.add(join(root, entry.name));
     }
   }
   const files: Array<{ path: string; modified: number }> = [];

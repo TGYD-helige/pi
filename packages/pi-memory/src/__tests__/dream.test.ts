@@ -1,5 +1,5 @@
 import { existsSync, rmSync } from 'node:fs';
-import { utimes } from 'node:fs/promises';
+import { mkdir, symlink, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { SessionManager } from '@earendil-works/pi-coding-agent';
@@ -243,6 +243,21 @@ describe('runDream', () => {
         ]),
       }),
     );
+  });
+
+  it('discovers symlink project directories in the global session root', async () => {
+    const root = path.join(home, 'pi-agent', 'sessions');
+    await mkdir(root, { recursive: true });
+    await symlink(sessionDir, path.join(root, 'linked-project'), 'dir');
+    await expect(
+      runDream({
+        dreaming: { minTurnsSinceLastRun: 1 },
+        includeGlobalSessions: true,
+        memoryDir: path.join(home, 'memories'),
+        modelRegistry: modelRegistry(),
+      }),
+    ).resolves.toBe(true);
+    expect(runConsolidationMock.mock.calls[0]![0].turns[0].sessionId).toBe('dream-test');
   });
 
   it('keeps a custom memory store scoped to its current session directory', async () => {

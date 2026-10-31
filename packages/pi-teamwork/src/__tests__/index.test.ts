@@ -551,6 +551,24 @@ describe('MulticaAdapter', () => {
   });
 });
 
+describe('MulticaAdapter cancellation', () => {
+  it('does not run update or get after cancellation during the status write', async () => {
+    const controller = new AbortController();
+    const exec = vi.fn(async () => {
+      controller.abort();
+      return { stdout: '{}', stderr: '', code: 0 };
+    });
+    const adapter = new MulticaAdapter({}, exec).withExecution({
+      signal: controller.signal,
+      deadline: Date.now() + 30_000,
+    });
+    await expect(
+      adapter.updateIssue('issue-1', { status: 'done', title: 'updated' }),
+    ).rejects.toThrow();
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('initMulticaProvider', () => {
   it('reports a missing CLI without requiring the deprecated autoInstall flag', async () => {
     const calls: string[][] = [];

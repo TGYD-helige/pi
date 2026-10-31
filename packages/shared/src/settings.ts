@@ -1,5 +1,5 @@
-import { readdirSync, readFileSync } from 'node:fs';
-import { readdir, readFile } from 'node:fs/promises';
+import { constants, readdirSync, readFileSync } from 'node:fs';
+import { open, opendir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 
@@ -165,57 +165,107 @@ export function loadJsonProfileDir<T>(dir: string): Record<string, T> {
   return result;
 }
 
-export function loadPiPolicyProfiles<T>(options?: PiSettingsOptions): Record<string, T> {
-  const globalDir = resolve(join(homedir(), '.pi', 'agent', 'policy'));
-  const configPolicyDir = resolve(join(resolveConfigDir(options?.configDir), 'policy'));
-  const projectDir = resolve(join(options?.cwd ?? process.cwd(), '.pi', 'policy'));
-
-  const globalPolicies = loadJsonProfileDir<T>(globalDir);
-  const configPolicies =
-    configPolicyDir === globalDir
-      ? ({} as Record<string, T>)
-      : loadJsonProfileDir<T>(configPolicyDir);
-  const projectPolicies =
-    options?.projectTrusted === true
-      ? loadJsonProfileDir<T>(projectDir)
-      : ({} as Record<string, T>);
-
-  return { ...globalPolicies, ...configPolicies, ...projectPolicies };
+function configurationLayers(options?: PiSettingsOptions) {
+  const global = resolve(join(homedir(), '.pi', 'agent'));
+  const config = resolveConfigDir(options?.configDir);
+  return [
+    { dir: global, project: false },
+    ...(config === global ? [] : [{ dir: config, project: false }]),
+    ...(options?.projectTrusted === true
+      ? [{ dir: resolve(join(options.cwd ?? process.cwd(), '.pi')), project: true }]
+      : []),
+  ];
 }
 
-/** Read current policies without blocking the event loop or caching revoked rules. */
+export function loadPiPolicyProfiles<T>(options?: PiSettingsOptions): Record<string, T> {
+  let result: Record<string, T> = {};
+  for (const { dir } of configurationLayers(options))
+    result = { ...result, ...loadJsonProfileDir<T>(join(dir, 'policy')) };
+  return result;
+}
+
+const MAX_CONFIG_FILE_BYTES = 128 * 1024;
+const MAX_SETTINGS_FILE_BYTES = 1024 * 1024;
+const MAX_POLICY_BYTES = 2 * 1024 * 1024;
+const MAX_POLICY_FILES = 128;
+const MAX_POLICY_ENTRIES = 1024;
+
+async function readBoundedConfig(path: string, maxBytes: number) {
+  const handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
+  try {
+    const metadata = await handle.stat();
+    if (!metadata.isFile() || metadata.size > maxBytes)
+      throw new Error('Configuration file size limit exceeded.');
+    const buffer = Buffer.alloc(metadata.size + 1);
+    let bytes = 0;
+    while (bytes < buffer.length) {
+      const result = await handle.read(buffer, bytes, buffer.length - bytes, null);
+      if (!result.bytesRead) break;
+      bytes += result.bytesRead;
+    }
+    if (bytes > metadata.size)
+      throw new Error('Configuration file changed while reading; size limit cannot be verified.');
+    return { parsed: JSON.parse(buffer.subarray(0, bytes).toString('utf8')), bytes };
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Fresh, bounded settings for authorization; malformed configuration rejects the decision. */
+export async function loadPiSettingsAsync<T>(key: string, options?: PiSettingsOptions): Promise<T> {
+  let result = {};
+  for (const { dir, project } of configurationLayers(options)) {
+    try {
+      const { parsed } = await readBoundedConfig(
+        join(dir, 'settings.json'),
+        MAX_SETTINGS_FILE_BYTES,
+      );
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+        throw new Error('Settings root must be an object.');
+      const section = parsed[key] ?? {};
+      if (!section || typeof section !== 'object' || Array.isArray(section))
+        throw new Error('Settings section must be an object.');
+      result = {
+        ...result,
+        ...(project
+          ? section
+          : (resolveEnvVars(section, options?.expandBareEnvVars !== false) as object)),
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
+  return result as T;
+}
+
+/** Read fresh policies with bounded directory traversal and allocation; failures must block authorization. */
 export async function loadPiPolicyProfilesAsync<T>(
   options?: PiSettingsOptions,
 ): Promise<Record<string, T>> {
-  const globalDir = resolve(join(homedir(), '.pi', 'agent', 'policy'));
-  const configDir = resolve(join(resolveConfigDir(options?.configDir), 'policy'));
-  const dirs = [
-    globalDir,
-    ...(configDir === globalDir ? [] : [configDir]),
-    ...(options?.projectTrusted === true
-      ? [resolve(join(options.cwd ?? process.cwd(), '.pi', 'policy'))]
-      : []),
-  ];
   const result: Record<string, T> = {};
-  for (const dir of dirs) {
-    let entries: string[];
+  let entries = 0;
+  let files = 0;
+  let bytes = 0;
+  for (const { dir } of configurationLayers(options)) {
+    let directory: Awaited<ReturnType<typeof opendir>>;
     try {
-      entries = await readdir(dir);
+      directory = await opendir(join(dir, 'policy'));
     } catch (error) {
-      if (!['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? ''))
-        console.error('[pi-shared] unable to read policy directory');
-      continue;
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw error;
     }
-    for (const entry of entries) {
-      if (!entry.endsWith('.json')) continue;
-      try {
-        const parsed = JSON.parse(await readFile(join(dir, entry), 'utf-8'));
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
-          result[basename(entry, '.json')] = parsed;
-      } catch (error) {
-        if (!(error instanceof SyntaxError) && (error as NodeJS.ErrnoException).code !== 'ENOENT')
-          console.error('[pi-shared] unable to read policy profile');
-      }
+    for await (const entry of directory) {
+      if (++entries > MAX_POLICY_ENTRIES) throw new Error('Policy directory entry limit exceeded.');
+      if (!entry.name.endsWith('.json')) continue;
+      if (++files > MAX_POLICY_FILES) throw new Error('Policy file count limit exceeded.');
+      const value = await readBoundedConfig(
+        join(dir, 'policy', entry.name),
+        Math.min(MAX_CONFIG_FILE_BYTES, MAX_POLICY_BYTES - bytes),
+      );
+      bytes += value.bytes;
+      if (!value.parsed || typeof value.parsed !== 'object' || Array.isArray(value.parsed))
+        throw new Error('Policy profile must be an object.');
+      result[basename(entry.name, '.json')] = value.parsed;
     }
   }
   return result;

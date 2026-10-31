@@ -35,6 +35,14 @@ const MAX_DEDUP_ITEMS_PER_SCOPE = 10_000;
 const MAX_DEDUP_PAGES = MAX_DEDUP_ITEMS_PER_SCOPE / DEDUP_PAGE_SIZE;
 const SELF_HOSTED_DEDUP_LIMIT = 1000;
 
+export class UnsupportedObservationDateError extends Error {
+  constructor() {
+    super(
+      'Self-hosted Mem0 observedAt is unsupported. Use Platform or embedded mode for historical dates.',
+    );
+  }
+}
+
 export interface Mem0Provider {
   /** True only when aborting search stops the underlying request. */
   readonly supportsSearchCancellation?: boolean;
@@ -279,7 +287,7 @@ class PlatformProvider implements Mem0Provider {
     };
     if (opts.infer === false) addOpts.infer = false;
     // Platform mem0 exposes a `timestamp` field on add(); pass observedAt
-    // through as an ISO string. (OSS mode honors observedAt via prompt
+    // through as an ISO string. (Embedded mode honors observedAt via prompt
     // rewriting instead — see OSSProvider.add.)
     if (opts.observedAt) {
       const d = new Date(opts.observedAt);
@@ -446,6 +454,7 @@ class SelfHostedProvider implements Mem0Provider {
     messages: Array<{ role: string; content: string }>,
     opts: Mem0AddOptions,
   ): Promise<AddResult | null> {
+    if (opts.observedAt !== undefined) throw new UnsupportedObservationDateError();
     return (await this.request(
       '/memories',
       {

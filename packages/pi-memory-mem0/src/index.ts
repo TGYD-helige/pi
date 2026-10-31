@@ -194,43 +194,42 @@ export default function mem0Extension(pi: ExtensionAPI): void {
       activeMemoryMode = memoryMode;
       const sessionId = ctx.sessionManager.getSessionId();
       activeAutoCapture = config.autoCapture ?? memoryMode !== 'active';
-      if (activeAutoCapture) {
-        // Bind replay to the same backend configuration and identity without persisting credentials.
-        const scopeKey = createHash('sha256')
-          .update(JSON.stringify([config, userId, agentId]))
-          .digest('hex');
-        let restored: CapturedTurn[] = [];
-        for (const entry of ctx.sessionManager.getEntries()) {
-          if (entry.type !== 'custom' || entry.customType !== CAPTURE_ENTRY) continue;
-          const data = entry.data as
-            | { scopeKey?: string; sessionId?: string; pending?: CapturedTurn[] }
-            | undefined;
-          if (
-            data?.scopeKey === scopeKey &&
-            data.sessionId === sessionId &&
-            Array.isArray(data.pending)
-          )
-            restored = data.pending;
-        }
+      const autoRecall = config.autoRecall ?? memoryMode !== 'active';
+      const entries = activeAutoCapture || autoRecall ? ctx.sessionManager.getEntries() : [];
+      const scopeKey = activeAutoCapture
+        ? createHash('sha256')
+            .update(JSON.stringify([config, userId, agentId]))
+            .digest('hex')
+        : undefined;
+      let restored: CapturedTurn[] = [];
+      recallQueuedThisSession = false;
+      for (const entry of entries) {
+        if (entry.type !== 'custom') continue;
+        if (entry.customType === SESSION_RECALL_ENTRY && entry.data === sessionId)
+          recallQueuedThisSession = true;
+        if (!scopeKey || entry.customType !== CAPTURE_ENTRY) continue;
+        const data = entry.data as
+          | { scopeKey?: string; sessionId?: string; pending?: CapturedTurn[] }
+          | undefined;
+        if (
+          data?.scopeKey === scopeKey &&
+          data.sessionId === sessionId &&
+          Array.isArray(data.pending)
+        )
+          restored = data.pending;
+      }
+      if (scopeKey) {
         capture = new CaptureQueue(
           provider,
           { userId, ...(agentId ? { agentId } : {}) },
           captureState,
           (pending) => pi.appendEntry(CAPTURE_ENTRY, { scopeKey, sessionId, pending }),
           restored,
+          (message) => ctx.ui.notify(message, 'warning'),
         );
         capture.start();
       }
-      const autoRecall = config.autoRecall ?? memoryMode !== 'active';
       activeRecallFrequency = recallFrequency;
-      recallQueuedThisSession = ctx.sessionManager
-        .getEntries()
-        .some(
-          (entry) =>
-            entry.type === 'custom' &&
-            entry.customType === SESSION_RECALL_ENTRY &&
-            entry.data === sessionId,
-        );
       if (autoRecall) {
         prefetch = new Prefetch(provider, userId, {
           searchState: recallSearchState,

@@ -32,6 +32,7 @@ vi.mock('../packages/pi-teamwork/src/adapters/multica.js', () => ({
     return {
       installResult: { installed: true },
       adapter: {
+        withExecution() { return this; },
         name: 'fixture', listIssues: async () => [issue],
         updateIssue: async (id: string, update: object) => id === issue.id ? (issue = { ...issue, ...update }) : undefined,
       },

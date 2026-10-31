@@ -5,7 +5,7 @@ import type {
   ToolCallRequest,
   ToolSource,
 } from '@amaster.ai/pi-shared';
-import { isProjectTrusted, loadPiSettings } from '@amaster.ai/pi-shared/settings';
+import { isProjectTrusted, loadPiSettingsAsync } from '@amaster.ai/pi-shared/settings';
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -71,6 +71,8 @@ export type PiSecurityExtensionState = {
   config: ResolvedPiSecurityExtensionConfig;
   auditLog: SecurityAuditEvent[];
   grants: PiSecuritySessionGrant[];
+  settingsBacked?: boolean;
+  projectTrusted?: boolean;
 };
 
 export type ResolvedPiSecurityExtensionConfig = {
@@ -86,12 +88,26 @@ export default function piSecurityExtension(pi: ExtensionAPI): void {
     config: resolvePiSecurityConfig(),
     auditLog: [],
     grants: [],
+    settingsBacked: true,
   };
 
   pi.on('session_start', async (_event, ctx) => {
-    state.config = resolvePiSecurityConfig(loadSettings(ctx.cwd, isProjectTrusted(ctx)));
     state.auditLog = [];
     state.grants = [];
+    delete state.projectTrusted;
+    state.config = resolvePiSecurityConfig();
+    try {
+      state.config = resolvePiSecurityConfig(
+        await loadPiSettingsAsync<PiSecurityExtensionConfig>(SETTINGS_KEY, {
+          cwd: ctx.cwd,
+          projectTrusted: isProjectTrusted(ctx),
+        }),
+      );
+    } catch {
+      console.error('[pi-security] unable to load security settings');
+      ctx.ui.setStatus(EXTENSION_STATUS_KEY, 'security: configuration invalid');
+      return;
+    }
     ctx.ui.setStatus(
       EXTENSION_STATUS_KEY,
       state.config.enabled ? `security: ${state.config.profile}` : 'security: disabled',
@@ -135,17 +151,9 @@ export async function authorizePiToolCall(
   ctx: ExtensionContext,
   state: PiSecurityExtensionState,
 ): Promise<ToolCallEventResult | undefined> {
-  if (!state.config.enabled) {
-    return undefined;
-  }
-  const toolCall = toolCallFromPiEvent(event);
-  const evaluation = await (await createGate(ctx, state)).authorize({
-    request: requestFromContext(ctx),
-    toolCall,
-    workspaceDir: ctx.cwd,
-  });
-  if (evaluation.decision.kind === 'deny' || evaluation.decision.kind === 'ask') {
-    return { block: true, reason: evaluation.decision.reason };
+  const decision = await authorizeCurrentCall(ctx, state, toolCallFromPiEvent(event));
+  if (decision?.kind === 'deny' || decision?.kind === 'ask') {
+    return { block: true, reason: decision.reason };
   }
   return undefined;
 }
@@ -155,9 +163,6 @@ export async function authorizeUserBash(
   ctx: ExtensionContext,
   state: PiSecurityExtensionState,
 ): Promise<UserBashEventResult | undefined> {
-  if (!state.config.enabled) {
-    return undefined;
-  }
   const toolCall: ToolCallRequest = {
     id: 'user-bash',
     name: 'bash',
@@ -168,22 +173,41 @@ export async function authorizeUserBash(
       excludeFromContext: event.excludeFromContext,
     },
   };
-  const evaluation = await (await createGate(ctx, state)).authorize({
-    request: requestFromContext(ctx),
-    toolCall,
-    workspaceDir: ctx.cwd,
-  });
-  if (evaluation.decision.kind === 'deny' || evaluation.decision.kind === 'ask') {
-    return {
-      result: {
-        output: evaluation.decision.reason,
-        exitCode: 1,
-        cancelled: false,
-        truncated: false,
-      },
-    };
+  const decision = await authorizeCurrentCall(ctx, state, toolCall);
+  if (decision?.kind === 'deny' || decision?.kind === 'ask') {
+    return { result: { output: decision.reason, exitCode: 1, cancelled: false, truncated: false } };
   }
   return undefined;
+}
+
+async function authorizeCurrentCall(
+  ctx: ExtensionContext,
+  state: PiSecurityExtensionState,
+  toolCall: ToolCallRequest,
+): Promise<SecurityDecision | undefined> {
+  const trusted = isProjectTrusted(ctx);
+  try {
+    const gate = await createGate(ctx, state);
+    if (trusted && !isProjectTrusted(ctx))
+      return { kind: 'deny', reason: 'Project trust was revoked during authorization.' };
+    if (!gate) return undefined;
+    const evaluation = await gate.authorize({
+      request: requestFromContext(ctx),
+      toolCall,
+      workspaceDir: ctx.cwd,
+    });
+    if (trusted && !isProjectTrusted(ctx))
+      return { kind: 'deny', reason: 'Project trust was revoked during authorization.' };
+    return evaluation.decision;
+  } catch {
+    console.error(
+      '[pi-security] security configuration or authorization failed; execution blocked',
+    );
+    return {
+      kind: 'deny',
+      reason: 'Security configuration could not be loaded or evaluated; execution blocked.',
+    };
+  }
 }
 
 export function resolvePiSecurityConfig(
@@ -208,19 +232,40 @@ export function resolvePiSecurityConfig(
 async function createGate(
   ctx: ExtensionContext,
   state: PiSecurityExtensionState,
-): Promise<SecurityGate> {
+): Promise<SecurityGate | undefined> {
   const projectTrusted = isProjectTrusted(ctx);
   const options = { cwd: ctx.cwd, configDir: getAgentDir(), projectTrusted };
-  let filePolicies = await loadFilePoliciesAsync(options);
+  let config = state.settingsBacked
+    ? resolvePiSecurityConfig(
+        await loadPiSettingsAsync<PiSecurityExtensionConfig>(SETTINGS_KEY, options),
+      )
+    : state.config;
+  let filePolicies = config.enabled ? await loadFilePoliciesAsync(options) : {};
+  let trusted = projectTrusted;
   if (projectTrusted && !isProjectTrusted(ctx)) {
-    filePolicies = await loadFilePoliciesAsync({ ...options, projectTrusted: false });
+    trusted = false;
+    config = resolvePiSecurityConfig(
+      await loadPiSettingsAsync<PiSecurityExtensionConfig>(SETTINGS_KEY, {
+        ...options,
+        projectTrusted: false,
+      }),
+    );
+    filePolicies = config.enabled
+      ? await loadFilePoliciesAsync({ ...options, projectTrusted: false })
+      : {};
   }
+  if (state.projectTrusted !== trusted || JSON.stringify(state.config) !== JSON.stringify(config))
+    state.grants = [];
+  state.config = config;
+  state.projectTrusted = trusted;
+  if (!config.enabled) return undefined;
+  const effectiveState = { ...state, config };
   return new SecurityGate({
-    profile: state.config.profile,
-    ...(state.config.security ? { config: state.config.security } : {}),
+    profile: config.profile,
+    ...(config.security ? { config: config.security } : {}),
     filePolicies,
     approvalHandler: async ({ toolCall, decision, evaluation }) =>
-      resolveApproval(ctx, state, toolCall, decision, evaluation),
+      resolveApproval(ctx, effectiveState, toolCall, decision, evaluation),
     auditSink: (event) => {
       state.auditLog.push(event);
       if (state.auditLog.length > state.config.auditLimit) {
@@ -266,18 +311,6 @@ async function resolveApproval(
     return { kind: 'allow', reason: `Approved by user with session grant: ${decision.reason}` };
   }
   return denyByUser(decision);
-}
-
-function loadSettings(cwd: string, projectTrusted = false): PiSecurityExtensionConfig | undefined {
-  try {
-    const config = loadPiSettings<Partial<PiSecurityExtensionConfig>>(SETTINGS_KEY, {
-      cwd,
-      projectTrusted,
-    });
-    return Object.keys(config).length > 0 ? (config as PiSecurityExtensionConfig) : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

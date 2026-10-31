@@ -1,4 +1,9 @@
-import { getAddResult, type Mem0Provider, waitWithCancellation } from './provider.js';
+import {
+  getAddResult,
+  type Mem0Provider,
+  UnsupportedObservationDateError,
+  waitWithCancellation,
+} from './provider.js';
 
 export interface CapturedTurn {
   messages: Array<{ role: string; content: string }>;
@@ -27,6 +32,7 @@ export class CaptureQueue {
     private state: CaptureState,
     private save: (pending: CapturedTurn[]) => void,
     restored: CapturedTurn[] = [],
+    private notify?: (message: string) => void,
   ) {
     this.pending = restored
       .slice(0, MAX_PENDING_TURNS)
@@ -126,12 +132,16 @@ export class CaptureQueue {
         this.save(remaining);
         this.pending = remaining;
       }
-    } catch {
+    } catch (error) {
       this.paused = true;
-      if (!this.closed)
-        console.error(
-          '[pi-memory-mem0] capture paused; pending turns remain in the session outbox',
-        );
+      if (!this.closed) {
+        const message =
+          error instanceof UnsupportedObservationDateError
+            ? `${error.message} Pending turns remain in the session outbox.`
+            : 'Capture paused; pending turns remain in the session outbox.';
+        console.error(`[pi-memory-mem0] ${message}`);
+        this.notify?.(message);
+      }
     }
   }
 }
