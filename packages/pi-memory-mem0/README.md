@@ -151,7 +151,7 @@ Use `oss.customInstructions` to refine Mem0's fact extraction, for example to ke
 
 These instructions affect only Mem0's extraction model, not pi's system prompt. Recalled memories remain untrusted model input, so only configure extraction instructions from a trusted source.
 
-Embedded initialization starts in the background so session startup does not wait for SDK warmup. Memory operations share the same readiness promise and report initialization failures; cancelling one waiting operation does not cancel initialization for other callers.
+Embedded initialization starts in the background so session startup does not wait for SDK warmup. Memory operations share the same readiness promise and report initialization failures; cancelling one waiting operation does not cancel initialization for other callers. Automatic recalls whose readiness wait expires do not start a late SDK search after initialization completes.
 
 Existing settings with `mode: "open-source"` continue to load as `embedded`, but `open-source` is not part of the supported configuration interface. New settings should use `embedded`.
 

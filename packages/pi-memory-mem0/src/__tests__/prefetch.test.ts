@@ -76,6 +76,38 @@ describe('Prefetch', () => {
     finish();
   });
 
+  it('does not start an embedded search after its readiness wait expires', async () => {
+    vi.useFakeTimers();
+    let initialize!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      initialize = resolve;
+    });
+    const { provider, search, finish } = pendingProvider(false);
+    const prefetch = new Prefetch({ ...provider, ready }, 'user', { topK: 5 });
+    prefetch.queue('expired before initialization');
+    const first = prefetch.consume();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(await first).toBeUndefined();
+    expect(search).not.toHaveBeenCalled();
+    initialize();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(search).not.toHaveBeenCalled();
+    expect(prefetch.queue('after initialization')).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(search).toHaveBeenCalledOnce();
+    const next = prefetch.consume();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(await next).toBeUndefined();
+    expect(prefetch.queue('while SDK search is still running')).toBe(false);
+    finish();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(prefetch.queue('after SDK search settles')).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(search).toHaveBeenCalledTimes(2);
+    finish();
+    await prefetch.consume();
+  });
+
   it('returns matching memories before the deadline without leaving a timer', async () => {
     vi.useFakeTimers();
     const provider = {

@@ -48,12 +48,19 @@ export class Prefetch {
     const controller = new AbortController();
     const combined = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal;
     if (combined.aborted) return false;
-    const promise = this.provider.search(query, {
-      userId: this.userId,
-      ...(this.agentId ? { agentId: this.agentId } : {}),
-      topK: this.topK,
-      ...(this.provider.supportsSearchCancellation ? { signal: combined } : {}),
-    });
+    const search = () =>
+      this.provider.search(query, {
+        userId: this.userId,
+        ...(this.agentId ? { agentId: this.agentId } : {}),
+        topK: this.topK,
+        ...(this.provider.supportsSearchCancellation ? { signal: combined } : {}),
+      });
+    const promise = this.provider.ready
+      ? waitWithCancellation(this.provider.ready, combined).then(() => {
+          combined.throwIfAborted();
+          return search();
+        })
+      : search();
     if (!this.provider.supportsSearchCancellation) this.searchState.active = promise;
     this.pending = { promise, controller, signal: combined };
     const settled = () => {

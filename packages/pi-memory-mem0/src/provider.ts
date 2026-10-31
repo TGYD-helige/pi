@@ -48,6 +48,8 @@ export class UnsupportedObservationDateError extends Error {
 }
 
 export interface Mem0Provider {
+  /** Shared initialization gate; cancelling a waiter must not cancel this promise. */
+  readonly ready?: Promise<void>;
   /** False when historical observation dates cannot be represented by this backend. */
   readonly supportsObservationDates?: boolean;
   /** True only when aborting search stops the underlying request. */
@@ -561,7 +563,7 @@ export function mapApiToMem0Provider(api: string | undefined, fallback: string):
 
 class OSSProvider implements Mem0Provider {
   private memory: unknown;
-  private initPromise: Promise<void> | null = null;
+  readonly ready: Promise<void>;
   /**
    * mem0's Memory instance shares one LLM object across all add() calls. To
    * honor observedAt we temporarily wrap `llm.generateResponse` (see add), and
@@ -581,14 +583,10 @@ class OSSProvider implements Mem0Provider {
     private readonly resolveKey?: KeyResolver,
     private readonly resolveProvider?: ProviderResolver,
   ) {
-    void this.ensureMemory().catch(() => {
+    this.ready = this._init();
+    void this.ready.catch(() => {
       console.error('[pi-memory-mem0] embedded initialization failed');
     });
-  }
-
-  private async ensureMemory(): Promise<void> {
-    this.initPromise ??= this._init();
-    return this.initPromise;
   }
 
   private async _buildConfig(): Promise<Record<string, unknown>> {
@@ -735,7 +733,7 @@ class OSSProvider implements Mem0Provider {
     messages: Array<{ role: string; content: string }>,
     opts: Mem0AddOptions,
   ): Promise<AddResult | null> {
-    await waitWithCancellation(this.ensureMemory(), opts.signal);
+    await waitWithCancellation(this.ready, opts.signal);
     const addOpts: Record<string, unknown> = {
       userId: opts.userId,
       ...(opts.agentId ? { agentId: opts.agentId } : {}),
@@ -795,7 +793,7 @@ class OSSProvider implements Mem0Provider {
   }
 
   async search(query: string, opts: Mem0SearchOptions): Promise<MemoryItem[]> {
-    await waitWithCancellation(this.ensureMemory(), opts.signal);
+    await waitWithCancellation(this.ready, opts.signal);
     const searchOpts: Record<string, unknown> = {
       filters: {
         user_id: opts.userId,
@@ -812,7 +810,7 @@ class OSSProvider implements Mem0Provider {
   }
 
   async getAll(opts: Mem0ScopeOptions): Promise<MemoryItem[]> {
-    await waitWithCancellation(this.ensureMemory(), opts.signal);
+    await waitWithCancellation(this.ready, opts.signal);
     const results = await waitWithCancellation(
       // biome-ignore lint/suspicious/noExplicitAny: mem0ai/oss lacks type definitions
       (this.memory as any).getAll({
@@ -827,7 +825,7 @@ class OSSProvider implements Mem0Provider {
   }
 
   async getDedupGroups(opts: Mem0ScopeOptions): Promise<MemoryItem[][]> {
-    await waitWithCancellation(this.ensureMemory(), opts.signal);
+    await waitWithCancellation(this.ready, opts.signal);
     const results = await waitWithCancellation(
       // biome-ignore lint/suspicious/noExplicitAny: mem0ai/oss lacks type definitions
       (this.memory as any).getAll({
@@ -847,7 +845,7 @@ class OSSProvider implements Mem0Provider {
   }
 
   async delete(memoryId: string, opts?: { signal?: AbortSignal }): Promise<void> {
-    await waitWithCancellation(this.ensureMemory(), opts?.signal);
+    await waitWithCancellation(this.ready, opts?.signal);
     // biome-ignore lint/suspicious/noExplicitAny: mem0ai/oss lacks type definitions
     await waitWithCancellation((this.memory as any).delete(memoryId), opts?.signal);
   }
