@@ -48,12 +48,19 @@ export class Prefetch {
     const controller = new AbortController();
     const combined = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal;
     if (combined.aborted) return false;
-    const promise = this.provider.search(query, {
-      userId: this.userId,
-      ...(this.agentId ? { agentId: this.agentId } : {}),
-      topK: this.topK,
-      ...(this.provider.supportsSearchCancellation ? { signal: combined } : {}),
-    });
+    const search = () =>
+      this.provider.search(query, {
+        userId: this.userId,
+        ...(this.agentId ? { agentId: this.agentId } : {}),
+        topK: this.topK,
+        ...(this.provider.supportsSearchCancellation ? { signal: combined } : {}),
+      });
+    const promise = this.provider.ready
+      ? waitWithCancellation(this.provider.ready, combined).then(() => {
+          combined.throwIfAborted();
+          return search();
+        })
+      : search();
     if (!this.provider.supportsSearchCancellation) this.searchState.active = promise;
     this.pending = { promise, controller, signal: combined };
     const settled = () => {
@@ -63,21 +70,25 @@ export class Prefetch {
     return true;
   }
 
+  get hasPending(): boolean {
+    return this.pending !== undefined;
+  }
+
   cancel(): void {
     this.pending?.controller.abort();
     this.pending = undefined;
   }
 
   /** Phase 2: consume the result with a timeout (called on before_agent_start). */
-  async consume(timeoutMs = 3000): Promise<string> {
-    if (!this.pending) return '';
+  async consume(timeoutMs = 3000): Promise<string | undefined> {
+    if (!this.pending) return;
 
     const pending = this.pending;
     const timer = setTimeout(() => pending.controller.abort(), timeoutMs);
 
     try {
       const memories = await waitWithCancellation(pending.promise, pending.signal);
-      if (pending.signal.aborted) return '';
+      if (pending.signal.aborted) return;
 
       if (memories.length === 0) return '';
 
@@ -94,7 +105,7 @@ export class Prefetch {
         maxLines: MAX_BLOCK_LINES,
       }).content;
     } catch {
-      return '';
+      return;
     } finally {
       clearTimeout(timer);
       if (this.pending === pending) this.pending = undefined;

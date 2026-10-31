@@ -51,6 +51,8 @@ const storage = createRuntimeStorage({
 });
 ```
 
+Session `metadata` is an optional JSON object preserved across saves and reads by both adapters. DB reads ignore missing or malformed metadata.
+
 ## Public API Policy
 
 Types and contracts live in `@amaster.ai/pi-shared` and are re-exported from the root storage entry point. Concrete adapters are exposed through explicit subpath entry points so applications can depend on the smallest stable surface they need.

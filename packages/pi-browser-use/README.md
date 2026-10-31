@@ -373,6 +373,8 @@ Every operation requires a 2xx response and an empty body or valid JSON, limited
 
 There is no required `resume` HTTP operation: the independent process holds the original CDP connection, and the next Pi client reconnects to that process. Without `status` or `retain`, existing-CDP retention still works, but cannot extend a provider's hard lifetime. The public `browser_session release` cancels the handoff window; the backend `release` runs during final cleanup after the active client disconnects. This contract supports continuation on the same host/runtime home, not migration to another machine or restoration after the holding process disappears.
 
+On the same host, temporary agent homes may symlink `browser-sessions` to the same durable directory. Session record and lock paths are resolved to that directory before worker startup, so deleting the originating home does not invalidate the retained worker’s paths. The shared directory must remain available and pass the existing ownership checks.
+
 ### Live-session Verification
 
 ```sh

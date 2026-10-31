@@ -40,6 +40,7 @@ export type RuntimeSession = {
   piSessionFile?: string;
   piSessionFilesByModel?: Record<string, string>;
   toolPolicyProfile: string;
+  metadata?: JsonObject;
 };
 
 export type RuntimeScope = {

@@ -1,6 +1,16 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { chmod, lstat, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  lstat,
+  mkdir,
+  open,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -37,7 +47,7 @@ export class BrowserSessionClient {
   private attachAttempted = false;
   private connecting: Promise<void> | undefined;
   private closing: Promise<void> | undefined;
-  private readonly path: string;
+  private path: string;
   private readonly configHash: string;
 
   constructor(
@@ -109,12 +119,14 @@ export class BrowserSessionClient {
 
   private async lock(signal?: AbortSignal) {
     signal?.throwIfAborted();
-    const directory = dirname(this.path);
+    let directory = dirname(this.path);
     await mkdir(directory, { recursive: true, mode: 0o700 });
     const stat = await lstat(directory);
     if (!stat.isDirectory() || (process.platform !== 'win32' && stat.uid !== process.getuid?.()))
       throw new BrowserSessionError('Browser session directory ownership is unsafe.');
     await chmod(directory, 0o700);
+    directory = await realpath(directory);
+    this.path = join(directory, 'session.json');
     const lockPath = join(directory, 'lock');
     const deadline = Date.now() + 65_000;
     let lock: Awaited<ReturnType<typeof open>> | undefined;

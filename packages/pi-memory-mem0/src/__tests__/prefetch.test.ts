@@ -30,7 +30,7 @@ describe('Prefetch', () => {
     prefetch.queue('query');
     const result = prefetch.consume();
     await vi.advanceTimersByTimeAsync(3000);
-    expect(await result).toBe('');
+    expect(await result).toBeUndefined();
     expect(search.mock.calls[0]![1].signal?.aborted).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -41,10 +41,10 @@ describe('Prefetch', () => {
     prefetch.queue('first');
     const result = prefetch.consume();
     await vi.advanceTimersByTimeAsync(3000);
-    expect(await result).toBe('');
+    expect(await result).toBeUndefined();
     prefetch.queue('second');
     expect(search).toHaveBeenCalledOnce();
-    expect(await prefetch.consume()).toBe('');
+    expect(await prefetch.consume()).toBeUndefined();
     finish();
     await Promise.resolve();
     prefetch.queue('third');
@@ -76,6 +76,38 @@ describe('Prefetch', () => {
     finish();
   });
 
+  it('does not start an embedded search after its readiness wait expires', async () => {
+    vi.useFakeTimers();
+    let initialize!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      initialize = resolve;
+    });
+    const { provider, search, finish } = pendingProvider(false);
+    const prefetch = new Prefetch({ ...provider, ready }, 'user', { topK: 5 });
+    prefetch.queue('expired before initialization');
+    const first = prefetch.consume();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(await first).toBeUndefined();
+    expect(search).not.toHaveBeenCalled();
+    initialize();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(search).not.toHaveBeenCalled();
+    expect(prefetch.queue('after initialization')).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(search).toHaveBeenCalledOnce();
+    const next = prefetch.consume();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(await next).toBeUndefined();
+    expect(prefetch.queue('while SDK search is still running')).toBe(false);
+    finish();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(prefetch.queue('after SDK search settles')).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(search).toHaveBeenCalledTimes(2);
+    finish();
+    await prefetch.consume();
+  });
+
   it('returns matching memories before the deadline without leaving a timer', async () => {
     vi.useFakeTimers();
     const provider = {
@@ -95,7 +127,7 @@ describe('Prefetch', () => {
     prefetch.queue('query', controller.signal);
     const result = prefetch.consume();
     controller.abort();
-    expect(await result).toBe('');
+    expect(await result).toBeUndefined();
     expect(search.mock.calls[0]![1].signal?.aborted).toBe(true);
     finish();
   });
@@ -105,11 +137,11 @@ describe('Prefetch', () => {
     prefetch.queue('old');
     const oldResult = prefetch.consume();
     prefetch.queue('new');
-    expect(await oldResult).toBe('');
+    expect(await oldResult).toBeUndefined();
     expect(search.mock.calls[0]![1].signal?.aborted).toBe(true);
     const newResult = prefetch.consume();
     prefetch.cancel();
-    expect(await newResult).toBe('');
+    expect(await newResult).toBeUndefined();
     expect(search.mock.calls[1]![1].signal?.aborted).toBe(true);
     finish();
   });

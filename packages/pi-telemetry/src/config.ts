@@ -1,5 +1,6 @@
 import { loadPiSettings, type PiSettingsOptions } from '@amaster.ai/pi-shared/settings';
 import type { RuntimeTelemetryOptions } from './index.js';
+import { parseBoolean, trim } from './parse.js';
 
 export interface LangfuseConfig {
   enabled?: boolean;
@@ -40,7 +41,9 @@ export function resolveConfig(config?: TelemetryConfig): TelemetryConfig {
   return {
     ...DEFAULTS,
     ...config,
-    mediaUploadEnabled: config?.includePayloads === true && config.mediaUploadEnabled === true,
+    includePayloads: parseBoolean(config?.includePayloads),
+    mediaUploadEnabled:
+      parseBoolean(config?.includePayloads) && parseBoolean(config?.mediaUploadEnabled),
   };
 }
 
@@ -54,16 +57,16 @@ export function credentialMaskValues(config: {
   otel?: OtelConfig;
   headers?: Record<string, string>;
 }): string[] {
+  const publicKey = trim(config.langfuse?.publicKey);
+  const secretKey = trim(config.langfuse?.secretKey);
   const values = [
     ...(config.maskingSecrets ?? []),
     config.langfuse?.publicKey,
     config.langfuse?.secretKey,
-    ...(config.langfuse?.publicKey && config.langfuse.secretKey
-      ? [
-          Buffer.from(`${config.langfuse.publicKey}:${config.langfuse.secretKey}`).toString(
-            'base64',
-          ),
-        ]
+    publicKey,
+    secretKey,
+    ...(publicKey && secretKey
+      ? [Buffer.from(`${publicKey}:${secretKey}`).toString('base64')]
       : []),
     ...[...Object.entries(config.otel?.headers ?? {}), ...Object.entries(config.headers ?? {})]
       .filter(([key]) => /authorization|api.?key|token|cookie/i.test(key))
@@ -82,8 +85,9 @@ export function runtimeTelemetryOptions(
 ): RuntimeTelemetryOptions {
   return {
     maskingSecrets: credentialMaskValues(config),
-    includePayloads: config.includePayloads === true,
-    mediaUploadEnabled: config.includePayloads === true && config.mediaUploadEnabled === true,
+    includePayloads: parseBoolean(config.includePayloads),
+    mediaUploadEnabled:
+      parseBoolean(config.includePayloads) && parseBoolean(config.mediaUploadEnabled),
     ...(config.userId ? { userId: config.userId } : {}),
     ...(config.environment ? { environment: config.environment } : {}),
     ...(config.release ? { release: config.release } : {}),
@@ -92,8 +96,18 @@ export function runtimeTelemetryOptions(
 
 export function configurationWarnings(config: TelemetryConfig): string[] {
   const warnings: string[] = [];
-  if (config.langfuse?.enabled && !(config.langfuse.publicKey && config.langfuse.secretKey))
+  if (
+    parseBoolean(config.langfuse?.enabled) &&
+    !(trim(config.langfuse?.publicKey) && trim(config.langfuse?.secretKey))
+  )
     warnings.push('Langfuse credentials are missing');
-  if (config.otel?.enabled && !config.otel.endpoint) warnings.push('OTLP endpoint is missing');
+  if (
+    parseBoolean(config.langfuse?.enabled) &&
+    config.langfuse?.baseUrl !== undefined &&
+    !trim(config.langfuse.baseUrl)
+  )
+    warnings.push('Langfuse base URL is blank');
+  if (parseBoolean(config.otel?.enabled) && !config.otel?.endpoint)
+    warnings.push('OTLP endpoint is missing');
   return warnings;
 }

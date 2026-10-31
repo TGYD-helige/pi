@@ -101,6 +101,8 @@ Configuration is read from the `"pi-telemetry"` section of, in increasing priori
 | `flushAt` | `number` | `20` | Batch size before flush |
 | `flushIntervalMs` | `number` | `5000` | Flush interval in ms |
 
+Boolean settings also accept environment-interpolated `true`, `TRUE`, `1`, and `yes`; other strings are false. Langfuse credentials and URLs are trimmed. Missing or blank credentials disable export. Omitting `baseUrl` uses the default; an explicitly blank value disables Langfuse export. Media upload still requires both payload inclusion and media upload to be enabled.
+
 ### OTEL Config
 
 | Field | Type | Default | Description |
