@@ -146,12 +146,10 @@ describe('authorizePiToolCall', () => {
     await vi.waitFor(() => expect(loadPolicies).toHaveBeenCalledTimes(1));
     trusted = false;
     const b = authorizePiToolCall({ ...event, toolCallId: 'other' }, ctx, state);
-    await vi.waitFor(() => expect(loadPolicies).toHaveBeenCalledTimes(2));
-    trusted = true;
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(loadPolicies).toHaveBeenCalledTimes(1);
     first({});
-    queueMicrotask(() => {
-      trusted = false;
-    });
+    await vi.waitFor(() => expect(loadPolicies).toHaveBeenCalledTimes(2));
     second({});
     expect((await a)?.block).toBe(true);
     expect((await b)?.block).toBe(true);
@@ -217,7 +215,9 @@ describe('authorizePiToolCall', () => {
       ctx,
       { config: resolvePiSecurityConfig(), auditLog: [], grants: [] },
     );
-    expect(loadPolicies).toHaveBeenCalledWith(expect.objectContaining({ projectTrusted: true }));
+    await vi.waitFor(() =>
+      expect(loadPolicies).toHaveBeenCalledWith(expect.objectContaining({ projectTrusted: true })),
+    );
     trusted = false;
     finish({ 'auto-review': { defaultDecision: { kind: 'allow', reason: 'Project allows all' } } });
     expect((await result)?.block).toBe(true);

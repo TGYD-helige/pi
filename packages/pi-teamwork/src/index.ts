@@ -275,6 +275,19 @@ type EnsureReadyFn = (
 ) => Promise<string | TeamworkProvider>;
 
 function createTeamworkTools(ensureReady: EnsureReadyFn) {
+  async function runWithProvider<T>(
+    signal: AbortSignal | undefined,
+    operation: (backend: TeamworkProvider) => Promise<T>,
+  ) {
+    try {
+      const backend = await ensureReady(signal, Date.now() + 30_000);
+      if (typeof backend === 'string') return errorResult(backend);
+      return await operation(backend);
+    } catch {
+      return providerErrorResult();
+    }
+  }
+
   return [
     defineTool({
       name: 'workspace_list',
@@ -291,19 +304,14 @@ function createTeamworkTools(ensureReady: EnsureReadyFn) {
       ]),
       parameters: Type.Object({}),
       async execute(_toolCallId, _params, signal) {
-        const deadline = Date.now() + 30_000;
-        try {
-          const backend = await ensureReady(signal, deadline);
-          if (typeof backend === 'string') return errorResult(backend);
+        return runWithProvider(signal, async (backend) => {
           const workspaces = await backend.listWorkspaces();
 
           return textResult(
             { workspaces: workspaces, total: workspaces.length },
             workspaces.length ? undefined : 'No workspaces found.',
           );
-        } catch {
-          return providerErrorResult();
-        }
+        });
       },
     }),
 
@@ -332,10 +340,7 @@ function createTeamworkTools(ensureReady: EnsureReadyFn) {
         limit: Type.Optional(Type.Number({ description: 'Max number of results.' })),
       }),
       async execute(_toolCallId, params, signal) {
-        const deadline = Date.now() + 30_000;
-        try {
-          const backend = await ensureReady(signal, deadline);
-          if (typeof backend === 'string') return errorResult(backend);
+        return runWithProvider(signal, async (backend) => {
           const issues = await backend.listIssues(params);
 
           return textResult(
@@ -345,9 +350,7 @@ function createTeamworkTools(ensureReady: EnsureReadyFn) {
             },
             issues.length ? undefined : 'No issues found.',
           );
-        } catch {
-          return providerErrorResult();
-        }
+        });
       },
     }),
 
@@ -362,17 +365,12 @@ function createTeamworkTools(ensureReady: EnsureReadyFn) {
         id: Type.String({ description: 'The issue ID.' }),
       }),
       async execute(_toolCallId, params, signal) {
-        const deadline = Date.now() + 30_000;
-        try {
-          const backend = await ensureReady(signal, deadline);
-          if (typeof backend === 'string') return errorResult(backend);
+        return runWithProvider(signal, async (backend) => {
           const issue = await backend.getIssue(params.id, params.workspaceId);
           if (!issue) return errorResult(`Issue not found: ${params.id}`);
           const { metadata: _metadata, ...record } = issue;
           return textResult({ issue: record });
-        } catch {
-          return providerErrorResult();
-        }
+        });
       },
     }),
 
@@ -395,16 +393,11 @@ function createTeamworkTools(ensureReady: EnsureReadyFn) {
         project: Type.Optional(Type.String({ description: 'Project ID to associate with.' })),
       }),
       async execute(_toolCallId, params, signal) {
-        const deadline = Date.now() + 30_000;
-        try {
-          const backend = await ensureReady(signal, deadline);
-          if (typeof backend === 'string') return errorResult(backend);
+        return runWithProvider(signal, async (backend) => {
           const issue = await backend.createIssue(params);
           const { metadata: _metadata, ...record } = issue;
           return textResult({ issue: record });
-        } catch {
-          return providerErrorResult();
-        }
+        });
       },
     }),
 
@@ -429,18 +422,13 @@ function createTeamworkTools(ensureReady: EnsureReadyFn) {
         assignee: Type.Optional(Type.String({ description: 'New assignee name.' })),
       }),
       async execute(_toolCallId, params, signal) {
-        const deadline = Date.now() + 30_000;
         const { id, workspaceId, ...input } = params;
-        try {
-          const backend = await ensureReady(signal, deadline);
-          if (typeof backend === 'string') return errorResult(backend);
+        return runWithProvider(signal, async (backend) => {
           const issue = await backend.updateIssue(id, input, workspaceId);
           if (!issue) return errorResult(`Issue not found: ${id}`);
           const { metadata: _metadata, ...record } = issue;
           return textResult({ issue: record });
-        } catch {
-          return providerErrorResult();
-        }
+        });
       },
     }),
 
@@ -462,10 +450,7 @@ function createTeamworkTools(ensureReady: EnsureReadyFn) {
         ),
       }),
       async execute(_toolCallId, params, signal) {
-        const deadline = Date.now() + 30_000;
-        try {
-          const backend = await ensureReady(signal, deadline);
-          if (typeof backend === 'string') return errorResult(backend);
+        return runWithProvider(signal, async (backend) => {
           const comment = await backend.addComment(
             params.issueId,
             params.content,
@@ -473,9 +458,7 @@ function createTeamworkTools(ensureReady: EnsureReadyFn) {
             params.workspaceId,
           );
           return textResult({ comment });
-        } catch {
-          return providerErrorResult();
-        }
+        });
       },
     }),
 
@@ -495,19 +478,14 @@ function createTeamworkTools(ensureReady: EnsureReadyFn) {
         workspaceId: WORKSPACE_ID_PARAM,
       }),
       async execute(_toolCallId, params, signal) {
-        const deadline = Date.now() + 30_000;
-        try {
-          const backend = await ensureReady(signal, deadline);
-          if (typeof backend === 'string') return errorResult(backend);
+        return runWithProvider(signal, async (backend) => {
           const projects = await backend.listProjects(params.workspaceId);
 
           return textResult(
             { projects: projects, total: projects.length },
             projects.length ? undefined : 'No projects found.',
           );
-        } catch {
-          return providerErrorResult();
-        }
+        });
       },
     }),
 
@@ -530,10 +508,7 @@ function createTeamworkTools(ensureReady: EnsureReadyFn) {
       ]),
       parameters: Type.Object({}),
       async execute(_toolCallId, _params, signal) {
-        const deadline = Date.now() + 30_000;
-        try {
-          const backend = await ensureReady(signal, deadline);
-          if (typeof backend === 'string') return errorResult(backend);
+        return runWithProvider(signal, async (backend) => {
           const s = await backend.status();
           return textResult({
             provider: backend.name,
@@ -543,9 +518,7 @@ function createTeamworkTools(ensureReady: EnsureReadyFn) {
               ...(typeof s.status === 'string' ? { status: s.status } : {}),
             },
           });
-        } catch {
-          return providerErrorResult();
-        }
+        });
       },
     }),
   ];

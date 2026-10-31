@@ -4,6 +4,8 @@ import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 
 export type PiSettingsOptions = {
+  /** Stop asynchronous reads between native filesystem operations. */
+  signal?: AbortSignal;
   cwd?: string;
   /** Override for the config directory. If not set, resolveConfigDir() is used. */
   configDir?: string;
@@ -190,16 +192,21 @@ const MAX_POLICY_BYTES = 2 * 1024 * 1024;
 const MAX_POLICY_FILES = 128;
 const MAX_POLICY_ENTRIES = 1024;
 
-async function readBoundedConfig(path: string, maxBytes: number) {
+async function readBoundedConfig(path: string, maxBytes: number, signal?: AbortSignal) {
+  signal?.throwIfAborted();
   const handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
   try {
+    signal?.throwIfAborted();
     const metadata = await handle.stat();
+    signal?.throwIfAborted();
     if (!metadata.isFile() || metadata.size > maxBytes)
       throw new Error('Configuration file size limit exceeded.');
     const buffer = Buffer.alloc(metadata.size + 1);
     let bytes = 0;
     while (bytes < buffer.length) {
+      signal?.throwIfAborted();
       const result = await handle.read(buffer, bytes, buffer.length - bytes, null);
+      signal?.throwIfAborted();
       if (!result.bytesRead) break;
       bytes += result.bytesRead;
     }
@@ -215,11 +222,14 @@ async function readBoundedConfig(path: string, maxBytes: number) {
 export async function loadPiSettingsAsync<T>(key: string, options?: PiSettingsOptions): Promise<T> {
   let result = {};
   for (const { dir, project } of configurationLayers(options)) {
+    options?.signal?.throwIfAborted();
     try {
       const { parsed } = await readBoundedConfig(
         join(dir, 'settings.json'),
         MAX_SETTINGS_FILE_BYTES,
+        options?.signal,
       );
+      options?.signal?.throwIfAborted();
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
         throw new Error('Settings root must be an object.');
       const section = parsed[key] ?? {};
@@ -232,9 +242,11 @@ export async function loadPiSettingsAsync<T>(key: string, options?: PiSettingsOp
           : (resolveEnvVars(section, options?.expandBareEnvVars !== false) as object)),
       };
     } catch (error) {
+      options?.signal?.throwIfAborted();
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
   }
+  options?.signal?.throwIfAborted();
   return result as T;
 }
 
@@ -247,26 +259,36 @@ export async function loadPiPolicyProfilesAsync<T>(
   let files = 0;
   let bytes = 0;
   for (const { dir } of configurationLayers(options)) {
+    options?.signal?.throwIfAborted();
     let directory: Awaited<ReturnType<typeof opendir>>;
     try {
       directory = await opendir(join(dir, 'policy'));
     } catch (error) {
+      options?.signal?.throwIfAborted();
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
       throw error;
     }
+    if (options?.signal?.aborted) {
+      await directory.close();
+      options.signal.throwIfAborted();
+    }
     for await (const entry of directory) {
+      options?.signal?.throwIfAborted();
       if (++entries > MAX_POLICY_ENTRIES) throw new Error('Policy directory entry limit exceeded.');
       if (!entry.name.endsWith('.json')) continue;
       if (++files > MAX_POLICY_FILES) throw new Error('Policy file count limit exceeded.');
       const value = await readBoundedConfig(
         join(dir, 'policy', entry.name),
         Math.min(MAX_CONFIG_FILE_BYTES, MAX_POLICY_BYTES - bytes),
+        options?.signal,
       );
+      options?.signal?.throwIfAborted();
       bytes += value.bytes;
       if (!value.parsed || typeof value.parsed !== 'object' || Array.isArray(value.parsed))
         throw new Error('Policy profile must be an object.');
       result[basename(entry.name, '.json')] = value.parsed;
     }
   }
+  options?.signal?.throwIfAborted();
   return result;
 }

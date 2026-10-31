@@ -25,6 +25,7 @@ import {
   securityEvaluationDetails,
 } from './index.js';
 import { loadFilePoliciesAsync } from './policy-loader.js';
+import { refreshConfiguration } from './refresh.js';
 
 const SETTINGS_KEY = 'pi-security';
 const EXTENSION_STATUS_KEY = 'pi-security';
@@ -97,12 +98,17 @@ export default function piSecurityExtension(pi: ExtensionAPI): void {
     delete state.projectTrusted;
     state.config = resolvePiSecurityConfig();
     try {
-      state.config = resolvePiSecurityConfig(
-        await loadPiSettingsAsync<PiSecurityExtensionConfig>(SETTINGS_KEY, {
-          cwd: ctx.cwd,
-          projectTrusted: isProjectTrusted(ctx),
-        }),
+      const config = await refreshConfiguration(
+        (signal) =>
+          loadPiSettingsAsync<PiSecurityExtensionConfig>(SETTINGS_KEY, {
+            cwd: ctx.cwd,
+            projectTrusted: isProjectTrusted(ctx),
+            signal,
+          }),
+        ctx.signal,
       );
+      ctx.signal?.throwIfAborted();
+      state.config = resolvePiSecurityConfig(config);
     } catch {
       console.error('[pi-security] unable to load security settings');
       ctx.ui.setStatus(EXTENSION_STATUS_KEY, 'security: configuration invalid');
@@ -175,7 +181,14 @@ export async function authorizeUserBash(
   };
   const decision = await authorizeCurrentCall(ctx, state, toolCall);
   if (decision?.kind === 'deny' || decision?.kind === 'ask') {
-    return { result: { output: decision.reason, exitCode: 1, cancelled: false, truncated: false } };
+    return {
+      result: {
+        output: decision.reason,
+        exitCode: 1,
+        cancelled: ctx.signal?.aborted === true,
+        truncated: false,
+      },
+    };
   }
   return undefined;
 }
@@ -187,16 +200,19 @@ async function authorizeCurrentCall(
 ): Promise<SecurityDecision | undefined> {
   const trusted = isProjectTrusted(ctx);
   try {
-    const gate = await createGate(ctx, state);
-    if (trusted && !isProjectTrusted(ctx))
+    const snapshot = await createGate(ctx, state);
+    ctx.signal?.throwIfAborted();
+    const capturedTrust = trusted || snapshot.projectTrusted;
+    if (capturedTrust && !isProjectTrusted(ctx))
       return { kind: 'deny', reason: 'Project trust was revoked during authorization.' };
-    if (!gate) return undefined;
-    const evaluation = await gate.authorize({
+    if (!snapshot.gate) return undefined;
+    const evaluation = await snapshot.gate.authorize({
       request: requestFromContext(ctx),
       toolCall,
       workspaceDir: ctx.cwd,
     });
-    if (trusted && !isProjectTrusted(ctx))
+    ctx.signal?.throwIfAborted();
+    if (capturedTrust && !isProjectTrusted(ctx))
       return { kind: 'deny', reason: 'Project trust was revoked during authorization.' };
     return evaluation.decision;
   } catch {
@@ -232,47 +248,60 @@ export function resolvePiSecurityConfig(
 async function createGate(
   ctx: ExtensionContext,
   state: PiSecurityExtensionState,
-): Promise<SecurityGate | undefined> {
-  const projectTrusted = isProjectTrusted(ctx);
-  const options = { cwd: ctx.cwd, configDir: getAgentDir(), projectTrusted };
-  let config = state.settingsBacked
-    ? resolvePiSecurityConfig(
-        await loadPiSettingsAsync<PiSecurityExtensionConfig>(SETTINGS_KEY, options),
-      )
-    : state.config;
-  let filePolicies = config.enabled ? await loadFilePoliciesAsync(options) : {};
-  let trusted = projectTrusted;
-  if (projectTrusted && !isProjectTrusted(ctx)) {
-    trusted = false;
-    config = resolvePiSecurityConfig(
-      await loadPiSettingsAsync<PiSecurityExtensionConfig>(SETTINGS_KEY, {
-        ...options,
-        projectTrusted: false,
-      }),
-    );
-    filePolicies = config.enabled
-      ? await loadFilePoliciesAsync({ ...options, projectTrusted: false })
-      : {};
-  }
+): Promise<{ gate: SecurityGate | undefined; projectTrusted: boolean }> {
+  const initialConfig = state.config;
+  const settingsBacked = state.settingsBacked;
+  const { config, filePolicies, trusted } = await refreshConfiguration(async (signal) => {
+    const projectTrusted = isProjectTrusted(ctx);
+    const options = { cwd: ctx.cwd, configDir: getAgentDir(), projectTrusted, signal };
+    let config = settingsBacked
+      ? resolvePiSecurityConfig(
+          await loadPiSettingsAsync<PiSecurityExtensionConfig>(SETTINGS_KEY, options),
+        )
+      : initialConfig;
+    signal.throwIfAborted();
+    let filePolicies = config.enabled ? await loadFilePoliciesAsync(options) : {};
+    signal.throwIfAborted();
+    let trusted = projectTrusted;
+    if (projectTrusted && !isProjectTrusted(ctx)) {
+      trusted = false;
+      config = resolvePiSecurityConfig(
+        await loadPiSettingsAsync<PiSecurityExtensionConfig>(SETTINGS_KEY, {
+          ...options,
+          projectTrusted: false,
+        }),
+      );
+      signal.throwIfAborted();
+      filePolicies = config.enabled
+        ? await loadFilePoliciesAsync({ ...options, projectTrusted: false })
+        : {};
+    }
+    signal.throwIfAborted();
+    return { config, filePolicies, trusted };
+  }, ctx.signal);
+  ctx.signal?.throwIfAborted();
   if (state.projectTrusted !== trusted || JSON.stringify(state.config) !== JSON.stringify(config))
     state.grants = [];
   state.config = config;
   state.projectTrusted = trusted;
-  if (!config.enabled) return undefined;
+  if (!config.enabled) return { gate: undefined, projectTrusted: trusted };
   const effectiveState = { ...state, config };
-  return new SecurityGate({
-    profile: config.profile,
-    ...(config.security ? { config: config.security } : {}),
-    filePolicies,
-    approvalHandler: async ({ toolCall, decision, evaluation }) =>
-      resolveApproval(ctx, effectiveState, toolCall, decision, evaluation),
-    auditSink: (event) => {
-      state.auditLog.push(event);
-      if (state.auditLog.length > state.config.auditLimit) {
-        state.auditLog.splice(0, state.auditLog.length - state.config.auditLimit);
-      }
-    },
-  });
+  return {
+    projectTrusted: trusted,
+    gate: new SecurityGate({
+      profile: config.profile,
+      ...(config.security ? { config: config.security } : {}),
+      filePolicies,
+      approvalHandler: async ({ toolCall, decision, evaluation }) =>
+        resolveApproval(ctx, effectiveState, toolCall, decision, evaluation),
+      auditSink: (event) => {
+        state.auditLog.push(event);
+        if (state.auditLog.length > state.config.auditLimit) {
+          state.auditLog.splice(0, state.auditLog.length - state.config.auditLimit);
+        }
+      },
+    }),
+  };
 }
 
 async function resolveApproval(

@@ -28,6 +28,7 @@ export function loadPolicyDir(dirPath: string): Record<string, SecurityProfileCo
 }
 
 export type LoadFilePoliciesOptions = {
+  signal?: AbortSignal;
   cwd: string;
   configDir?: string;
   projectTrusted?: boolean;
