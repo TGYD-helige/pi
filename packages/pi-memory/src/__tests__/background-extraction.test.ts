@@ -12,6 +12,16 @@ import {
 } from '../background-extraction.js';
 import { MemoryStore } from '../store.js';
 
+const { prompt } = vi.hoisted(() => ({ prompt: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@earendil-works/pi-agent-core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@earendil-works/pi-agent-core')>()),
+  Agent: class {
+    state = { messages: [] };
+    prompt = prompt;
+    subscribe() {}
+  },
+}));
+
 const TEST_ROOT = path.join(tmpdir(), 'pi-memory-extraction-test');
 
 function freshDir(): string {
@@ -37,7 +47,10 @@ function makeTurnEndEvent(
   };
 }
 
-beforeEach(() => mkdirSync(TEST_ROOT, { recursive: true }));
+beforeEach(() => {
+  mkdirSync(TEST_ROOT, { recursive: true });
+  prompt.mockClear();
+});
 afterEach(() => rmSync(TEST_ROOT, { recursive: true, force: true }));
 
 // ---------------------------------------------------------------------------
@@ -138,6 +151,12 @@ describe('serializeMessages', () => {
     expect(result).toContain('recent message');
   });
 
+  it('bounds even a single oversized message including its role and separators', () => {
+    const result = serializeMessages([{ role: 'assistant', text: 'x'.repeat(100_000) }]);
+    expect(result.length).toBeLessThanOrEqual(4000);
+    expect(result).toContain('[assistant]');
+  });
+
   it('returns empty string for empty input', () => {
     expect(serializeMessages([])).toBe('');
   });
@@ -209,6 +228,27 @@ describe('countMemoryActions', () => {
 // ---------------------------------------------------------------------------
 
 describe('createExtractionRunner gating', () => {
+  it('drains old batches and reviews later prompts when turn indices restart', async () => {
+    const store = makeStore(freshDir());
+    await store.loadFromDisk();
+    const runner = createExtractionRunner({
+      store,
+      interval: 1,
+      modelConfig: { provider: 'test', model: 'test' },
+      modelRegistry: {
+        find: () => ({ id: 'test' }),
+        getApiKeyAndHeaders: async () => ({ ok: true }),
+      },
+    });
+    runner.onTurnEnd(makeTurnEndEvent(0, 'assistant', 'first batch'));
+    await vi.waitFor(() => expect(prompt).toHaveBeenCalledOnce());
+    runner.onTurnEnd(makeTurnEndEvent(0, 'assistant', 'second batch'));
+    await vi.waitFor(() => expect(prompt).toHaveBeenCalledTimes(2));
+    expect(prompt.mock.calls[1]![0]).toContain('second batch');
+    expect(prompt.mock.calls[1]![0]).not.toContain('first batch');
+    runner.shutdown();
+  });
+
   it('does not trigger before interval is reached', async () => {
     const store = makeStore(freshDir());
     await store.loadFromDisk();

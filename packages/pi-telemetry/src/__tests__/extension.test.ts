@@ -51,13 +51,118 @@ describe('telemetryExtension', () => {
     handlers.clear();
     mockPi.on.mockClear();
     mockPi.registerTool.mockClear();
-    (loadConfigFromFile as ReturnType<typeof vi.fn>).mockClear();
+    (loadConfigFromFile as ReturnType<typeof vi.fn>).mockReset();
+    vi.mocked(loadConfigFromFile).mockReturnValue({ includePayloads: true });
     (createTelemetryExporter as ReturnType<typeof vi.fn>).mockClear();
 
     (createTelemetryExporter as ReturnType<typeof vi.fn>).mockReturnValue({
       publish: vi.fn(() => Promise.resolve()),
       flush: vi.fn(() => Promise.resolve()),
       close: vi.fn(() => Promise.resolve()),
+    });
+  });
+
+  it('does not scan session history when starting with export disabled', async () => {
+    vi.mocked(createTelemetryExporter).mockReturnValueOnce(new NoopRuntimeEventExporter());
+    telemetryExtension(mockPi as any);
+    const getEntries = vi.fn(() => []);
+    await fireEvent(
+      'session_start',
+      {},
+      { sessionManager: { getSessionId: () => 'resumed', getEntries } },
+    );
+    expect(getEntries.mock.calls.length).toBe(0);
+  });
+
+  it('does not inspect context when export is disabled', async () => {
+    vi.mocked(createTelemetryExporter).mockReturnValueOnce(new NoopRuntimeEventExporter());
+    telemetryExtension(mockPi as any);
+    await fireEvent('session_start', {});
+    const messages = vi.fn(() => []);
+    await fireEvent('context', {
+      get messages() {
+        return messages();
+      },
+    });
+    expect(messages).not.toHaveBeenCalled();
+  });
+
+  it('keeps usage and first-token timing without reading payloads when capture is disabled', async () => {
+    vi.mocked(loadConfigFromFile).mockReturnValueOnce({ includePayloads: false });
+    telemetryExtension(mockPi as any);
+    await fireEvent('session_start', {});
+    await fireEvent('turn_start', { timestamp: Date.now() });
+    const readContent = vi.fn(() => 'large payload');
+    await fireEvent('context', {
+      get messages() {
+        readContent();
+        return [];
+      },
+    });
+    await fireEvent('before_provider_request', {
+      payload: {
+        messages: [
+          {
+            role: 'user',
+            get content() {
+              return readContent();
+            },
+          },
+        ],
+      },
+    });
+    await fireEvent('message_update', {
+      assistantMessageEvent: {
+        type: 'text_delta',
+        delta: 'a',
+        get large() {
+          return readContent();
+        },
+      },
+    });
+    await fireEvent('message_end', {
+      message: {
+        role: 'assistant',
+        get content() {
+          return readContent();
+        },
+        usage: { input: 10, output: 1, totalTokens: 11 },
+      },
+    });
+    expect(readContent).not.toHaveBeenCalled();
+    expect(getPublishedEvents().at(-1)).toMatchObject({
+      status: 'completed',
+      completionStartTime: expect.any(String),
+      usage: { input: 10, output: 1 },
+    });
+    const streams = getPublishedEvents().filter((event) => 'streamEvents' in event);
+    expect(streams).toHaveLength(1);
+    expect(streams[0]).toMatchObject({ streamEvents: [], durationMs: expect.any(Number) });
+    expect(streams[0]).not.toHaveProperty('input');
+  });
+
+  it('stops inspecting stream payloads once the capture ceiling is reached', async () => {
+    telemetryExtension(mockPi as any);
+    await fireEvent('session_start', {});
+    await fireEvent('turn_start', { timestamp: Date.now() });
+    await fireEvent('before_provider_request', { payload: {} });
+    await fireEvent('message_update', {
+      assistantMessageEvent: { type: 'text_delta', delta: 'x'.repeat(1_000_001) },
+    });
+    const inspect = vi.fn(() => 'payload');
+    await fireEvent('message_update', {
+      assistantMessageEvent: {
+        type: 'text_delta',
+        delta: 'next',
+        get extra() {
+          return inspect();
+        },
+      },
+    });
+    expect(inspect).not.toHaveBeenCalled();
+    await fireEvent('message_end', { message: { role: 'assistant', content: 'done' } });
+    expect(getPublishedEvents().find((event) => 'streamEvents' in event)).toMatchObject({
+      streamEvents: [{ type: 'truncated', maxBytes: 1_000_000 }],
     });
   });
 

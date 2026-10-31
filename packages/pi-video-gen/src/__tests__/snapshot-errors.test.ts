@@ -38,11 +38,15 @@ vi.mock('node:stream/promises', async (importOriginal) => {
   return {
     ...actual,
     pipeline: vi.fn(async (...streams: unknown[]) => {
-      const destination = streams.at(-1) as { path?: string };
+      const destination = streams.at(-1) as { path?: string; destroy(error: Error): void };
+      const copying = pipeline(...streams);
       if (destination.path?.includes(copyFailure.destinationMarker)) {
-        throw Object.assign(new Error('destination copy failed'), { code: copyFailure.code });
+        // Let the real pipeline own stream cleanup even when the destination fails.
+        destination.destroy(
+          Object.assign(new Error('destination copy failed'), { code: copyFailure.code }),
+        );
       }
-      return pipeline(...streams);
+      return copying;
     }),
   };
 });

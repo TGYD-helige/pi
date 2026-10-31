@@ -34,7 +34,7 @@ vi.mock('../otel.js', async () => {
         {
           enabled: true,
           endpoint: '',
-          includePayloads: true,
+          includePayloads: config.includePayloads === true,
           mediaUploadEnabled: config.mediaUploadEnabled === true,
           flushAt: 10,
           flushIntervalMs: 60_000,
@@ -76,7 +76,7 @@ describe('interrupt flow', () => {
   beforeEach(() => {
     handlers.clear();
     exported = [];
-    vi.mocked(loadConfigFromFile).mockReturnValue({});
+    vi.mocked(loadConfigFromFile).mockReturnValue({ includePayloads: true });
     telemetryExtension(mockPi as any);
   });
 
@@ -93,6 +93,39 @@ describe('interrupt flow', () => {
       return originalExport(spans, callback);
     });
   }
+
+  it('retains one empty stream child per redacted generation, including failed attempts', async () => {
+    vi.mocked(loadConfigFromFile).mockReturnValueOnce({ includePayloads: false });
+    await fireEvent('session_start', {});
+    recordExports();
+    await fireEvent('turn_start', { timestamp: Date.now() });
+    await fireEvent('before_provider_request', {
+      payload: { messages: [{ role: 'user', content: 'private input' }] },
+    });
+    await fireEvent('after_provider_response', { status: 429 });
+    await fireEvent('before_provider_request', { payload: {} });
+    await fireEvent('message_update', {
+      assistantMessageEvent: { type: 'text_delta', delta: 'private output' },
+    });
+    await fireEvent('message_end', { message: assistantMessage('private output') });
+    const streams = exported.filter((span) => span.name === 'llm-stream');
+    const generations = exported.filter(
+      (span) => span.attributes['langfuse.observation.type'] === 'generation',
+    );
+    expect(generations).toHaveLength(2);
+    expect(streams).toHaveLength(2);
+    for (const generation of generations) {
+      const children = streams.filter(
+        (stream) => stream.parentSpanContext?.spanId === generation.spanContext().spanId,
+      );
+      expect(children).toHaveLength(1);
+      expect(children[0]!.attributes['langfuse.observation.input']).toBeUndefined();
+      expect(JSON.parse(String(children[0]!.attributes['langfuse.observation.output']))).toEqual(
+        [],
+      );
+      expect(children[0]!.ended).toBe(true);
+    }
+  });
 
   it('exports the full system transcript when the context getter is empty', async () => {
     await fireEvent('session_start', {});

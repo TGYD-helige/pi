@@ -608,7 +608,7 @@ export async function runTimeline(opts: {
       sourceHasAudio?: boolean;
     };
     const resolved: ResolvedSegment[] = [];
-    const mediaProbe = resolveFfprobe(settings.ffmpegPath);
+    const mediaProbe = await resolveFfprobe(settings.ffmpegPath, opts.signal);
 
     for (const seg of spec.segments) {
       const out: ResolvedSegment = { ...seg, resolvedDurationSec: 0 };
@@ -629,7 +629,13 @@ export async function runTimeline(opts: {
         if (!(await canReuse(overlayPath))) {
           opts.onUpdate?.(`Rendering text overlay for ${seg.id}…`);
           await writeAtomic(overlayPath, async (tmp) => {
-            await renderTextOverlay({ overlay: seg.overlay!, width, height, outPath: tmp });
+            await renderTextOverlay({
+              overlay: seg.overlay!,
+              width,
+              height,
+              outPath: tmp,
+              signal: opts.signal,
+            });
           });
           await record(overlayPath);
         }
@@ -745,6 +751,7 @@ export async function runTimeline(opts: {
           if (!(await canReuse(path))) {
             await writeAtomic(path, async (tmp) => {
               await renderBurnedSubtitle({
+                signal: opts.signal,
                 text: cue.text,
                 style: spec.subtitles!,
                 width,
@@ -775,8 +782,8 @@ export async function runTimeline(opts: {
     // ── 4. per-segment mp4 render ──────────────────────────────────────────
     const wantsH264 = spec.output?.codec === 'h264';
     const ffmpeg = wantsH264
-      ? resolveGplFfmpeg(settings.ffmpegPath)
-      : resolveFfmpeg(settings.ffmpegPath);
+      ? await resolveGplFfmpeg(settings.ffmpegPath, opts.signal)
+      : await resolveFfmpeg(settings.ffmpegPath, opts.signal);
     if (wantsH264 && !ffmpeg.runnable) {
       throw new VideoGenError(
         'h264 output needs an ffmpeg with the libx264 encoder. Reinstall pi-video-gen, set pi-video-gen.ffmpegPath to a compatible binary, or use output.codec "mpeg4".',
@@ -1290,7 +1297,7 @@ ${splitCueText(cue.text)}
     const finalVideoHash = await hashFileSha256(finalVideoPath, opts.signal);
 
     // ── 8. QC: duration probe + frame extraction ───────────────────────────
-    const ffprobe = resolveFfprobe(settings.ffmpegPath);
+    const ffprobe = await resolveFfprobe(settings.ffmpegPath, opts.signal);
     const qcDir = join(jobDir, 'qc');
     await mkdir(qcDir, { recursive: true });
     const realQc = await realpath(qcDir);

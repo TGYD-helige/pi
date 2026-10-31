@@ -517,7 +517,7 @@ describe('timeline pipeline (C1–C4)', () => {
       segments: { s1: { narrationDegraded: true } },
     });
     expect(readFileSync(result.subtitlePath!, 'utf-8')).toContain('旁白服务暂时不可用');
-    const streams = await probeStreams(resolveFfprobe().path, result.finalVideoPath);
+    const streams = await probeStreams((await resolveFfprobe()).path, result.finalVideoPath);
     expect(streams.audioLayout).not.toBe('none');
     expect(streams.subtitleCodec).toBe('mov_text');
   });
@@ -681,7 +681,7 @@ describe('timeline pipeline (C1–C4)', () => {
 
     // Narrated s1 grows to 2s audio + 0.6s pad + 0.5s outgoing xfade;
     // subtracting the overlap leaves the full narration and pad on screen.
-    const ffprobe = resolveFfprobe();
+    const ffprobe = await resolveFfprobe();
     const dur = await probeDuration(ffprobe.path, result.finalVideoPath);
     expect(dur).toBeGreaterThan(6.5);
     expect(dur).toBeLessThan(7);
@@ -1099,7 +1099,7 @@ describe('timeline pipeline (C1–C4)', () => {
     );
 
     const result = await runTimeline({ timelineSpecPath: specPath, ...baseOpts(cwd) });
-    const streams = await probeStreams(resolveFfprobe().path, result.finalVideoPath);
+    const streams = await probeStreams((await resolveFfprobe()).path, result.finalVideoPath);
     expect(streams.subtitleCodec).toBe('none');
 
     const frame = join(cwd, 'burned-frame.png');
@@ -1230,7 +1230,7 @@ describe('timeline pipeline (C1–C4)', () => {
     );
 
     const result = await runTimeline({ timelineSpecPath: specPath, ...baseOpts(cwd) });
-    const ffprobe = resolveFfprobe();
+    const ffprobe = await resolveFfprobe();
     const videoDuration = await probeDuration(ffprobe.path, join(jobDir, 'video_track.mp4'));
     const audioDuration = await probeDuration(ffprobe.path, join(jobDir, 'audio_track.mp4'));
 

@@ -488,7 +488,7 @@ export async function runRender(opts: {
         'render: local source invalid',
       );
     if (opts.verifyMedia !== false) {
-      const ffprobe = resolveFfprobe(settings.ffmpegPath);
+      const ffprobe = await resolveFfprobe(settings.ffmpegPath, opts.signal);
       if (!ffprobe.runnable)
         throw new VideoGenError(
           'ffprobe is required to validate existing video before model submission.',
@@ -898,7 +898,7 @@ export async function runRender(opts: {
             'render: assembly asset missing',
           );
         if (opts.verifyMedia !== false && /\.(mp4|mov|webm|m4v)$/i.test(path)) {
-          const ffprobe = resolveFfprobe(settings.ffmpegPath);
+          const ffprobe = await resolveFfprobe(settings.ffmpegPath, opts.signal);
           if (!ffprobe.runnable)
             throw new VideoGenError(
               'ffprobe is required to validate existing assembly video.',
@@ -944,14 +944,14 @@ export async function runRender(opts: {
         const mapped = timelineWithShotPaths(timelineInput, realShotsDir);
         assertNarrationOptIn(parseTimelineSpec(JSON.stringify(mapped)));
         if (opts.verifyMedia !== false) {
-          if (!resolveFfprobe(settings.ffmpegPath).runnable)
+          if (!(await resolveFfprobe(settings.ffmpegPath, opts.signal)).runnable)
             throw new VideoGenError(
               'Timeline assembly needs ffprobe before model submission.',
               'render: timeline ffprobe missing',
             );
           if (
             timelineInput.output?.codec === 'h264' &&
-            !resolveGplFfmpeg(settings.ffmpegPath).runnable
+            !(await resolveGplFfmpeg(settings.ffmpegPath, opts.signal)).runnable
           )
             throw new VideoGenError(
               'H.264 timeline assembly needs an ffmpeg build with libx264.',
@@ -963,7 +963,7 @@ export async function runRender(opts: {
                 `${segment.overlay?.title ?? ''}${segment.overlay?.subtitle ?? ''}${timelineInput.subtitles?.mode === 'burn' ? (segment.narration ?? '') : ''}`,
             )
             .join('');
-          if (/\p{Script=Han}/u.test(visibleText) && !hasCjkFont())
+          if (/\p{Script=Han}/u.test(visibleText) && !(await hasCjkFont(opts.signal)))
             throw new VideoGenError(
               'Timeline assembly needs a CJK font for its text overlays.',
               'render: timeline CJK font missing',
@@ -1220,7 +1220,7 @@ export async function runRender(opts: {
       audioLayout: string;
     }[] = [];
     if (opts.verifyMedia !== false) {
-      const ffprobe = resolveFfprobe(settings.ffmpegPath);
+      const ffprobe = await resolveFfprobe(settings.ffmpegPath, opts.signal);
       if (!ffprobe.runnable)
         throw new VideoGenError(
           'ffprobe is required to verify downloaded shot media.',
@@ -1303,7 +1303,7 @@ export async function runRender(opts: {
     }
 
     if (opts.verifyMedia !== false) {
-      const ffprobe = resolveFfprobe(settings.ffmpegPath);
+      const ffprobe = await resolveFfprobe(settings.ffmpegPath, opts.signal);
       const finalStreams = await probeStreams(ffprobe.path, finalVideoPath, opts.signal);
       const finalDurationSec = await probeDuration(ffprobe.path, finalVideoPath, opts.signal);
       if (

@@ -858,7 +858,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
         );
       }
       if (name === 'remotion-input.json') {
-        const ffmpeg = resolveFfmpeg(settings.ffmpegPath);
+        const ffmpeg = await resolveFfmpeg(settings.ffmpegPath, signal);
         if (!ffmpeg.runnable)
           return errResult(
             'ffmpeg is required for Remotion media validation. Run /video-gen doctor.',
@@ -943,7 +943,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
           ).message,
         );
       }
-      const ffmpeg = resolveFfmpeg(settings.ffmpegPath);
+      const ffmpeg = await resolveFfmpeg(settings.ffmpegPath, signal);
       if (!ffmpeg.runnable) {
         return errResult(
           `ffmpeg is not runnable (tried source: ${ffmpeg.source}). Set pi-video-gen.ffmpegPath in GLOBAL settings or FFMPEG_PATH, then /video-gen doctor.`,
@@ -1421,7 +1421,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
       }
 
       if (sub === 'doctor') {
-        const result = runDoctor(ctx);
+        const result = await runDoctor(ctx);
         ctx.ui.notify(result.content[0]!.text, 'info');
         return;
       }
@@ -1433,7 +1433,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
     },
   });
 
-  function runDoctor(ctx: ExtensionContext): TextResult {
+  async function runDoctor(ctx: ExtensionContext): Promise<TextResult> {
     const checks: string[] = [];
 
     // 1. video provider key + model resolution
@@ -1453,19 +1453,19 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
     }
 
     // 2. ffmpeg (multi-shot concat; resolution chain: settings → env → bundled → PATH)
-    const ffmpeg = resolveFfmpeg(settings.ffmpegPath);
+    const ffmpeg = await resolveFfmpeg(settings.ffmpegPath, ctx.signal);
     checks.push(
       ffmpeg.runnable
         ? `✅ ffmpeg found (source: ${ffmpeg.source})`
         : `❌ ffmpeg not runnable (source tried: ${ffmpeg.source}) — reinstall pi-video-gen to restore its platform package, or set pi-video-gen.ffmpegPath in global/agent-dir settings`,
     );
-    const ffprobe = resolveFfprobe(settings.ffmpegPath);
+    const ffprobe = await resolveFfprobe(settings.ffmpegPath, ctx.signal);
     checks.push(
       ffprobe.runnable
         ? `✅ ffprobe found (source: ${ffprobe.source})`
         : `⚠️ ffprobe not runnable (source tried: ${ffprobe.source}) — needed for video_compose stream prechecks`,
     );
-    const h264Ffmpeg = resolveGplFfmpeg(settings.ffmpegPath);
+    const h264Ffmpeg = await resolveGplFfmpeg(settings.ffmpegPath, ctx.signal);
     checks.push(
       h264Ffmpeg.runnable
         ? `✅ libx264 encoder available (source: ${h264Ffmpeg.source})`
@@ -1474,7 +1474,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
 
     // 3. local CJK font (required by Sharp/SVG timeline overlays)
     checks.push(
-      hasCjkFont()
+      (await hasCjkFont(ctx.signal))
         ? '✅ CJK font available for local text overlays'
         : '❌ CJK font missing — install PingFang, Microsoft YaHei, Noto Sans CJK, or WenQuanYi before rendering Chinese overlays',
     );

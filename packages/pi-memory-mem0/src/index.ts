@@ -73,6 +73,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
   // End pending tool waits when their session is replaced or shut down.
   let settleProviderReady: (ready: Mem0Provider | undefined) => void = () => {};
   let prefetch: Prefetch | undefined;
+  const recallSearchState = { active: undefined };
   let userId = '';
   let agentId: string | undefined;
   let activeMode = '';
@@ -98,6 +99,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
     });
     settleProviderReady = settleReady;
     provider = undefined;
+    prefetch?.cancel();
     prefetch = undefined;
     agentId = undefined;
     activeAutoCapture = false;
@@ -198,6 +200,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
         );
       if (autoRecall) {
         prefetch = new Prefetch(provider, userId, {
+          searchState: recallSearchState,
           ...(agentId ? { agentId } : {}),
           topK,
         });
@@ -235,7 +238,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
       return;
     }
 
-    prefetch.queue(redactMemoryText(text));
+    if (!prefetch.queue(redactMemoryText(text), ctx.signal)) return;
 
     if (activeRecallFrequency === 'session') {
       recallQueuedThisSession = true;
@@ -299,6 +302,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
     sessionEpoch++;
     settleProviderReady(undefined);
     activeToolEnabled = false;
+    prefetch?.cancel();
     await pendingWrite;
     provider = undefined;
     prefetch = undefined;

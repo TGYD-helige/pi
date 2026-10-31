@@ -1,7 +1,7 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   classifyAttachment,
   docReadInstruction,
@@ -182,8 +182,13 @@ describe('renderAttachmentBlock', () => {
 });
 
 describe('renderAttachmentContext', () => {
+  const dir = join(tmpdir(), 'pi-attachments-context');
+  beforeEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+    await mkdir(dir, { recursive: true });
+  });
+  afterEach(() => rm(dir, { recursive: true, force: true }));
   it('renders context for text attachments', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'pi-attach-test-'));
     const filePath = join(dir, 'code.ts');
     await writeFile(filePath, 'export const y = 2;\n');
 
@@ -195,6 +200,22 @@ describe('renderAttachmentContext', () => {
     expect(result).toContain('## code.ts');
     expect(result).toContain('export const y = 2;');
     expect(result).toContain("Respond in the user's language");
+  });
+
+  it('shares a text budget across multiple attachments', async () => {
+    await writeFile(join(dir, 'first.txt'), 'a'.repeat(200));
+    await writeFile(join(dir, 'second.txt'), 'b'.repeat(200));
+    const result = await renderAttachmentContext(
+      [
+        { id: '1', name: 'first.txt', path: join(dir, 'first.txt') },
+        { id: '2', name: 'second.txt', path: join(dir, 'second.txt') },
+      ],
+      { maxTextChars: 100 },
+    );
+    expect(result).toContain('first.txt');
+    expect(result).toContain('second.txt');
+    expect(result).not.toContain('b'.repeat(10));
+    expect(result).toContain('omitted');
   });
 
   it('adds image guidance when hasImages is true', async () => {

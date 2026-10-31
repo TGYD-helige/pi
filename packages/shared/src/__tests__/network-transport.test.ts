@@ -62,6 +62,37 @@ describe('network transport', () => {
     ).resolves.toMatchObject({ status: 200 });
   });
 
+  it('cancels while resolving a redirect without making another connection', async () => {
+    const controller = new AbortController();
+    requestMock.mockImplementation(
+      (_url: URL, _options: unknown, onResponse: (response: unknown) => void) => {
+        const request = new EventEmitter() as EventEmitter & { end(): void };
+        request.end = () =>
+          onResponse({
+            headers: { location: 'https://redirect.example/next' },
+            statusCode: 302,
+            statusMessage: 'Found',
+          });
+        return request;
+      },
+    );
+    const lookup = vi
+      .fn()
+      .mockResolvedValueOnce([{ address: '93.184.216.34', family: 4 }])
+      .mockImplementationOnce(() => {
+        controller.abort(new Error('redirect DNS cancelled'));
+        return new Promise(() => {});
+      });
+    await expect(
+      safeFetch(
+        'https://cdn.example/start',
+        { method: 'HEAD', signal: controller.signal },
+        { lookup },
+      ),
+    ).rejects.toThrow('redirect DNS cancelled');
+    expect(requestMock.mock.calls.length).toBe(1);
+  });
+
   it('revalidates every redirect before following it', async () => {
     requestMock.mockImplementation(
       (

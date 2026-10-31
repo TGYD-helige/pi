@@ -1,8 +1,8 @@
 /**
  * Attachment classification and prompt rendering utilities.
  */
-import type { Dirent } from 'node:fs';
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { createReadStream, type Dirent } from 'node:fs';
+import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 export type AttachmentKind = 'image' | 'text' | 'doc' | 'binary';
@@ -157,6 +157,18 @@ export function docReadInstruction(
   return undefined;
 }
 
+/** Read only a bounded prefix, even if the file grows after stat(). */
+export async function readFilePrefix(fsPath: string, maxBytes: number): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of createReadStream(fsPath, {
+    end: maxBytes - 1,
+    highWaterMark: Math.min(maxBytes, 64 * 1024),
+  })) {
+    chunks.push(chunk as Buffer);
+  }
+  return Buffer.concat(chunks);
+}
+
 export async function renderAttachmentBlock(
   attachment: AttachmentMeta,
   maxTextChars: number,
@@ -168,13 +180,17 @@ export async function renderAttachmentBlock(
     return `## ${name}${fsPath ? `: ${fsPath}` : ''}`;
   }
 
+  if (maxTextChars <= 0 && (kind === 'text' || mimeType === 'inode/directory')) {
+    return `## ${name}${fsPath ? `: ${fsPath}` : ''}\n[Attachment text omitted: input text budget exhausted.]`;
+  }
+
   if (mimeType === 'inode/directory' && fsPath) {
     return await renderDirectoryBlock(name, fsPath, maxTextChars);
   }
 
   if (kind === 'text' && fsPath) {
     try {
-      const buffer = await readFile(fsPath, 'utf8');
+      const buffer = (await readFilePrefix(fsPath, (maxTextChars + 1) * 4)).toString('utf8');
       const text = truncateText(buffer, maxTextChars);
       const fence = fenceForName(name);
       return `## ${name}: ${fsPath}\n\`\`\`${fence}\n${text}\n\`\`\``;
@@ -277,8 +293,11 @@ export async function renderAttachmentContext(
   const lines: string[] = [];
   if (fileAttachments.length > 0) {
     const blocks: string[] = [];
+    let remaining = maxTextChars;
     for (const attachment of fileAttachments) {
-      blocks.push(await renderAttachmentBlock(attachment, maxTextChars));
+      const block = await renderAttachmentBlock(attachment, remaining);
+      blocks.push(block);
+      remaining = Math.max(0, remaining - block.length);
     }
     if (blocks.length > 0) {
       lines.push('# Files mentioned by the user:', '', blocks.join('\n\n'));

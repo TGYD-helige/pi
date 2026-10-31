@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -385,6 +385,38 @@ describe('image attachments produce parallel vision + markdown channels', () => 
     if (!handler) throw new Error('input handler not registered');
     return handler;
   }
+
+  it('clears incoming vision images when every upload exceeds the budget', async () => {
+    const handler = await loadExt();
+    const images = [
+      { type: 'image' as const, mimeType: 'image/png', data: 'A'.repeat(28 * 1024 * 1024) },
+    ];
+    const result = (await handler({ text: 'inspect this', images }, { cwd })) as {
+      text: string;
+      images?: unknown[];
+    };
+    // Pi preserves the original images when a transform leaves this field undefined.
+    expect((result.images ?? images).length).toBe(0);
+    expect(result.text).toContain('Image omitted');
+  });
+
+  it('omits oversized image files while preserving their reference', async () => {
+    const imagePath = join(cwd, 'huge.png');
+    const file = await open(imagePath, 'w');
+    try {
+      await file.truncate(21 * 1024 * 1024);
+    } finally {
+      await file.close();
+    }
+    const handler = await loadExt();
+    const result = (await handler({ text: '@huge.png' }, { cwd })) as {
+      text: string;
+      images?: unknown[];
+    };
+    expect(result.images).toBeUndefined();
+    expect(result.text).toContain(imagePath);
+    expect(result.text).toContain('Image omitted');
+  });
 
   it('writes a markdown ![](path) line for an @-mentioned image and includes its base64 in images[]', async () => {
     const pngPath = join(cwd, 'pic.png');

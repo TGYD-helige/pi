@@ -99,10 +99,7 @@ describe('webFetch - all providers', () => {
 
   it('jina reader: used as default when no fetch.provider', async () => {
     const settings: WebToolSettings = {};
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      text: async () => '# Page Title\n\nContent from Jina Reader',
-    });
+    mockFetch.mockResolvedValueOnce(new Response('# Page Title\n\nContent from Jina Reader'));
 
     const result = await webFetch({ url: 'https://example.com' }, settings, publicLookup);
 
@@ -117,12 +114,12 @@ describe('webFetch - all providers', () => {
     // Jina fails
     mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
     // Local succeeds
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      headers: new Map([['content-type', 'text/html']]),
-      text: async () =>
+    mockFetch.mockResolvedValueOnce(
+      new Response(
         '<html><head><title>Fallback</title></head><body><p>Local content</p></body></html>',
-    });
+        { headers: { 'content-type': 'text/html' } },
+      ),
+    );
 
     const result = await webFetch({ url: 'https://example.com' }, settings, publicLookup);
 

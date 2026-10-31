@@ -8,6 +8,25 @@ export type DnsLookup = (hostname: string) => Promise<Array<{ address: string; f
 
 const defaultLookup: DnsLookup = async (hostname) =>
   nodeLookup(hostname, { all: true, verbatim: true });
+async function lookupWithSignal(
+  lookup: DnsLookup,
+  hostname: string,
+  signal?: AbortSignal,
+): ReturnType<DnsLookup> {
+  if (!signal) return lookup(hostname);
+  signal.throwIfAborted();
+  let onAbort = () => {};
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([lookup(hostname), aborted]);
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+  }
+}
+
 const wellKnownNat64Addresses = new BlockList();
 wellKnownNat64Addresses.addSubnet('64:ff9b::', 96, 'ipv6');
 const globalIpv6Addresses = new BlockList();
@@ -149,8 +168,13 @@ export function trustedHostsFromUrls(...values: Array<string | undefined>): Trus
  */
 async function resolvePublicHttpUrl(
   value: string | URL,
-  options: { lookup?: DnsLookup | undefined; trustedHosts?: TrustedHosts | undefined } = {},
+  options: {
+    lookup?: DnsLookup | undefined;
+    trustedHosts?: TrustedHosts | undefined;
+    signal?: AbortSignal | undefined;
+  } = {},
 ): Promise<{ url: URL; addresses: Array<{ address: string; family: number }> }> {
+  options.signal?.throwIfAborted();
   const lookup = options.lookup ?? defaultLookup;
   let url: URL;
   try {
@@ -173,7 +197,10 @@ async function resolvePublicHttpUrl(
   const literalFamily = isIP(hostname);
   const addresses = literalFamily
     ? [{ address: hostname, family: literalFamily }]
-    : await lookup(hostname).catch(() => []);
+    : await lookupWithSignal(lookup, hostname, options.signal).catch(() => {
+        options.signal?.throwIfAborted();
+        return [];
+      });
   if (addresses.length === 0) {
     throw new Error(`${PUBLIC_DESTINATION} Host "${hostname}" could not be resolved.`);
   }
@@ -192,7 +219,11 @@ async function resolvePublicHttpUrl(
 
 export async function assertPublicHttpUrl(
   value: string | URL,
-  options: { lookup?: DnsLookup | undefined; trustedHosts?: TrustedHosts | undefined } = {},
+  options: {
+    lookup?: DnsLookup | undefined;
+    trustedHosts?: TrustedHosts | undefined;
+    signal?: AbortSignal | undefined;
+  } = {},
 ): Promise<URL> {
   return (await resolvePublicHttpUrl(value, options)).url;
 }
@@ -209,7 +240,11 @@ export async function safeFetch(
   const lookup = options.lookup ?? defaultLookup;
   const maxRedirects = options.maxRedirects ?? 5;
   const trustedHosts = options.trustedHosts;
-  let resolved = await resolvePublicHttpUrl(value, { lookup, trustedHosts });
+  let resolved = await resolvePublicHttpUrl(value, {
+    lookup,
+    trustedHosts,
+    signal: init.signal ?? undefined,
+  });
 
   for (let redirects = 0; ; redirects++) {
     const response = await pinnedFetch(resolved.url, resolved.addresses[0]!, init);
@@ -221,7 +256,11 @@ export async function safeFetch(
     }
     const next = new URL(location, resolved.url);
     await response.body?.cancel().catch(() => {});
-    resolved = await resolvePublicHttpUrl(next, { lookup, trustedHosts });
+    resolved = await resolvePublicHttpUrl(next, {
+      lookup,
+      trustedHosts,
+      signal: init.signal ?? undefined,
+    });
   }
 }
 

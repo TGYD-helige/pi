@@ -501,7 +501,7 @@ export async function preflightRemotion(opts: {
   let cleanupSafe = true;
   try {
     const placeholder = join(dir, 'placeholder.mp4');
-    const encoder = resolveGplFfmpeg(opts.ffmpegPath);
+    const encoder = await resolveGplFfmpeg(opts.ffmpegPath, opts.signal);
     if (!encoder.runnable)
       throw new VideoGenError(
         'Remotion preflight needs an H.264-capable ffmpeg to create browser-playable placeholder video.',
@@ -769,7 +769,7 @@ export async function runRemotion(opts: {
       const qcFrames: string[] = [];
       let qcReportPath: string | undefined;
       if (opts.verifyMedia !== false) {
-        const ffprobe = resolveFfprobe(opts.settings.ffmpegPath);
+        const ffprobe = await resolveFfprobe(opts.settings.ffmpegPath, opts.signal);
         if (!ffprobe.runnable)
           throw new VideoGenError(
             'ffprobe is required to verify Remotion output.',

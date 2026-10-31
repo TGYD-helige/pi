@@ -29,10 +29,16 @@ import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { resolveHome } from '@amaster.ai/pi-shared/settings';
 import type { ExtensionAPI, InputEventResult } from '@earendil-works/pi-coding-agent';
-import { type AttachmentMeta, classifyAttachment, renderAttachmentBlock } from './classify.js';
+import {
+  type AttachmentMeta,
+  classifyAttachment,
+  readFilePrefix,
+  renderAttachmentBlock,
+} from './classify.js';
 
 type ImageContent = { type: 'image'; mimeType: string; data: string };
 
+const MAX_INPUT_IMAGE_BYTES = 20 * 1024 * 1024;
 const SKILL_NAMESPACE = 'skill';
 const NAMESPACE_AT_RE = /(^|\s)@([a-z][a-z0-9_-]*):([^\s@"]+)/gi;
 const QUOTED_AT_RE = /(^|\s)@"([^"]+)"/g;
@@ -43,7 +49,8 @@ type Mention = { kind: 'skill'; name: string } | { kind: 'file'; ref: string };
 type Item =
   | { kind: 'image'; name: string; absolutePath: string; image: ImageContent }
   | { kind: 'file'; meta: AttachmentMeta }
-  | { kind: 'skill'; block: string };
+  | { kind: 'skill'; block: string }
+  | { kind: 'notice'; block: string };
 
 const MIME_TO_EXT: Record<string, string> = {
   'image/png': 'png',
@@ -73,7 +80,11 @@ const MIME_BY_EXT: Record<string, string> = {
 };
 
 export default function piAttachmentsExtension(pi: ExtensionAPI): void {
-  const maxTextChars = Number(process.env.PI_ATTACHMENT_MAX_TEXT_CHARS) || 128_000;
+  const configuredTextChars = Number(process.env.PI_ATTACHMENT_MAX_TEXT_CHARS);
+  const maxTextChars =
+    Number.isSafeInteger(configuredTextChars) && configuredTextChars > 0
+      ? configuredTextChars
+      : 128_000;
 
   pi.on('input', async (event, ctx): Promise<InputEventResult | undefined> => {
     const { mentions } = extractMentions(event.text);
@@ -85,12 +96,19 @@ export default function piAttachmentsExtension(pi: ExtensionAPI): void {
 
     const cwd = ctx.cwd;
     const items: Item[] = [];
+    let remainingImageBytes = MAX_INPUT_IMAGE_BYTES;
     const resolvedPaths = new Set<string>();
     const resolvedSkills = new Set<string>();
 
     // Drag-uploaded images go first, in arrival order. Persist each to disk so
     // we can give the model a concrete path it can pass to file-aware tools.
     for (const image of incomingImages) {
+      const estimatedBytes = Buffer.byteLength(image.data, 'base64');
+      if (estimatedBytes > remainingImageBytes) {
+        items.push({ kind: 'notice', block: '[Image omitted: input image budget is 20 MiB.]' });
+        continue;
+      }
+      remainingImageBytes -= estimatedBytes;
       try {
         const persisted = await persistDragUploadedImage(image, cwd);
         if (resolvedPaths.has(persisted.absolutePath)) continue;
@@ -150,7 +168,18 @@ export default function piAttachmentsExtension(pi: ExtensionAPI): void {
 
         if (kind === 'image') {
           try {
-            const bytes = await readFile(absolutePath);
+            const bytes =
+              stats.size <= remainingImageBytes
+                ? await readFilePrefix(absolutePath, remainingImageBytes + 1)
+                : undefined;
+            if (!bytes || bytes.length > remainingImageBytes) {
+              items.push({
+                kind: 'notice',
+                block: `## ${name}: ${absolutePath}\n[Image omitted: input image budget is 20 MiB.]`,
+              });
+              continue;
+            }
+            remainingImageBytes -= bytes.length;
             items.push({
               kind: 'image',
               name,
@@ -193,13 +222,16 @@ export default function piAttachmentsExtension(pi: ExtensionAPI): void {
 
     const cleanText = stripMentions(event.text);
     const renderedItems: string[] = [];
+    let remainingTextChars = maxTextChars;
     for (const item of items) {
       if (item.kind === 'image') {
         renderedItems.push(renderImageMarkdown(item.name, item.absolutePath));
-      } else if (item.kind === 'skill') {
+      } else if (item.kind === 'skill' || item.kind === 'notice') {
         renderedItems.push(item.block);
       } else {
-        renderedItems.push(await renderAttachmentBlock(item.meta, maxTextChars));
+        const block = await renderAttachmentBlock(item.meta, remainingTextChars);
+        renderedItems.push(block);
+        remainingTextChars = Math.max(0, remainingTextChars - block.length);
       }
     }
 
@@ -211,7 +243,7 @@ export default function piAttachmentsExtension(pi: ExtensionAPI): void {
     return {
       action: 'transform',
       text,
-      ...(outputImages.length > 0 ? { images: outputImages } : {}),
+      ...(outputImages.length > 0 || incomingImages.length > 0 ? { images: outputImages } : {}),
     };
   });
 }
