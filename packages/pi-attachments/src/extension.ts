@@ -24,9 +24,10 @@
  * with a sha256-derived filename and surface that path. They're rendered
  * before the @-mention block, matching "user uploads first, then types".
  */
-import { createHash } from 'node:crypto';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { setImmediate as yieldImmediate } from 'node:timers/promises';
 import { resolveHome } from '@amaster.ai/pi-shared/settings';
 import type { ExtensionAPI, InputEventResult } from '@earendil-works/pi-coding-agent';
 import {
@@ -39,6 +40,9 @@ import {
 type ImageContent = { type: 'image'; mimeType: string; data: string };
 
 const MAX_INPUT_IMAGE_BYTES = 20 * 1024 * 1024;
+const MAX_UPLOAD_SOURCE_BYTES = 128 * 1024 * 1024;
+const IMAGE_OMITTED =
+  '[Image omitted: input image budget is 20 MiB. Inspect a resized or cropped view of the source image before drawing conclusions.]';
 const SKILL_NAMESPACE = 'skill';
 const NAMESPACE_AT_RE = /(^|\s)@([a-z][a-z0-9_-]*):([^\s@"]+)/gi;
 const QUOTED_AT_RE = /(^|\s)@"([^"]+)"/g;
@@ -97,6 +101,7 @@ export default function piAttachmentsExtension(pi: ExtensionAPI): void {
     const cwd = ctx.cwd;
     const items: Item[] = [];
     let remainingImageBytes = MAX_INPUT_IMAGE_BYTES;
+    let remainingUploadBytes = MAX_UPLOAD_SOURCE_BYTES;
     const resolvedPaths = new Set<string>();
     const resolvedSkills = new Set<string>();
 
@@ -104,31 +109,44 @@ export default function piAttachmentsExtension(pi: ExtensionAPI): void {
     // we can give the model a concrete path it can pass to file-aware tools.
     for (const image of incomingImages) {
       const estimatedBytes = Buffer.byteLength(image.data, 'base64');
-      if (estimatedBytes > remainingImageBytes) {
-        items.push({ kind: 'notice', block: '[Image omitted: input image budget is 20 MiB.]' });
-        continue;
-      }
-      remainingImageBytes -= estimatedBytes;
+      const fitsVision = estimatedBytes <= remainingImageBytes;
       try {
-        const persisted = await persistDragUploadedImage(image, cwd);
-        if (resolvedPaths.has(persisted.absolutePath)) continue;
-        resolvedPaths.add(persisted.absolutePath);
+        const persisted =
+          estimatedBytes <= remainingUploadBytes
+            ? await persistDragUploadedImage(image, cwd, ctx.signal)
+            : undefined;
+        if (persisted && resolvedPaths.has(persisted.absolutePath)) continue;
+        if (persisted) {
+          resolvedPaths.add(persisted.absolutePath);
+          remainingUploadBytes -= estimatedBytes;
+        }
+        if (!fitsVision) {
+          items.push({
+            kind: 'notice',
+            block: persisted
+              ? `## ${persisted.name}: ${persisted.absolutePath}\n${IMAGE_OMITTED}`
+              : '[Image omitted: source storage budget is 128 MiB. Provide a file path or a smaller image for inspection.]',
+          });
+          continue;
+        }
+        remainingImageBytes -= estimatedBytes;
         items.push({
           kind: 'image',
-          name: persisted.name,
-          absolutePath: persisted.absolutePath,
+          name: persisted?.name ?? 'uploaded-image',
+          absolutePath: persisted?.absolutePath ?? '',
           image,
         });
       } catch {
-        // If we can't persist (read-only fs, permissions), keep the vision
-        // channel anyway by recording the image with no path. The markdown
-        // line will use a placeholder so the model knows the image is there.
-        items.push({
-          kind: 'image',
-          name: 'uploaded-image',
-          absolutePath: '',
-          image,
-        });
+        ctx.signal?.throwIfAborted();
+        if (fitsVision) {
+          remainingImageBytes -= estimatedBytes;
+          items.push({ kind: 'image', name: 'uploaded-image', absolutePath: '', image });
+        } else
+          items.push({
+            kind: 'notice',
+            block:
+              '[Image omitted: upload could not be retained and exceeds the vision budget. Provide a file path or a smaller image for inspection.]',
+          });
       }
     }
 
@@ -175,7 +193,7 @@ export default function piAttachmentsExtension(pi: ExtensionAPI): void {
             if (!bytes || bytes.length > remainingImageBytes) {
               items.push({
                 kind: 'notice',
-                block: `## ${name}: ${absolutePath}\n[Image omitted: input image budget is 20 MiB.]`,
+                block: `## ${name}: ${absolutePath}\n${IMAGE_OMITTED}`,
               });
               continue;
             }
@@ -269,23 +287,51 @@ function escapeMarkdown(value: string): string {
  * `<cwd>/.pi/uploads/`, naming it by sha256 of its bytes. Same image uploaded
  * twice → same path, no duplicate write.
  */
+function* imageChunks(data: string): Generator<Buffer> {
+  let remainder = '';
+  for (let offset = 0; offset < data.length; offset += 64 * 1024) {
+    const chunk = remainder + data.slice(offset, offset + 64 * 1024).replace(/\s/g, '');
+    const end = chunk.length - (chunk.length % 4);
+    if (end) yield Buffer.from(chunk.slice(0, end), 'base64');
+    remainder = chunk.slice(end);
+  }
+  if (remainder) yield Buffer.from(remainder, 'base64');
+}
+
 async function persistDragUploadedImage(
   image: ImageContent,
   cwd: string,
+  signal?: AbortSignal,
 ): Promise<{ absolutePath: string; name: string }> {
-  const bytes = Buffer.from(image.data, 'base64');
-  const hash = createHash('sha256').update(bytes).digest('hex').slice(0, 16);
+  const digest = createHash('sha256');
+  let chunks = 0;
+  for (const bytes of imageChunks(image.data)) {
+    signal?.throwIfAborted();
+    digest.update(bytes);
+    if (++chunks % 16 === 0) await yieldImmediate();
+  }
+  signal?.throwIfAborted();
+  const hash = digest.digest('hex').slice(0, 16);
   const ext = MIME_TO_EXT[image.mimeType] ?? 'png';
   const name = `${hash}.${ext}`;
   const dir = path.resolve(cwd, '.pi', 'uploads');
   const absolutePath = path.join(dir, name);
-
   await mkdir(dir, { recursive: true });
   try {
     await stat(absolutePath);
-    // already on disk — same content (sha256 collision-resistant)
-  } catch {
-    await writeFile(absolutePath, bytes);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    const temporary = `${absolutePath}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temporary, imageChunks(image.data), {
+        flag: 'wx',
+        ...(signal ? { signal } : {}),
+      });
+      signal?.throwIfAborted();
+      await rename(temporary, absolutePath);
+    } finally {
+      await rm(temporary, { force: true });
+    }
   }
   return { absolutePath, name };
 }

@@ -58,7 +58,10 @@ export type Workspace = {
   name: string;
 };
 
+export type ExecutionOptions = { signal?: AbortSignal; deadline: number };
+
 export interface TeamworkProvider {
+  withExecution(options: ExecutionOptions): TeamworkProvider;
   name: string;
   listWorkspaces(): Promise<Workspace[]>;
   listIssues(filter?: IssueListFilter): Promise<Issue[]>;
@@ -83,6 +86,7 @@ export interface TeamworkProvider {
 export type ExecFn = (
   command: string,
   args: string[],
+  options?: ExecutionOptions,
 ) => Promise<{ stdout: string; stderr: string; code: number }>;
 
 export type MulticaAdapterConfig = {

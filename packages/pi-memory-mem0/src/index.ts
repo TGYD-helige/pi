@@ -28,8 +28,10 @@
  * Trusted project settings are loaded without environment interpolation.
  */
 
+import { createHash } from 'node:crypto';
 import { isProjectTrusted, loadPiSettings } from '@amaster.ai/pi-shared/settings';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { type CapturedTurn, CaptureQueue, type CaptureState } from './capture.js';
 import { dedupProviderMemories } from './dedup.js';
 import { Prefetch } from './prefetch.js';
 import { formatRecalledMemory, redactMemoryText, scopeMemoryUserId } from './privacy.js';
@@ -47,6 +49,7 @@ const SETTINGS_KEY = 'pi-memory-mem0';
 const STATUS_KEY = 'mem0';
 const MEMORY_TOOL_NAME = 'mem0_memory';
 const SESSION_RECALL_ENTRY = 'mem0-session-recall';
+const CAPTURE_ENTRY = 'mem0-pending-capture';
 
 function loadConfig(cwd: string, projectTrusted = false): Mem0ExtensionConfig {
   try {
@@ -83,7 +86,8 @@ export default function mem0Extension(pi: ExtensionAPI): void {
   let activeRecallFrequency: Mem0RecallFrequency = 'user-input';
   let recallQueuedThisSession = false;
   let lastUserText = '';
-  let pendingWrite: Promise<void> = Promise.resolve();
+  let capture: CaptureQueue | undefined;
+  const captureState: CaptureState = {};
   let sessionEpoch = 0;
 
   pi.on('session_start', async (_event, ctx) => {
@@ -92,6 +96,8 @@ export default function mem0Extension(pi: ExtensionAPI): void {
     // after the await keeps the superseded handler from clobbering the live
     // session's provider, prefetch, and tool-enablement state.
     const epoch = ++sessionEpoch;
+    capture?.close();
+    capture = undefined;
     settleProviderReady(undefined);
     let settleReady: (ready: Mem0Provider | undefined) => void = () => {};
     providerReady = new Promise((resolve) => {
@@ -121,6 +127,12 @@ export default function mem0Extension(pi: ExtensionAPI): void {
         throw new Error(
           'topK must be an integer greater than 0. Use autoRecall: false to disable automatic recall.',
         );
+      }
+      if (
+        config.requestTimeoutMs !== undefined &&
+        (!Number.isInteger(config.requestTimeoutMs) || config.requestTimeoutMs <= 0)
+      ) {
+        throw new Error('requestTimeoutMs must be a positive integer.');
       }
       for (const key of ['autoCapture', 'autoRecall', 'toolEnabled'] as const) {
         if (config[key] !== undefined && typeof config[key] !== 'boolean') {
@@ -186,18 +198,63 @@ export default function mem0Extension(pi: ExtensionAPI): void {
       agentId = resolvedAgentId;
       activeMode = mode;
       activeMemoryMode = memoryMode;
+      const sessionId = ctx.sessionManager.getSessionId();
       activeAutoCapture = config.autoCapture ?? memoryMode !== 'active';
       const autoRecall = config.autoRecall ?? memoryMode !== 'active';
-      activeRecallFrequency = recallFrequency;
-      const sessionId = ctx.sessionManager.getSessionId();
-      recallQueuedThisSession = ctx.sessionManager
-        .getEntries()
-        .some(
-          (entry) =>
-            entry.type === 'custom' &&
-            entry.customType === SESSION_RECALL_ENTRY &&
-            entry.data === sessionId,
+      const entries = activeAutoCapture || autoRecall ? ctx.sessionManager.getEntries() : [];
+      const scopeKey = activeAutoCapture
+        ? createHash('sha256')
+            .update(JSON.stringify([config, userId, agentId]))
+            .digest('hex')
+        : undefined;
+      let restored: CapturedTurn[] = [];
+      let captureEntryId: string | null | undefined;
+      recallQueuedThisSession = false;
+      for (const entry of entries) {
+        if (entry.type !== 'custom') continue;
+        if (entry.customType === SESSION_RECALL_ENTRY && entry.data === sessionId)
+          recallQueuedThisSession = true;
+        if (!scopeKey || entry.customType !== CAPTURE_ENTRY) continue;
+        const data = entry.data as
+          | { scopeKey?: string; sessionId?: string; pending?: CapturedTurn[] }
+          | undefined;
+        if (
+          data?.scopeKey === scopeKey &&
+          data.sessionId === sessionId &&
+          Array.isArray(data.pending)
+        ) {
+          restored = data.pending;
+          captureEntryId = entry.id;
+        }
+      }
+      if (scopeKey) {
+        let snapshotPending = restored;
+        capture = new CaptureQueue(
+          provider,
+          { userId, ...(agentId ? { agentId } : {}) },
+          captureState,
+          (pending) => {
+            pi.appendEntry(CAPTURE_ENTRY, { scopeKey, sessionId, pending });
+            snapshotPending = pending;
+            captureEntryId = ctx.sessionManager.getLeafId?.();
+          },
+          restored,
+          (message) => ctx.ui.notify(message, 'warning'),
+          config.requestTimeoutMs ?? 120_000,
+          (turns) => {
+            const indices = turns.map((turn) => snapshotPending.indexOf(turn));
+            // Reference the already-durable snapshot instead of copying potentially large payloads.
+            pi.appendEntry(
+              'mem0-deferred-capture',
+              captureEntryId && indices.every((index) => index >= 0)
+                ? { scopeKey, sessionId, sourceEntryId: captureEntryId, indices }
+                : { scopeKey, sessionId, turns },
+            );
+          },
         );
+        capture.start();
+      }
+      activeRecallFrequency = recallFrequency;
       if (autoRecall) {
         prefetch = new Prefetch(provider, userId, {
           searchState: recallSearchState,
@@ -246,7 +303,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
     }
   });
 
-  pi.on('turn_end', async (event) => {
+  pi.on('turn_end', async (event, ctx) => {
     if (!provider || !activeAutoCapture || !lastUserText) return;
 
     const msg = event.message as { role?: string; content?: unknown };
@@ -255,32 +312,31 @@ export default function mem0Extension(pi: ExtensionAPI): void {
 
     const userText = lastUserText;
     lastUserText = '';
-    const activeProvider = provider;
-    const activeUserId = userId;
-    const activeAgentId = agentId;
-    pendingWrite = pendingWrite
-      .catch(() => {})
-      .then(async () => {
-        const result = await activeProvider.add(
-          [
-            { role: 'user', content: redactMemoryText(userText) },
-            { role: 'assistant', content: redactMemoryText(text) },
-          ],
+    try {
+      if (
+        !capture?.enqueue(
           {
-            userId: activeUserId,
-            ...(activeAgentId ? { agentId: activeAgentId } : {}),
+            messages: [
+              { role: 'user', content: redactMemoryText(userText) },
+              { role: 'assistant', content: redactMemoryText(text) },
+            ],
+            observedAt: new Date().toISOString(),
           },
+          ctx.signal,
+        )
+      ) {
+        ctx.ui.notify(
+          'Mem0 automatic capture skipped: pending outbox is full or this turn exceeds 64000 characters. The original turn remains in session history.',
+          'warning',
         );
-        const { message, isError } = getAddResult(result);
-        if (message && (isError || process.env.DEBUG?.includes('pi-memory-mem0'))) {
-          console.error(`[pi-memory-mem0] turn capture: ${message}`);
-        }
-      })
-      .catch((err) => {
-        console.error(
-          `[pi-memory-mem0] failed to store turn: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      });
+      }
+    } catch {
+      console.error('[pi-memory-mem0] unable to persist automatic capture');
+      ctx.ui.notify(
+        'Mem0 capture could not be saved. The original turn remains in session history.',
+        'warning',
+      );
+    }
   });
 
   pi.on('before_agent_start', async (event) => {
@@ -303,7 +359,8 @@ export default function mem0Extension(pi: ExtensionAPI): void {
     settleProviderReady(undefined);
     activeToolEnabled = false;
     prefetch?.cancel();
-    await pendingWrite;
+    capture?.close();
+    capture = undefined;
     provider = undefined;
     prefetch = undefined;
     agentId = undefined;
@@ -311,7 +368,6 @@ export default function mem0Extension(pi: ExtensionAPI): void {
     activeRecallFrequency = 'user-input';
     recallQueuedThisSession = false;
     lastUserText = '';
-    pendingWrite = Promise.resolve();
   });
 
   pi.registerCommand('mem0', {

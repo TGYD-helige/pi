@@ -28,16 +28,32 @@ import type {
 // ---------------------------------------------------------------------------
 
 type Mem0ScopeOptions = { userId: string; agentId?: string; signal?: AbortSignal };
-type Mem0AddOptions = Mem0ScopeOptions & { infer?: boolean; observedAt?: Date | string };
+type Mem0AddOptions = Mem0ScopeOptions & {
+  infer?: boolean;
+  observedAt?: Date | string;
+  timeoutMs?: number;
+};
 type Mem0SearchOptions = Mem0ScopeOptions & { topK?: number };
 const DEDUP_PAGE_SIZE = 200;
 const MAX_DEDUP_ITEMS_PER_SCOPE = 10_000;
 const MAX_DEDUP_PAGES = MAX_DEDUP_ITEMS_PER_SCOPE / DEDUP_PAGE_SIZE;
 const SELF_HOSTED_DEDUP_LIMIT = 1000;
 
+export class UnsupportedObservationDateError extends Error {
+  constructor() {
+    super(
+      'Self-hosted Mem0 observedAt is unsupported. Use Platform or embedded mode for historical dates.',
+    );
+  }
+}
+
 export interface Mem0Provider {
+  /** False when historical observation dates cannot be represented by this backend. */
+  readonly supportsObservationDates?: boolean;
   /** True only when aborting search stops the underlying request. */
   readonly supportsSearchCancellation?: boolean;
+  /** True only when aborting add stops the underlying request. */
+  readonly supportsAddCancellation?: boolean;
   add(
     messages: Array<{ role: string; content: string }>,
     opts: Mem0AddOptions,
@@ -226,6 +242,7 @@ interface PlatformClient {
 
 class PlatformProvider implements Mem0Provider {
   readonly supportsSearchCancellation = true;
+  readonly supportsAddCancellation = true;
   private client: PlatformClient | undefined;
   private initPromise: Promise<void> | null = null;
   private readonly requestSignal = new AsyncLocalStorage<AbortSignal>();
@@ -276,7 +293,7 @@ class PlatformProvider implements Mem0Provider {
     };
     if (opts.infer === false) addOpts.infer = false;
     // Platform mem0 exposes a `timestamp` field on add(); pass observedAt
-    // through as an ISO string. (OSS mode honors observedAt via prompt
+    // through as an ISO string. (Embedded mode honors observedAt via prompt
     // rewriting instead — see OSSProvider.add.)
     if (opts.observedAt) {
       const d = new Date(opts.observedAt);
@@ -389,7 +406,9 @@ class PlatformProvider implements Mem0Provider {
 // ---------------------------------------------------------------------------
 
 class SelfHostedProvider implements Mem0Provider {
+  readonly supportsObservationDates = false;
   readonly supportsSearchCancellation = true;
+  readonly supportsAddCancellation = true;
   private readonly baseUrl: string;
 
   constructor(
@@ -411,10 +430,11 @@ class SelfHostedProvider implements Mem0Provider {
     path: string,
     init: RequestInit,
     callerSignal?: AbortSignal,
+    timeoutMs = this.requestTimeoutMs,
   ): Promise<unknown> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (this.apiKey) headers['X-API-Key'] = this.apiKey;
-    const timeoutSignal = AbortSignal.timeout(this.requestTimeoutMs);
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
     const signal = callerSignal ? AbortSignal.any([callerSignal, timeoutSignal]) : timeoutSignal;
     let response: Response;
     try {
@@ -442,6 +462,7 @@ class SelfHostedProvider implements Mem0Provider {
     messages: Array<{ role: string; content: string }>,
     opts: Mem0AddOptions,
   ): Promise<AddResult | null> {
+    if (opts.observedAt !== undefined) throw new UnsupportedObservationDateError();
     return (await this.request(
       '/memories',
       {
@@ -454,6 +475,7 @@ class SelfHostedProvider implements Mem0Provider {
         }),
       },
       opts.signal,
+      opts.timeoutMs,
     )) as AddResult;
   }
 

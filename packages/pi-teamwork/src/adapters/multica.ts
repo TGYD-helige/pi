@@ -1,6 +1,7 @@
 import type {
   Comment,
   ExecFn,
+  ExecutionOptions,
   Issue,
   IssueCreateInput,
   IssueListFilter,
@@ -82,13 +83,18 @@ export class MulticaAdapter implements TeamworkProvider {
   private readonly defaultWorkspaceArgs: string[];
 
   constructor(
-    config: MulticaAdapterConfig,
+    private readonly config: MulticaAdapterConfig,
     private readonly exec: ExecFn,
+    private readonly execution?: ExecutionOptions,
   ) {
     this.binary = config.binary?.trim() || 'multica';
     this.defaultWorkspaceArgs = config.workspace?.trim()
       ? ['--workspace-id', config.workspace.trim()]
       : [];
+  }
+
+  withExecution(options: ExecutionOptions): TeamworkProvider {
+    return new MulticaAdapter(this.config, this.exec, options);
   }
 
   private wsArgs(workspaceId?: string): string[] {
@@ -240,7 +246,15 @@ export class MulticaAdapter implements TeamworkProvider {
   }
 
   private async run(args: string[]): Promise<string> {
-    const { stdout, stderr, code } = await this.exec(this.binary, args);
+    this.execution?.signal?.throwIfAborted();
+    if (this.execution && Date.now() >= this.execution.deadline)
+      throw new Error('Teamwork operation timed out.');
+    const { stdout, stderr, code } = await (this.execution
+      ? this.exec(this.binary, args, this.execution)
+      : this.exec(this.binary, args));
+    this.execution?.signal?.throwIfAborted();
+    if (this.execution && Date.now() >= this.execution.deadline)
+      throw new Error('Teamwork operation timed out.');
     if (code !== 0) {
       const message = stderr.trim() || stdout.trim() || `Exit code ${code}`;
       throw new Error(`multica ${args[0]} failed: ${message}`);

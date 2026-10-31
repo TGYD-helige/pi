@@ -343,6 +343,17 @@ Rules:
 
 ---
 
+## Execution Efficiency and Performance
+
+- Trace startup, per-prompt, per-tool, and shutdown paths before optimizing. Run cheap enabled/model/trust checks before imports, history scans, or external work; keep independent work off the prompt's critical path.
+- Use asynchronous I/O and child processes on runtime paths. Select files by metadata before decoding history, and bound bytes read, items retained, aggregate payload size, and concurrent work before materializing full inputs. Include the newest item and formatting overhead in output budgets.
+- Give each external operation one end-to-end deadline, including metadata, queue waits, DNS, response bodies, and subprocesses. Propagate caller cancellation, clean up listeners/timers, and prevent late completions from starting work or publishing stale results. An uncancellable underlying operation must remain single-flight until it actually settles.
+- Bound background queues and shutdown waits. Persist accepted writes before acknowledging them, retain unfinished data for recovery, and make capacity rejection visible; preserve write ordering and report ambiguous outcomes rather than silently discarding or repeatedly retrying them.
+- Bound cache size and lifetime, key by all result-affecting inputs and trust scope, and coalesce identical in-flight work while preserving each caller's cancellation. Re-read mutable authorization policy for each decision unless invalidation guarantees equally prompt revocation.
+- Preserve public lifecycle, trace, privacy, and durability contracts while reducing work. Add focused regressions for the changed limit, cancellation, overload, or invalidation behavior; use representative measurements for speed claims and state untested environments.
+
+---
+
 ## GitHub Issues and Pull Requests
 
 - All authored GitHub content MUST be written in English when creating or updating issues, pull requests, comments, reviews, or discussions, including titles, bodies, and review comments. Preserve exact code, identifiers, logs, and source quotations when needed as evidence.

@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { loadPiPolicyProfiles } from '@amaster.ai/pi-shared/settings';
+import { loadPiPolicyProfiles, loadPiPolicyProfilesAsync } from '@amaster.ai/pi-shared/settings';
 import type { SecurityProfileConfig } from './index.js';
 
 export function loadPolicyDir(dirPath: string): Record<string, SecurityProfileConfig> {
@@ -28,6 +28,7 @@ export function loadPolicyDir(dirPath: string): Record<string, SecurityProfileCo
 }
 
 export type LoadFilePoliciesOptions = {
+  signal?: AbortSignal;
   cwd: string;
   configDir?: string;
   projectTrusted?: boolean;
@@ -41,4 +42,10 @@ export function loadFilePolicies(
     projectTrusted: options.projectTrusted === true,
     ...(options.configDir !== undefined ? { configDir: options.configDir } : {}),
   });
+}
+
+export function loadFilePoliciesAsync(
+  options: LoadFilePoliciesOptions,
+): Promise<Record<string, SecurityProfileConfig>> {
+  return loadPiPolicyProfilesAsync<SecurityProfileConfig>(options);
 }

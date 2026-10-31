@@ -276,9 +276,11 @@ export default function piWebToolExtension(pi: ExtensionAPI): void {
         lines.push('');
         lines.push(content);
 
-        const structuredContent = fetchOutput({ url: result.url, title: result.title, content });
+        const structuredContent = fetchOutput({ ...result, content });
         if (structuredContent.truncated)
-          lines.unshift('[Result truncated: some content was omitted.]');
+          lines.unshift(
+            '[Partial page: some content was omitted. Use focused search or a browser to inspect missing sections; avoid repeating the same full-page fetch.]',
+          );
         const text = boundText(lines.join('\n'));
         return {
           content: [{ type: 'text' as const, text }],
@@ -297,7 +299,7 @@ export default function piWebToolExtension(pi: ExtensionAPI): void {
             ? 'The configured summary model extracts or summarizes the fetched content according to prompt; returns its response.'
             : 'Returns fetched content directly; prompt is not applied because no summary model is configured. Analyze the returned content yourself.',
           'Loopback, private, link-local, metadata, credentialed, and unsafe redirect destinations are rejected.',
-          'Large results may be truncated; use the source URL when more context is needed.',
+          'Truncated results are partial evidence. Use focused web_search or a browser on the source URL to retrieve missing sections; do not assume omitted information is absent.',
         ].join('\n'),
         parameters: Type.Object({
           url: Type.String({ description: 'The public HTTP(S) URL to fetch content from.' }),

@@ -140,6 +140,42 @@ describe('consolidation', () => {
       expect(result.length).toBeLessThanOrEqual(8200);
     });
 
+    it('includes evidence from both ends of a single oversized turn', () => {
+      const prompt = buildConsolidationUserPrompt([
+        {
+          id: 'large',
+          sessionId: 'sess',
+          conversationId: 'sess',
+          userMessage: 'My preference is tea. ' + 'detail '.repeat(2000),
+          assistantMessage: 'Confirmed preference: tea.',
+          model: { provider: 'test', model: 'test' },
+          createdAt: '2026-10-31T00:00:00Z',
+        },
+      ]);
+      expect(prompt.length).toBeLessThanOrEqual(8000);
+      expect(prompt).toContain('My preference is tea.');
+      expect(prompt).toContain('Confirmed preference: tea.');
+      expect(prompt).toContain('history middle omitted');
+    });
+
+    it('includes every selected session when individual turns exceed the prompt budget', () => {
+      const turns: DreamTurn[] = Array.from({ length: 32 }, (_, i) => ({
+        id: String(i),
+        sessionId: `project-${i}`,
+        conversationId: 'conv',
+        userMessage: `Preference-${i}: ` + 'x'.repeat(9000),
+        assistantMessage: 'y'.repeat(9000) + ` Confirmed-${i}.`,
+        model: { provider: 'test', model: 'test' },
+        createdAt: '2026-06-20T10:00:00Z',
+      }));
+      const prompt = buildConsolidationUserPrompt(turns);
+      expect(prompt.length).toBeLessThanOrEqual(8000);
+      for (let i = 0; i < 32; i++) {
+        expect(prompt).toContain(`Preference-${i}:`);
+        expect(prompt).toContain(`Confirmed-${i}.`);
+      }
+    });
+
     it('includes instruction to begin with memory_read', () => {
       const turns: DreamTurn[] = [
         {

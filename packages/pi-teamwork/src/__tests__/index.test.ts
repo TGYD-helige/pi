@@ -28,6 +28,36 @@ describe('piTeamworkExtension Multica provider', () => {
     });
   }
 
+  it('allows ordinary prompts while CLI initialization is pending and aborts that CLI at shutdown', async () => {
+    const calls: Array<{ timeout?: number; signal?: AbortSignal }> = [];
+    const pi = {
+      on: vi.fn(),
+      registerCommand: vi.fn(),
+      registerTool: vi.fn(),
+      exec: vi.fn((_command, _args, options) => {
+        calls.push(options);
+        return new Promise(() => {});
+      }),
+    };
+    piTeamworkExtension(pi as never);
+    const handler = (name: string) => pi.on.mock.calls.find((call) => call[0] === name)![1];
+    await handler('session_start')(
+      {},
+      { cwd: '/tmp', ui: { notify: vi.fn(), setStatus: vi.fn() } },
+    );
+    let promptReady = false;
+    const prompt = handler('before_agent_start')({ systemPrompt: 'base' }).then(() => {
+      promptReady = true;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(promptReady).toBe(true);
+    await prompt;
+    expect(calls[0]!.timeout).toBeGreaterThan(0);
+    expect(calls[0]!.timeout).toBeLessThanOrEqual(10_000);
+    await handler('session_shutdown')({}, {});
+    expect(calls[0]!.signal?.aborted).toBe(true);
+  });
+
   it('registers teamwork tools for Multica sessions', async () => {
     const previousSettings = process.env.PI_SETTINGS_DIR;
     const settingsDir = await createSettingsDir({
@@ -197,7 +227,8 @@ describe('piTeamworkExtension Multica provider', () => {
     await multicaStart;
 
     expect(statusUpdates.at(-1)).toBe('teamwork: disabled');
-    expect(tools.size).toBe(0);
+    expect(tools.size).toBeGreaterThan(0);
+    expect(pi.setActiveTools).toHaveBeenLastCalledWith([]);
 
     if (previousSettings === undefined) delete process.env.PI_SETTINGS_DIR;
     else process.env.PI_SETTINGS_DIR = previousSettings;
@@ -517,6 +548,24 @@ describe('MulticaAdapter', () => {
       await adapter.listIssues();
       expect(cmds[0]).toBe('/usr/local/bin/multica-dev');
     });
+  });
+});
+
+describe('MulticaAdapter cancellation', () => {
+  it('does not run update or get after cancellation during the status write', async () => {
+    const controller = new AbortController();
+    const exec = vi.fn(async () => {
+      controller.abort();
+      return { stdout: '{}', stderr: '', code: 0 };
+    });
+    const adapter = new MulticaAdapter({}, exec).withExecution({
+      signal: controller.signal,
+      deadline: Date.now() + 30_000,
+    });
+    await expect(
+      adapter.updateIssue('issue-1', { status: 'done', title: 'updated' }),
+    ).rejects.toThrow();
+    expect(exec).toHaveBeenCalledTimes(1);
   });
 });
 

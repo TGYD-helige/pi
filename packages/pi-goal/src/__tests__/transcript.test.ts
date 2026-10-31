@@ -52,9 +52,12 @@ describe('buildTranscript', () => {
     expect(out).not.toContain('AAAAAAAAAA');
   });
 
-  it('always keeps at least the newest message even if over cap', () => {
+  it('bounds the newest message even when it alone exceeds the cap', () => {
     const messages = [{ role: 'user', content: 'X'.repeat(100) }];
-    expect(buildTranscript(messages, 10)).toContain('X'.repeat(100));
+    const result = buildTranscriptWithMeta(messages, 10);
+    expect(result.text.length).toBe(10);
+    expect(result.text).toContain('[user]');
+    expect(result.omitted).toBe(1);
   });
 });
 
@@ -79,6 +82,35 @@ describe('buildTranscriptWithMeta', () => {
     // Newest survives; at least one older text message is dropped.
     expect(result.text).toContain('CCCCCCCCCC');
     expect(result.omitted).toBeGreaterThan(0);
+  });
+
+  it('retains the beginning and decisive ending of an oversized newest message', () => {
+    const result = buildTranscriptWithMeta(
+      [
+        {
+          role: 'assistant',
+          content: 'Verification began. ' + 'detail '.repeat(2000) + 'ALL TESTS PASSED.',
+        },
+      ],
+      200,
+    );
+    expect(result.text.length).toBeLessThanOrEqual(200);
+    expect(result.text).toContain('[assistant] Verification began.');
+    expect(result.text.endsWith('ALL TESTS PASSED.')).toBe(true);
+    expect(result.text).toMatch(/omitted/i);
+    expect(result.omitted).toBe(1);
+  });
+
+  it('includes separators in the budget', () => {
+    const result = buildTranscriptWithMeta(
+      [
+        { role: 'user', content: 'a' },
+        { role: 'user', content: 'b' },
+      ],
+      16,
+    );
+    expect(result.text.length).toBeLessThanOrEqual(16);
+    expect(result.omitted).toBe(1);
   });
 
   it('does not count text-less messages as omitted', () => {

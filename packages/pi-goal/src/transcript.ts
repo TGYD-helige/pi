@@ -12,7 +12,7 @@ interface MessageLike {
 export interface TranscriptResult {
   /** Formatted transcript, oldest included message first. */
   text: string;
-  /** Count of text-bearing messages dropped because of the char cap. */
+  /** Count of text-bearing messages omitted wholly or partially by the char cap. */
   omitted: number;
 }
 
@@ -26,6 +26,7 @@ export function buildTranscriptWithMeta(messages: unknown[], maxChars: number): 
   let total = 0;
   let included = 0;
   let textMessages = 0;
+  let truncated = 0;
 
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i] as MessageLike | undefined;
@@ -34,16 +35,24 @@ export function buildTranscriptWithMeta(messages: unknown[], maxChars: number): 
     if (!text) continue;
     textMessages += 1;
     const line = `[${msg.role}] ${text}`;
-    if (total + line.length > maxChars && lines.length > 0) {
-      // Cap hit: this and every older text message is omitted.
-      continue;
-    }
-    lines.unshift(line);
-    total += line.length;
+    const separator = lines.length ? 2 : 0;
+    const remaining = Math.max(0, maxChars - total - separator);
+    if (line.length > remaining && (lines.length > 0 || remaining === 0)) continue;
+    const marker = '\n[message middle omitted]\n';
+    const prefix = `[${msg.role}] `;
+    const head = Math.max(prefix.length, Math.floor((remaining - marker.length) / 3));
+    const tail = remaining - marker.length - head;
+    const bounded =
+      line.length > remaining && tail > 0
+        ? `${line.slice(0, head)}${marker}${line.slice(-tail)}`
+        : line.slice(0, remaining);
+    if (bounded.length < line.length) truncated++;
+    lines.unshift(bounded);
+    total += bounded.length + separator;
     included += 1;
   }
 
-  return { text: lines.join('\n\n'), omitted: Math.max(0, textMessages - included) };
+  return { text: lines.join('\n\n'), omitted: Math.max(0, textMessages - included + truncated) };
 }
 
 export function buildTranscript(messages: unknown[], maxChars: number): string {

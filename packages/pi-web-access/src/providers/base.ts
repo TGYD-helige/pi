@@ -49,6 +49,7 @@ export interface SearchResponse {
 }
 
 export interface FetchResponse {
+  truncated?: boolean;
   url: string;
   title: string;
   content: string;

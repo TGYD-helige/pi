@@ -70,6 +70,17 @@ describe('tool-output', () => {
     expect(result.results.every((item) => item.url === url)).toBe(true);
     expect(Value.Check(searchOutputSchema, result)).toBe(true);
   });
+  it('keeps source truncation visible after a short summary', () => {
+    expect(
+      fetchOutput({
+        url: 'https://example.com',
+        title: 'Title',
+        content: 'Short summary',
+        truncated: true,
+      }).truncated,
+    ).toBe(true);
+  });
+
   it('bounds fetched data without changing the source URL', () => {
     const result = fetchOutput({
       url: 'https://example.com',

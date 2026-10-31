@@ -497,6 +497,7 @@ export {
   type DnsLookup,
   hostFromUrl,
   readResponseBytes,
+  readResponsePrefix,
   safeFetch,
   type TrustedHosts,
   trustedHostsFromUrls,

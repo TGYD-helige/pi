@@ -1,8 +1,13 @@
-import { mkdir, mkdtemp, open, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { extractMentions, skillSearchPaths, stripMentions } from '../extension.js';
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, writeFile: vi.fn(actual.writeFile) };
+});
 
 describe('extractMentions', () => {
   it('extracts unquoted @path file references', () => {
@@ -169,7 +174,7 @@ describe('skill loading via extension input handler', () => {
             text: string;
             images?: Array<{ type: 'image'; mimeType: string; data: string }>;
           },
-          ctx: { cwd: string },
+          ctx: { cwd: string; signal?: AbortSignal },
         ) => Promise<unknown>)
       | undefined;
     const fakeApi = {
@@ -374,7 +379,7 @@ describe('image attachments produce parallel vision + markdown channels', () => 
             text: string;
             images?: Array<{ type: 'image'; mimeType: string; data: string }>;
           },
-          ctx: { cwd: string },
+          ctx: { cwd: string; signal?: AbortSignal },
         ) => Promise<unknown>)
       | undefined;
     ext({
@@ -398,6 +403,44 @@ describe('image attachments produce parallel vision + markdown channels', () => 
     // Pi preserves the original images when a transform leaves this field undefined.
     expect((result.images ?? images).length).toBe(0);
     expect(result.text).toContain('Image omitted');
+    const [name] = await readdir(join(cwd, '.pi', 'uploads'));
+    expect(result.text).toContain(join(cwd, '.pi', 'uploads', name!));
+    expect((await stat(join(cwd, '.pi', 'uploads', name!))).size).toBe(21 * 1024 * 1024);
+    expect(result.text).toMatch(/resize|crop/i);
+  });
+
+  it('cancels an upload during persistence without publishing a partial file', async () => {
+    const fs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    const original = fs.writeFile;
+    const controller = new AbortController();
+    const write = vi.mocked(writeFile).mockImplementationOnce(async (...args) => {
+      await original(args[0], 'partial', { flag: 'wx' });
+      controller.abort(new Error('Upload cancelled'));
+      controller.signal.throwIfAborted();
+    });
+    write.mockClear();
+    try {
+      const handler = await loadExt();
+      await expect(
+        handler(
+          {
+            text: 'inspect',
+            images: [
+              {
+                type: 'image',
+                mimeType: 'image/png',
+                data: Buffer.from('image bytes').toString('base64'),
+              },
+            ],
+          },
+          { cwd, signal: controller.signal },
+        ),
+      ).rejects.toThrow('Upload cancelled');
+      expect(write).toHaveBeenCalledOnce();
+      expect(await readdir(join(cwd, '.pi', 'uploads'))).toEqual([]);
+    } finally {
+      write.mockImplementation(original);
+    }
   });
 
   it('omits oversized image files while preserving their reference', async () => {

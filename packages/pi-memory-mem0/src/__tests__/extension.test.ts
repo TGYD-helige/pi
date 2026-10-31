@@ -90,7 +90,7 @@ function createMockCtx({
   entries = [],
 }: {
   sessionId?: string;
-  entries?: Array<{ type: string; customType?: string; data?: unknown }>;
+  entries?: Array<{ id?: string; type: string; customType?: string; data?: unknown }>;
 } = {}) {
   return {
     cwd: '/tmp',
@@ -190,6 +190,7 @@ describe('memoryMode gating', () => {
       await handlers.session_start![0]!({}, ctx);
       await handlers.input![0]!({ text: 'I prefer tea' }, ctx);
       await handlers.turn_end![0]!({ message: { role: 'assistant', content: 'Noted.' } }, ctx);
+      await vi.waitFor(() => expect(log).toHaveBeenCalled());
       await handlers.session_shutdown![0]!({}, ctx);
 
       expect(log).toHaveBeenCalledWith('[pi-memory-mem0] turn capture: Mem0 memory write failed.');
@@ -1075,6 +1076,102 @@ describe('mem0Extension recallFrequency', () => {
 // ---------------------------------------------------------------------------
 
 describe('passive capture', () => {
+  it('restores the originating session outbox after shutdown without exposing configuration', async () => {
+    const first = mockActiveProvider({
+      supportsAddCancellation: true,
+      add: vi.fn(
+        (_messages, options) =>
+          new Promise((_resolve, reject) =>
+            options.signal.addEventListener('abort', () => reject(options.signal.reason), {
+              once: true,
+            }),
+          ),
+      ),
+    });
+    const { pi, handlers } = createMockPi();
+    mem0Extension(pi as never);
+    const ctx = createMockCtx();
+    await handlers.session_start![0]!({}, ctx);
+    await handlers.input![0]!({ text: 'I prefer tea' }, ctx);
+    await handlers.turn_end![0]!({ message: { role: 'assistant', content: 'Noted.' } }, ctx);
+    const saved = pi.appendEntry.mock.calls
+      .filter(([type]) => type === 'mem0-pending-capture')
+      .at(-1)!;
+    expect(JSON.stringify(saved)).not.toContain('m0-test');
+    await handlers.session_shutdown![0]!({}, ctx);
+    await new Promise((resolve) => setImmediate(resolve));
+    const second = mockActiveProvider();
+    const resumed = createMockCtx({
+      entries: [{ type: 'custom', customType: saved[0], data: saved[1] }],
+    });
+    const forked = {
+      ...resumed,
+      sessionManager: { ...resumed.sessionManager, getSessionId: () => 'fork-session' },
+    };
+    await handlers.session_start![0]!({}, forked);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(second.add).not.toHaveBeenCalled();
+    await handlers.session_shutdown![0]!({}, forked);
+    await handlers.session_start![0]!({}, resumed);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(first.add).toHaveBeenCalledTimes(1);
+    expect(second.add).toHaveBeenCalledTimes(1);
+    expect(second.add.mock.calls[0]?.[0]).toEqual([
+      { role: 'user', content: 'I prefer tea' },
+      { role: 'assistant', content: 'Noted.' },
+    ]);
+    expect(second.add.mock.calls[0]?.[1].observedAt).toBe(saved[1].pending[0].observedAt);
+    expect(pi.appendEntry).toHaveBeenLastCalledWith(
+      'mem0-pending-capture',
+      expect.objectContaining({ pending: [] }),
+    );
+    await handlers.session_shutdown![0]!({}, resumed);
+  });
+
+  it('archives unsupported history by reference and leaves live capture available', async () => {
+    const first = mockActiveProvider({
+      supportsAddCancellation: true,
+      add: vi.fn(
+        (_messages, options) =>
+          new Promise((_resolve, reject) =>
+            options.signal.addEventListener('abort', () => reject(options.signal.reason), {
+              once: true,
+            }),
+          ),
+      ),
+    });
+    const { pi, handlers } = createMockPi();
+    const entries: Array<{ id: string; type: string; customType: string; data: unknown }> = [];
+    pi.appendEntry.mockImplementation((customType, data) =>
+      entries.push({ id: `entry-${entries.length}`, type: 'custom', customType, data }),
+    );
+    const ctx = {
+      ...createMockCtx({ entries }),
+      sessionManager: {
+        ...createMockCtx({ entries }).sessionManager,
+        getLeafId: () => entries.at(-1)?.id ?? null,
+      },
+    };
+    mem0Extension(pi as never);
+    await handlers.session_start![0]!({}, ctx);
+    await handlers.input![0]!({ text: 'I prefer tea' }, ctx);
+    await handlers.turn_end![0]!({ message: { role: 'assistant', content: 'Noted.' } }, ctx);
+    await handlers.session_shutdown![0]!({}, ctx);
+    await new Promise((resolve) => setImmediate(resolve));
+    const next = mockActiveProvider({ supportsObservationDates: false });
+    await handlers.session_start![0]!({}, ctx);
+    const archived = entries.find((entry) => entry.customType === 'mem0-deferred-capture')!.data;
+    expect(archived).toEqual(expect.objectContaining({ sourceEntryId: 'entry-0', indices: [0] }));
+    expect(JSON.stringify(archived)).not.toContain('I prefer tea');
+    await handlers.input![0]!({ text: 'I now prefer coffee' }, ctx);
+    await handlers.turn_end![0]!({ message: { role: 'assistant', content: 'Noted.' } }, ctx);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(first.add).toHaveBeenCalledTimes(1);
+    expect(next.add).toHaveBeenCalledTimes(1);
+    expect(next.add.mock.calls[0]?.[1].observedAt).toBeUndefined();
+    await handlers.session_shutdown![0]!({}, ctx);
+  });
+
   it('stores the turn with credentials redacted', async () => {
     const provider = mockActiveProvider();
     vi.mocked(loadPiSettings).mockReturnValue({

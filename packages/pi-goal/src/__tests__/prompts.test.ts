@@ -33,14 +33,14 @@ describe('buildEvaluateUserPrompt', () => {
   it('includes the truncation note when messages were omitted', () => {
     const prompt = buildEvaluateUserPrompt('cond', 'transcript', 3);
     expect(prompt).toMatch(/truncated/i);
-    expect(prompt).toContain('3 earlier message');
+    expect(prompt).toContain('3 message');
   });
 });
 
 describe('buildTruncationNote', () => {
   it('reports the omitted count and steers toward insufficient evidence', () => {
     const note = buildTruncationNote(5);
-    expect(note).toContain('5 earlier message');
+    expect(note).toContain('5 message');
     expect(note).toMatch(/insufficient evidence in transcript/i);
   });
 });
@@ -57,6 +57,11 @@ describe('buildActivationMessage', () => {
 });
 
 describe('buildContinueMessage', () => {
+  it('asks for evidence recovery rather than blindly repeating completed work', () => {
+    const prompt = buildContinueMessage('tests pass', 'insufficient evidence in transcript');
+    expect(prompt).toContain('original files or recorded results');
+    expect(prompt).toContain('Re-run only checks');
+  });
   it('embeds the condition and the remaining reason', () => {
     const msg = buildContinueMessage('build succeeds', '2 tests failing');
     expect(msg).toContain('build succeeds');

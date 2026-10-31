@@ -5,7 +5,13 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { resolveHome } from '@amaster.ai/pi-shared/settings';
 
+export interface DreamScanCursor {
+  path: string;
+  modified: number;
+}
+
 export interface DreamingState {
+  scanCursor?: DreamScanCursor;
   lastConsolidatedAt: string | null;
   lastSessionCount: number;
 }

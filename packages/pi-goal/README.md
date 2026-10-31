@@ -114,3 +114,5 @@ Prefer a small, cheap model for `model` — the evaluator runs after every agent
 - **Auto-derivation:** you don't have to phrase the condition; it's inferred and confirmed. (No CC analogue — CC always takes an explicit condition.)
 - **Budget backstop (from Codex):** token + iteration limits prevent runaway loops.
 - **Not included:** Codex's idle auto-resume, pause/resume dialogs, file-backed objectives, and cross-session persistence.
+
+Transcript limits include role labels and separators. An oversized newest message retains its beginning and conclusion within the configured limit and is reported as partially omitted evidence. If evaluation reports insufficient evidence, continuation asks the agent to recover original files or recorded results before rerunning unavailable checks.
