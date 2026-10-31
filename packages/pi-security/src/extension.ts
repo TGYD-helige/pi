@@ -97,15 +97,19 @@ export default function piSecurityExtension(pi: ExtensionAPI): void {
     state.grants = [];
     delete state.projectTrusted;
     state.config = resolvePiSecurityConfig();
+    const trusted = isProjectTrusted(ctx);
+    const configDir = getAgentDir();
     try {
       const config = await refreshConfiguration(
         (signal) =>
           loadPiSettingsAsync<PiSecurityExtensionConfig>(SETTINGS_KEY, {
             cwd: ctx.cwd,
-            projectTrusted: isProjectTrusted(ctx),
+            configDir,
+            projectTrusted: trusted && isProjectTrusted(ctx),
             signal,
           }),
         ctx.signal,
+        JSON.stringify(['startup', ctx.cwd, configDir, trusted]),
       );
       ctx.signal?.throwIfAborted();
       state.config = resolvePiSecurityConfig(config);
@@ -251,34 +255,46 @@ async function createGate(
 ): Promise<{ gate: SecurityGate | undefined; projectTrusted: boolean }> {
   const initialConfig = state.config;
   const settingsBacked = state.settingsBacked;
-  const { config, filePolicies, trusted } = await refreshConfiguration(async (signal) => {
-    const projectTrusted = isProjectTrusted(ctx);
-    const options = { cwd: ctx.cwd, configDir: getAgentDir(), projectTrusted, signal };
-    let config = settingsBacked
-      ? resolvePiSecurityConfig(
-          await loadPiSettingsAsync<PiSecurityExtensionConfig>(SETTINGS_KEY, options),
-        )
-      : initialConfig;
-    signal.throwIfAborted();
-    let filePolicies = config.enabled ? await loadFilePoliciesAsync(options) : {};
-    signal.throwIfAborted();
-    let trusted = projectTrusted;
-    if (projectTrusted && !isProjectTrusted(ctx)) {
-      trusted = false;
-      config = resolvePiSecurityConfig(
-        await loadPiSettingsAsync<PiSecurityExtensionConfig>(SETTINGS_KEY, {
-          ...options,
-          projectTrusted: false,
-        }),
-      );
+  const requestedTrust = isProjectTrusted(ctx);
+  const configDir = getAgentDir();
+  const { config, filePolicies, trusted } = await refreshConfiguration(
+    async (signal) => {
+      const projectTrusted = requestedTrust && isProjectTrusted(ctx);
+      const options = { cwd: ctx.cwd, configDir, projectTrusted, signal };
+      let config = settingsBacked
+        ? resolvePiSecurityConfig(
+            await loadPiSettingsAsync<PiSecurityExtensionConfig>(SETTINGS_KEY, options),
+          )
+        : initialConfig;
       signal.throwIfAborted();
-      filePolicies = config.enabled
-        ? await loadFilePoliciesAsync({ ...options, projectTrusted: false })
-        : {};
-    }
-    signal.throwIfAborted();
-    return { config, filePolicies, trusted };
-  }, ctx.signal);
+      let filePolicies = config.enabled ? await loadFilePoliciesAsync(options) : {};
+      signal.throwIfAborted();
+      let trusted = projectTrusted;
+      if (projectTrusted && !isProjectTrusted(ctx)) {
+        trusted = false;
+        config = resolvePiSecurityConfig(
+          await loadPiSettingsAsync<PiSecurityExtensionConfig>(SETTINGS_KEY, {
+            ...options,
+            projectTrusted: false,
+          }),
+        );
+        signal.throwIfAborted();
+        filePolicies = config.enabled
+          ? await loadFilePoliciesAsync({ ...options, projectTrusted: false })
+          : {};
+      }
+      signal.throwIfAborted();
+      return { config, filePolicies, trusted };
+    },
+    ctx.signal,
+    JSON.stringify([
+      'authorization',
+      ctx.cwd,
+      configDir,
+      requestedTrust,
+      settingsBacked ? 'settings' : initialConfig,
+    ]),
+  );
   ctx.signal?.throwIfAborted();
   if (state.projectTrusted !== trusted || JSON.stringify(state.config) !== JSON.stringify(config))
     state.grants = [];

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { type CapturedTurn, CaptureQueue, type CaptureState } from '../capture.js';
 import type { Mem0Provider } from '../provider.js';
 
@@ -15,6 +15,77 @@ function provider(add = vi.fn().mockResolvedValue({ results: [] })): Mem0Provide
 const settled = () => new Promise((resolve) => setImmediate(resolve));
 
 describe('CaptureQueue', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+  it('keeps slow background extraction running past five seconds and drains subsequent captures', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new Error('deadline')), ms);
+      return controller.signal;
+    });
+    let finish!: (value: { results: [] }) => void;
+    const backend = provider(
+      vi
+        .fn()
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              finish = resolve;
+            }),
+        )
+        .mockResolvedValue({ results: [] }),
+    );
+    const save = vi.fn();
+    const queue = new CaptureQueue(backend, { userId: 'alice' }, {}, save);
+    queue.enqueue(turn);
+    queue.enqueue({
+      ...turn,
+      messages: [
+        { role: 'user', content: 'coffee' },
+        { role: 'assistant', content: 'noted' },
+      ],
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+    finish({ results: [] });
+    await settled();
+    expect(backend.add).toHaveBeenCalledTimes(2);
+    expect(save).toHaveBeenLastCalledWith([]);
+    queue.close();
+  });
+
+  it('reconciles a late uncancellable extraction and continues without replaying it', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    let finish!: (value: { results: [] }) => void;
+    const backend = provider(
+      vi
+        .fn()
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              finish = resolve;
+            }),
+        )
+        .mockResolvedValue({ results: [] }),
+    );
+    const save = vi.fn();
+    const notify = vi.fn();
+    const queue = new CaptureQueue(backend, { userId: 'alice' }, {}, save, [], notify);
+    queue.enqueue(turn);
+    queue.enqueue({ ...turn });
+    await vi.advanceTimersByTimeAsync(121_000);
+    expect(notify).toHaveBeenCalledWith(expect.stringMatching(/still running/));
+    expect(backend.add).toHaveBeenCalledTimes(1);
+    finish({ results: [] });
+    await settled();
+    expect(backend.add).toHaveBeenCalledTimes(2);
+    expect(save).toHaveBeenLastCalledWith([]);
+    queue.close();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('persists accepted turns before sending, bounds admission, and closes without waiting', async () => {
     const backend = provider(vi.fn(() => new Promise(() => {})));
     const save = vi.fn();
@@ -39,6 +110,7 @@ describe('CaptureQueue', () => {
     expect(backend.add).toHaveBeenCalledWith(turn.messages, {
       userId: 'alice',
       observedAt: turn.observedAt,
+      timeoutMs: 120_000,
     });
     expect(save).toHaveBeenLastCalledWith([]);
     queue.close();

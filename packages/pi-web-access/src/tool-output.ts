@@ -89,6 +89,7 @@ export function fetchOutput(response: FetchResponse) {
     url: response.url,
     title,
     content,
-    truncated: content !== response.content || title !== response.title,
+    truncated:
+      response.truncated === true || content !== response.content || title !== response.title,
   };
 }

@@ -20,6 +20,9 @@ const MAX_TURN_CHARS = 64_000;
 /** Session entries are the durable outbox; only one bounded snapshot lives in memory. */
 export class CaptureQueue {
   private pending: CapturedTurn[];
+  private deferred: CapturedTurn[] = [];
+  private live = new WeakSet<CapturedTurn>();
+  private warnedHistorical = false;
   private closed = false;
   private running = false;
   private paused = false;
@@ -33,6 +36,8 @@ export class CaptureQueue {
     private save: (pending: CapturedTurn[]) => void,
     restored: CapturedTurn[] = [],
     private notify?: (message: string) => void,
+    private writeTimeoutMs = 120_000,
+    private archive?: (turns: CapturedTurn[]) => void,
   ) {
     this.pending = restored
       .slice(0, MAX_PENDING_TURNS)
@@ -52,9 +57,32 @@ export class CaptureQueue {
           turn.messages.reduce((size, message) => size + message.content.length, 0) <=
             MAX_TURN_CHARS,
       );
+    if (provider.supportsObservationDates === false) {
+      this.deferred = this.pending;
+      this.pending = [];
+    }
+  }
+
+  private warnHistorical(): void {
+    if (this.deferred.length && !this.warnedHistorical) {
+      this.warnedHistorical = true;
+      this.notify?.(
+        'Self-hosted historical observation dates are unsupported. Pending historical turns are retained for manual recovery; live capture continues.',
+      );
+    }
+  }
+
+  private persist(pending: CapturedTurn[]): void {
+    this.save([...this.deferred, ...pending]);
   }
 
   start(): void {
+    this.warnHistorical();
+    if (this.deferred.length && this.archive) {
+      this.archive([...this.deferred]);
+      this.save([...this.pending]);
+      this.deferred = [];
+    }
     if (this.running || this.closed || this.paused || this.pending.length === 0) return;
     this.running = true;
     void this.drain().finally(() => {
@@ -66,14 +94,15 @@ export class CaptureQueue {
   enqueue(turn: CapturedTurn, signal?: AbortSignal): boolean {
     if (
       this.closed ||
-      this.pending.length >= MAX_PENDING_TURNS ||
+      this.pending.length + this.deferred.length >= MAX_PENDING_TURNS ||
       turn.messages.reduce((size, message) => size + message.content.length, 0) > MAX_TURN_CHARS
     )
       return false;
     if (signal) this.callerSignals.set(turn, signal);
+    this.live.add(turn);
     this.pending.push(turn);
     try {
-      this.save([...this.pending]);
+      this.persist(this.pending);
     } catch (error) {
       this.pending.pop();
       throw error;
@@ -92,30 +121,76 @@ export class CaptureQueue {
       while (!this.closed && this.pending.length > 0) {
         const turn = this.pending[0]!;
         const caller = this.callerSignals.get(turn);
-        const signal = AbortSignal.any([
-          this.controller.signal,
-          AbortSignal.timeout(5_000),
-          ...(caller ? [caller] : []),
-        ]);
-        // Embedded add cannot be cancelled. Keep the raw operation single-flight across sessions.
+        const lifetime = AbortSignal.any([this.controller.signal, ...(caller ? [caller] : [])]);
+        // Waiting for an old uncancellable write does not consume a new extraction's budget.
         if (this.state.active)
           await waitWithCancellation(
             this.state.active.catch(() => {}),
-            signal,
+            lifetime,
           );
-        signal.throwIfAborted();
+        lifetime.throwIfAborted();
+        const age = Date.now() - Date.parse(turn.observedAt);
+        const freshSelfHosted =
+          this.provider.supportsObservationDates === false &&
+          this.live.has(turn) &&
+          age >= 0 &&
+          new Date(turn.observedAt).toISOString().slice(0, 10) ===
+            new Date().toISOString().slice(0, 10);
+        if (this.provider.supportsObservationDates === false && !freshSelfHosted) {
+          const remaining = this.pending.slice(1);
+          const deferred = [...this.deferred, turn];
+          if (this.archive) {
+            this.archive([turn]);
+            this.persist(remaining);
+          } else {
+            this.save([...deferred, ...remaining]);
+            this.deferred = deferred;
+          }
+          this.pending = remaining;
+          if (!this.warnedHistorical) {
+            this.notify?.(
+              'A cross-day capture was archived for manual recovery; newer live captures continue.',
+            );
+            this.warnedHistorical = true;
+          }
+          continue;
+        }
+        const deadline = new AbortController();
+        const timer = setTimeout(
+          () => deadline.abort(new Error('Memory capture timed out.')),
+          this.writeTimeoutMs,
+        );
+        timer.unref();
+        const signal = AbortSignal.any([lifetime, deadline.signal]);
         const state = this.state;
-        const operation = this.provider
-          .add(turn.messages, {
-            ...this.scope,
-            observedAt: turn.observedAt,
-            ...(this.provider.supportsAddCancellation ? { signal } : {}),
-          })
-          .finally(() => {
-            if (state.active === operation) delete state.active;
-          });
-        state.active = operation;
-        const result = await waitWithCancellation(operation, signal);
+        let result: Awaited<ReturnType<Mem0Provider['add']>>;
+        try {
+          const operation = this.provider
+            .add(turn.messages, {
+              ...this.scope,
+              ...(freshSelfHosted ? {} : { observedAt: turn.observedAt }),
+              timeoutMs: this.writeTimeoutMs,
+              ...(this.provider.supportsAddCancellation ? { signal } : {}),
+            })
+            .finally(() => {
+              if (state.active === operation) delete state.active;
+            });
+          state.active = operation;
+          try {
+            result = await waitWithCancellation(operation, signal);
+          } catch (error) {
+            if (
+              !deadline.signal.aborted ||
+              lifetime.aborted ||
+              this.provider.supportsAddCancellation
+            )
+              throw error;
+            this.notify?.('Memory extraction is still running; new captures remain queued.');
+            result = await waitWithCancellation(operation, lifetime);
+          }
+        } finally {
+          clearTimeout(timer);
+        }
         if (this.closed) return;
         const { message, isError, writeStatus } = getAddResult(result);
         if (
@@ -129,7 +204,7 @@ export class CaptureQueue {
           return;
         }
         const remaining = this.pending.slice(1);
-        this.save(remaining);
+        this.persist(remaining);
         this.pending = remaining;
       }
     } catch (error) {

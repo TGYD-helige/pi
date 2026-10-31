@@ -57,7 +57,7 @@ Pure-text inputs with no resolvable mentions are left untouched (handler returns
 
 Text files are read as bounded UTF-8 prefixes instead of loading the full file. File and directory blocks share `PI_ATTACHMENT_MAX_TEXT_CHARS` (default 128,000); later contents are omitted when the budget is exhausted, with their references retained. Invalid or non-positive environment values use the default. `renderAttachmentContext(attachments, options)` callers share the same budget through `options.maxTextChars`; a zero budget emits references and omission notes only.
 
-Image attachments share a 20 MiB raw-byte budget per input, including drag uploads and file mentions. Oversized images are omitted with a visible note; accepted vision images and Markdown references retain matching order.
+Image attachments share a 20 MiB raw-byte budget per input, including drag uploads and file mentions. Images outside the vision budget retain source paths with a visible resize/crop hint; drag uploads are persisted incrementally within a separate 128 MiB storage budget per input. Uploads beyond that storage budget require a file reference or smaller image. Accepted vision images and Markdown references retain matching order.
 
 - **Directory listing**: capped at 200 entries per directory; remainder is summarized as `[Listing truncated: showing 200 of N entries]`.
 - **Ignored directory entries**: `.git`, `node_modules`, `.DS_Store`, `.next`, `.turbo`, `dist`, `build`, `.cache`.

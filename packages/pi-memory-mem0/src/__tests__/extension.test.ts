@@ -90,7 +90,7 @@ function createMockCtx({
   entries = [],
 }: {
   sessionId?: string;
-  entries?: Array<{ type: string; customType?: string; data?: unknown }>;
+  entries?: Array<{ id?: string; type: string; customType?: string; data?: unknown }>;
 } = {}) {
   return {
     cwd: '/tmp',
@@ -1126,6 +1126,50 @@ describe('passive capture', () => {
       expect.objectContaining({ pending: [] }),
     );
     await handlers.session_shutdown![0]!({}, resumed);
+  });
+
+  it('archives unsupported history by reference and leaves live capture available', async () => {
+    const first = mockActiveProvider({
+      supportsAddCancellation: true,
+      add: vi.fn(
+        (_messages, options) =>
+          new Promise((_resolve, reject) =>
+            options.signal.addEventListener('abort', () => reject(options.signal.reason), {
+              once: true,
+            }),
+          ),
+      ),
+    });
+    const { pi, handlers } = createMockPi();
+    const entries: Array<{ id: string; type: string; customType: string; data: unknown }> = [];
+    pi.appendEntry.mockImplementation((customType, data) =>
+      entries.push({ id: `entry-${entries.length}`, type: 'custom', customType, data }),
+    );
+    const ctx = {
+      ...createMockCtx({ entries }),
+      sessionManager: {
+        ...createMockCtx({ entries }).sessionManager,
+        getLeafId: () => entries.at(-1)?.id ?? null,
+      },
+    };
+    mem0Extension(pi as never);
+    await handlers.session_start![0]!({}, ctx);
+    await handlers.input![0]!({ text: 'I prefer tea' }, ctx);
+    await handlers.turn_end![0]!({ message: { role: 'assistant', content: 'Noted.' } }, ctx);
+    await handlers.session_shutdown![0]!({}, ctx);
+    await new Promise((resolve) => setImmediate(resolve));
+    const next = mockActiveProvider({ supportsObservationDates: false });
+    await handlers.session_start![0]!({}, ctx);
+    const archived = entries.find((entry) => entry.customType === 'mem0-deferred-capture')!.data;
+    expect(archived).toEqual(expect.objectContaining({ sourceEntryId: 'entry-0', indices: [0] }));
+    expect(JSON.stringify(archived)).not.toContain('I prefer tea');
+    await handlers.input![0]!({ text: 'I now prefer coffee' }, ctx);
+    await handlers.turn_end![0]!({ message: { role: 'assistant', content: 'Noted.' } }, ctx);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(first.add).toHaveBeenCalledTimes(1);
+    expect(next.add).toHaveBeenCalledTimes(1);
+    expect(next.add.mock.calls[0]?.[1].observedAt).toBeUndefined();
+    await handlers.session_shutdown![0]!({}, ctx);
   });
 
   it('stores the turn with credentials redacted', async () => {

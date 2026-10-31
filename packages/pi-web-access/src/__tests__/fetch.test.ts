@@ -105,21 +105,25 @@ describe('webFetch', () => {
     expect(Date.now() - started).toBe(100);
   });
 
-  it('stops reading an oversized local response before converting HTML', async () => {
+  it('returns partial evidence and cancels an oversized local response', async () => {
     mockFetch.mockResolvedValueOnce(new Response('', { status: 503 }));
     const cancel = vi.fn();
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
-        controller.enqueue(new Uint8Array(2 * 1024 * 1024 + 1));
+        controller.enqueue(
+          new TextEncoder().encode('Useful source evidence. ' + 'x'.repeat(2 * 1024 * 1024)),
+        );
       },
       cancel,
     });
     mockFetch.mockResolvedValueOnce(
       new Response(stream, { headers: { 'content-type': 'text/html' } }),
     );
-    await expect(webFetch({ url: 'https://example.com' }, {}, publicLookup)).rejects.toThrow(
-      'size ceiling',
-    );
+    const result = await webFetch({ url: 'https://example.com' }, {}, publicLookup);
+    expect(result.truncated).toBe(true);
+    expect(result.url).toBe('https://example.com');
+    expect(result.content).toContain('Useful source evidence.');
+    expect(result.content.length).toBeLessThanOrEqual(2 * 1024 * 1024);
     expect(cancel).toHaveBeenCalledOnce();
   });
 

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { SessionManager } from '@earendil-works/pi-coding-agent';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runDream } from '../dream.js';
-import { writeDreamingState } from '../dreaming-state.js';
+import { readDreamingState, writeDreamingState } from '../dreaming-state.js';
 
 const { runConsolidationMock, metadata, openFile } = vi.hoisted(() => ({
   runConsolidationMock: vi.fn(),
@@ -72,7 +72,7 @@ describe('runDream', () => {
     expect(runConsolidationMock).not.toHaveBeenCalled();
   });
 
-  it('opens only the 32 newest files after filtering their metadata', async () => {
+  it('continues unprocessed history in bounded batches instead of skipping older files', async () => {
     const base = Date.now();
     for (let i = 0; i < 35; i++) {
       const recent = SessionManager.create(home, sessionDir, { id: `window-${i}` });
@@ -90,8 +90,25 @@ describe('runDream', () => {
     expect(openFile).toHaveBeenCalledTimes(32);
     const turns = runConsolidationMock.mock.calls[0]![0].turns;
     expect(turns).toHaveLength(32);
-    expect(turns.some((turn: { sessionId: string }) => turn.sessionId === 'window-0')).toBe(false);
-    expect(turns.some((turn: { sessionId: string }) => turn.sessionId === 'window-34')).toBe(true);
+    const progress = await readDreamingState(path.join(home, 'memories'));
+    expect(progress.lastConsolidatedAt).toBeNull();
+    await expect(
+      runDream({
+        dreaming: { minTurnsSinceLastRun: 1 },
+        memoryDir: path.join(home, 'memories'),
+        modelRegistry: modelRegistry(),
+        sessionDir,
+      }),
+    ).resolves.toBe(true);
+    expect(openFile).toHaveBeenCalledTimes(36);
+    expect(runConsolidationMock.mock.calls[1]![0].turns).toHaveLength(4);
+    const all = runConsolidationMock.mock.calls.flatMap(([options]) =>
+      options.turns.map((turn: { sessionId: string }) => turn.sessionId),
+    );
+    expect(new Set(all).size).toBe(36);
+    expect(
+      (await readDreamingState(path.join(home, 'memories'))).lastConsolidatedAt,
+    ).not.toBeNull();
   });
 
   it('reads a bounded tail and follows the active branch after a large old entry', async () => {
@@ -124,12 +141,14 @@ describe('runDream', () => {
         sessionDir,
       }),
     ).resolves.toBe(true);
-    expect(bytes).toEqual([256 * 1024, 64 * 1024]);
+    expect(bytes.slice(0, 2)).toEqual([256 * 1024, 64 * 1024]);
+    expect(bytes).toHaveLength(3);
+    expect(Math.max(...bytes)).toBeLessThanOrEqual(8 * 1024 * 1024);
     expect(
       runConsolidationMock.mock.calls[0]![0].turns.map(
         (turn: { userMessage: string }) => turn.userMessage,
       ),
-    ).toEqual(['Remember preference 2', 'Remember preference 4']);
+    ).toEqual(['Remember preference 1', 'Remember preference 2', 'Remember preference 4']);
   });
 
   it('does not start a header read after a cancelled tail read eventually settles', async () => {

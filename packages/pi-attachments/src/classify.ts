@@ -128,7 +128,7 @@ export function fenceForName(name: string): string {
 
 export function truncateText(value: string, maxChars: number): string {
   if (maxChars <= 0 || value.length <= maxChars) return value;
-  return `${value.slice(0, maxChars)}\n\n[truncated after ${maxChars} characters]`;
+  return `${value.slice(0, maxChars)}\n\n[truncated after ${maxChars} characters]\n[Read the source file in bounded chunks for the remaining content.]`;
 }
 
 export function docReadInstruction(
@@ -181,7 +181,7 @@ export async function renderAttachmentBlock(
   }
 
   if (maxTextChars <= 0 && (kind === 'text' || mimeType === 'inode/directory')) {
-    return `## ${name}${fsPath ? `: ${fsPath}` : ''}\n[Attachment text omitted: input text budget exhausted.]`;
+    return `## ${name}${fsPath ? `: ${fsPath}` : ''}\n[Attachment text omitted: input text budget exhausted. Read the source path above in bounded chunks to recover the missing sections.]`;
   }
 
   if (mimeType === 'inode/directory' && fsPath) {

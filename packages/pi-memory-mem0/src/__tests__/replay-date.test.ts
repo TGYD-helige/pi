@@ -49,6 +49,7 @@ describe('CaptureQueue observation dates', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
   it.each([
     'platform',
@@ -66,6 +67,68 @@ describe('CaptureQueue observation dates', () => {
       expect(state.prompts).toEqual([
         '## Observation Date\n2026-10-01\n## Current Date\n2026-10-01',
       ]);
+    queue.close();
+  });
+
+  it('keeps self-hosted live capture available while retaining unsupported historical replay', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-31T12:00:00Z'));
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ results: [] })));
+    vi.stubGlobal('fetch', fetch);
+    const provider = await createMem0Provider({
+      config: { mode: 'self-hosted', baseUrl: 'https://mem0.example.test' },
+    });
+    const save = vi.fn();
+    const notify = vi.fn();
+    const queue = new CaptureQueue(provider, { userId: 'test-user' }, {}, save, [turn], notify);
+    queue.start();
+    const live = {
+      ...turn,
+      observedAt: new Date().toISOString(),
+      messages: [
+        { role: 'user', content: 'I prefer tea now.' },
+        { role: 'assistant', content: 'Noted.' },
+      ],
+    };
+    expect(queue.enqueue(live)).toBe(true);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(fetch.mock.calls[0]![1].body)).toEqual({
+      messages: live.messages,
+      user_id: 'test-user',
+    });
+    expect(save).toHaveBeenLastCalledWith([turn]);
+    expect(notify).toHaveBeenCalledWith(expect.stringMatching(/historical/i));
+    queue.close();
+  });
+
+  it('archives a full unsupported historical backlog without taking live queue capacity', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-31T12:00:00Z'));
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ results: [] })));
+    vi.stubGlobal('fetch', fetch);
+    const provider = await createMem0Provider({
+      config: { mode: 'self-hosted', baseUrl: 'https://mem0.example.test' },
+    });
+    const archive = vi.fn();
+    const save = vi.fn();
+    const history = Array.from({ length: 16 }, () => turn);
+    const queue = new CaptureQueue(
+      provider,
+      { userId: 'test-user' },
+      {},
+      save,
+      history,
+      vi.fn(),
+      120_000,
+      archive,
+    );
+    queue.start();
+    expect(archive).toHaveBeenCalledWith(history);
+    expect(queue.enqueue({ ...turn, observedAt: new Date().toISOString() })).toBe(true);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenLastCalledWith([]);
     queue.close();
   });
 

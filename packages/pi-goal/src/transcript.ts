@@ -38,7 +38,14 @@ export function buildTranscriptWithMeta(messages: unknown[], maxChars: number): 
     const separator = lines.length ? 2 : 0;
     const remaining = Math.max(0, maxChars - total - separator);
     if (line.length > remaining && (lines.length > 0 || remaining === 0)) continue;
-    const bounded = line.slice(0, remaining);
+    const marker = '\n[message middle omitted]\n';
+    const prefix = `[${msg.role}] `;
+    const head = Math.max(prefix.length, Math.floor((remaining - marker.length) / 3));
+    const tail = remaining - marker.length - head;
+    const bounded =
+      line.length > remaining && tail > 0
+        ? `${line.slice(0, head)}${marker}${line.slice(-tail)}`
+        : line.slice(0, remaining);
     if (bounded.length < line.length) truncated++;
     lines.unshift(bounded);
     total += bounded.length + separator;

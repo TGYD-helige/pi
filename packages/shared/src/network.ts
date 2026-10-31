@@ -322,26 +322,36 @@ async function pinnedFetch(
   });
 }
 
-export async function readResponseBytes(response: Response, maxBytes: number): Promise<Uint8Array> {
+async function readLimitedResponse(
+  response: Response,
+  maxBytes: number,
+  allowPartial: boolean,
+): Promise<{ bytes: Uint8Array; truncated: boolean }> {
   const contentLength = Number(response.headers.get('content-length'));
-  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+  if (!allowPartial && Number.isFinite(contentLength) && contentLength > maxBytes) {
     await response.body?.cancel().catch(() => {});
     throw new Error('Remote response exceeds the size ceiling.');
   }
-  if (!response.body) return new Uint8Array();
+  if (!response.body) return { bytes: new Uint8Array(), truncated: false };
 
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
+  let truncated = false;
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      total += value.byteLength;
-      if (total > maxBytes) {
+      const remaining = maxBytes - total;
+      if (value.byteLength > remaining) {
         await reader.cancel();
-        throw new Error('Remote response exceeds the size ceiling.');
+        if (!allowPartial) throw new Error('Remote response exceeds the size ceiling.');
+        chunks.push(value.subarray(0, remaining));
+        total = maxBytes;
+        truncated = true;
+        break;
       }
+      total += value.byteLength;
       chunks.push(value);
     }
   } finally {
@@ -354,5 +364,17 @@ export async function readResponseBytes(response: Response, maxBytes: number): P
     result.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  return result;
+  return { bytes: result, truncated };
+}
+
+export async function readResponseBytes(response: Response, maxBytes: number): Promise<Uint8Array> {
+  return (await readLimitedResponse(response, maxBytes, false)).bytes;
+}
+
+/** Text consumers may retain a bounded prefix while explicitly reporting incompleteness. */
+export function readResponsePrefix(
+  response: Response,
+  maxBytes: number,
+): Promise<{ bytes: Uint8Array; truncated: boolean }> {
+  return readLimitedResponse(response, maxBytes, true);
 }

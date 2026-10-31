@@ -84,6 +84,23 @@ describe('buildTranscriptWithMeta', () => {
     expect(result.omitted).toBeGreaterThan(0);
   });
 
+  it('retains the beginning and decisive ending of an oversized newest message', () => {
+    const result = buildTranscriptWithMeta(
+      [
+        {
+          role: 'assistant',
+          content: 'Verification began. ' + 'detail '.repeat(2000) + 'ALL TESTS PASSED.',
+        },
+      ],
+      200,
+    );
+    expect(result.text.length).toBeLessThanOrEqual(200);
+    expect(result.text).toContain('[assistant] Verification began.');
+    expect(result.text.endsWith('ALL TESTS PASSED.')).toBe(true);
+    expect(result.text).toMatch(/omitted/i);
+    expect(result.omitted).toBe(1);
+  });
+
   it('includes separators in the budget', () => {
     const result = buildTranscriptWithMeta(
       [

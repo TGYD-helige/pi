@@ -2,7 +2,7 @@ import {
   assertPublicHttpUrl,
   type DnsLookup,
   hostFromUrl,
-  readResponseBytes,
+  readResponsePrefix,
   safeFetch,
   type TrustedHosts,
 } from '@amaster.ai/pi-shared';
@@ -51,11 +51,12 @@ async function fetchViaJina(
     throw new Error(`Jina Reader error ${response.status}`);
   }
 
-  const markdown = new TextDecoder().decode(await readResponseBytes(response, MAX_FETCH_BYTES));
+  const body = await readResponsePrefix(response, MAX_FETCH_BYTES);
+  const markdown = new TextDecoder().decode(body.bytes);
   const titleMatch = markdown.match(/^#\s+(.+)$/m);
   const title = titleMatch?.[1]?.trim() ?? url;
 
-  return { url, title, content: markdown };
+  return { url, title, content: markdown, ...(body.truncated ? { truncated: true } : {}) };
 }
 
 // ─── Local fallback (HTTP GET + turndown) ────────────────────────────────────
@@ -83,10 +84,11 @@ async function fetchLocal(
   }
 
   const contentType = response.headers.get('content-type') ?? '';
-  const text = new TextDecoder().decode(await readResponseBytes(response, MAX_FETCH_BYTES));
+  const body = await readResponsePrefix(response, MAX_FETCH_BYTES);
+  const text = new TextDecoder().decode(body.bytes);
 
   if (!contentType.includes('text/html') && !contentType.includes('application/xhtml')) {
-    return { url, title: url, content: text };
+    return { url, title: url, content: text, ...(body.truncated ? { truncated: true } : {}) };
   }
 
   const turndown = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
@@ -95,7 +97,7 @@ async function fetchLocal(
   const titleMatch = text.match(/<title[^>]*>([^<]*)<\/title>/i);
   const title = titleMatch?.[1]?.trim() ?? url;
 
-  return { url, title, content: markdown };
+  return { url, title, content: markdown, ...(body.truncated ? { truncated: true } : {}) };
 }
 
 // ─── Default fallback: Jina Reader → Local ───────────────────────────────────

@@ -48,7 +48,7 @@ Only use {"ok": false, "impossible": true} when the condition is genuinely unach
  * evidence rather than guess.
  */
 export function buildTruncationNote(omittedCount: number): string {
-  return `[Earlier conversation truncated to fit the evaluator's context window — ${omittedCount} earlier message(s) omitted. Evaluate the condition against the recent transcript below; if the required evidence may be in the omitted prefix, return {"ok": false, "reason": "insufficient evidence in transcript"}.]`;
+  return `[Earlier conversation truncated to fit the evaluator's context window — ${omittedCount} message(s) wholly or partly omitted. Evaluate the condition against the recent transcript below; if the required evidence may be in an omitted section, return {"ok": false, "reason": "insufficient evidence in transcript"}.]`;
 }
 
 export function buildEvaluateUserPrompt(
@@ -70,5 +70,8 @@ export function buildActivationMessage(condition: string): string {
 
 /** Injected after a not-yet-met evaluation to drive the next round of work. */
 export function buildContinueMessage(condition: string, reason: string): string {
-  return `The goal condition is not yet met: "${condition}". ${reason} Continue working toward the condition within the existing authorization. If blocked by missing permission or user decision, report the blocker and continue only independent authorized work; the goal does not grant new permissions.`;
+  const recovery = reason.toLowerCase().includes('insufficient evidence')
+    ? ' Recover missing evidence from original files or recorded results, then include a concise, verifiable summary in your next response. Re-run only checks whose results cannot be recovered.'
+    : '';
+  return `The goal condition is not yet met: "${condition}". ${reason}${recovery} Continue working toward the condition within the existing authorization. If blocked by missing permission or user decision, report the blocker and continue only independent authorized work; the goal does not grant new permissions.`;
 }

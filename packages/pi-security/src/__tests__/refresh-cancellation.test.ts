@@ -182,6 +182,53 @@ describe('piSecurityExtension configuration refresh', () => {
     if (phase === 'directory' || phase === 'iterator' || phase === 'policy-read')
       expect(closeDirectory).toHaveBeenCalledOnce();
   });
+  it('shares one fresh read across a concurrent authorization wave', async () => {
+    const handle = file();
+    io.open.mockResolvedValue(handle);
+    const requests = Array.from({ length: 32 }, () =>
+      authorizePiToolCall(event, context(new AbortController().signal), state()),
+    );
+    expect(await Promise.all(requests)).toEqual(Array(32).fill(undefined));
+    const paths = io.open.mock.calls.map(([path]) => path);
+    expect(paths.length).toBe(new Set(paths).size);
+    expect(handle.stat).toHaveBeenCalledTimes(paths.length);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('does not cancel a shared read when just one member of its wave cancels', async () => {
+    let finish!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const handle = file();
+    handle.read.mockImplementationOnce(async (buffer: Buffer) => {
+      await blocked;
+      return { bytesRead: payload.copy(buffer), buffer };
+    });
+    io.open.mockResolvedValueOnce(handle);
+    const first = new AbortController();
+    const second = new AbortController();
+    const a = authorizePiToolCall(event, context(first.signal), state());
+    const b = authorizePiToolCall(event, context(second.signal), state());
+    try {
+      await tick();
+      first.abort();
+      expect((await a)?.block).toBe(true);
+      expect(second.signal.aborted).toBe(false);
+      expect(handle.close).not.toHaveBeenCalled();
+      finish();
+      expect(await b).toBeUndefined();
+      expect(handle.stat).toHaveBeenCalledOnce();
+    } finally {
+      first.abort();
+      second.abort();
+      finish();
+      await a;
+      await b;
+      await tick();
+    }
+  });
+
   it('shares one budget across settings and policy body reads', async () => {
     const settings = file();
     const policy = file();

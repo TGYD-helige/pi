@@ -128,6 +128,12 @@ export default function mem0Extension(pi: ExtensionAPI): void {
           'topK must be an integer greater than 0. Use autoRecall: false to disable automatic recall.',
         );
       }
+      if (
+        config.requestTimeoutMs !== undefined &&
+        (!Number.isInteger(config.requestTimeoutMs) || config.requestTimeoutMs <= 0)
+      ) {
+        throw new Error('requestTimeoutMs must be a positive integer.');
+      }
       for (const key of ['autoCapture', 'autoRecall', 'toolEnabled'] as const) {
         if (config[key] !== undefined && typeof config[key] !== 'boolean') {
           throw new Error(`${key} must be a boolean.`);
@@ -202,6 +208,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
             .digest('hex')
         : undefined;
       let restored: CapturedTurn[] = [];
+      let captureEntryId: string | null | undefined;
       recallQueuedThisSession = false;
       for (const entry of entries) {
         if (entry.type !== 'custom') continue;
@@ -215,17 +222,35 @@ export default function mem0Extension(pi: ExtensionAPI): void {
           data?.scopeKey === scopeKey &&
           data.sessionId === sessionId &&
           Array.isArray(data.pending)
-        )
+        ) {
           restored = data.pending;
+          captureEntryId = entry.id;
+        }
       }
       if (scopeKey) {
+        let snapshotPending = restored;
         capture = new CaptureQueue(
           provider,
           { userId, ...(agentId ? { agentId } : {}) },
           captureState,
-          (pending) => pi.appendEntry(CAPTURE_ENTRY, { scopeKey, sessionId, pending }),
+          (pending) => {
+            pi.appendEntry(CAPTURE_ENTRY, { scopeKey, sessionId, pending });
+            snapshotPending = pending;
+            captureEntryId = ctx.sessionManager.getLeafId?.();
+          },
           restored,
           (message) => ctx.ui.notify(message, 'warning'),
+          config.requestTimeoutMs ?? 120_000,
+          (turns) => {
+            const indices = turns.map((turn) => snapshotPending.indexOf(turn));
+            // Reference the already-durable snapshot instead of copying potentially large payloads.
+            pi.appendEntry(
+              'mem0-deferred-capture',
+              captureEntryId && indices.every((index) => index >= 0)
+                ? { scopeKey, sessionId, sourceEntryId: captureEntryId, indices }
+                : { scopeKey, sessionId, turns },
+            );
+          },
         );
         capture.start();
       }
