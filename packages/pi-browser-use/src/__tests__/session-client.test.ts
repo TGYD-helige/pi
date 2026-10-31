@@ -1,11 +1,11 @@
 import { ChildProcess, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, open, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { BrowserSessionClient } from '../session-client.js';
+import { BrowserSessionClient, type SessionRecord, writeSessionRecord } from '../session-client.js';
 
 function deferred() {
   let resolve!: () => void;
@@ -33,11 +33,105 @@ vi.mock('node:child_process', async (importOriginal) => {
 describe('BrowserSessionClient', () => {
   let root: string;
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'pi-browser-use-session-client-'));
+    root = await realpath(await mkdtemp(join(tmpdir(), 'pi-browser-use-session-client-')));
     vi.stubEnv('PI_AGENT_HOME', root);
     vi.mocked(open).mockClear();
     vi.mocked(spawn).mockClear();
   });
+
+  it('keeps the original worker writable and releasable across temporary homes', async () => {
+    const shared = join(root, 'shared');
+    const homeA = join(root, 'home-a');
+    const homeB = join(root, 'home-b');
+    await Promise.all([mkdir(shared), mkdir(homeA), mkdir(homeB)]);
+    await symlink(shared, join(homeA, 'browser-sessions'));
+    await symlink(shared, join(homeB, 'browser-sessions'));
+    const config = { session: { enabled: true as const, key: 'shared-worker', retentionMs: 1000 } };
+    let workerPath: string;
+    let record: SessionRecord;
+    const worker = createServer(async (request, response) => {
+      let body = '';
+      for await (const chunk of request) body += chunk;
+      const { action } = JSON.parse(body);
+      try {
+        if (action === 'retain') await writeSessionRecord(workerPath, record);
+        if (action === 'release') await rm(workerPath);
+        response.end(JSON.stringify({ result: { state: action } }));
+      } catch {
+        response.writeHead(500).end(JSON.stringify({ error: 'record path unavailable' }));
+      }
+    });
+    await new Promise<void>((resolve) => worker.listen(0, '127.0.0.1', resolve));
+    const address = worker.address();
+    if (!address || typeof address === 'string') throw new Error('No worker address');
+    const child = new ChildProcess();
+    child.send = vi.fn((message) => {
+      const startup = message as unknown as { path: string; record: SessionRecord };
+      workerPath = startup.path;
+      record = { ...startup.record, port: address.port };
+      void writeSessionRecord(workerPath, record).then(() =>
+        child.emit('message', { ready: true }),
+      );
+      return true;
+    });
+    child.unref = vi.fn();
+    vi.mocked(spawn).mockReturnValueOnce(child);
+    vi.stubEnv('PI_AGENT_HOME', homeA);
+    const first = new BrowserSessionClient(config);
+    let second: BrowserSessionClient | undefined;
+    try {
+      await first.connect();
+      await first.control('retain');
+      await first.close();
+      await rm(homeA, { recursive: true });
+      vi.stubEnv('PI_AGENT_HOME', homeB);
+      second = new BrowserSessionClient(config);
+      await second.connect();
+      await expect(second.control('retain')).resolves.toEqual({ state: 'retain' });
+      expect(vi.mocked(spawn)).toHaveBeenCalledOnce();
+      await expect(second.control('release')).resolves.toEqual({ state: 'release' });
+      const directory = join(shared, createHash('sha256').update(config.session.key).digest('hex'));
+      await expect(readFile(join(directory, 'session.json'))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+      await expect(readFile(join(directory, 'lock'))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await first.close();
+      await second?.close();
+      await new Promise<void>((resolve, reject) =>
+        worker.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
+
+  it('rejects a symlink at the session directory before starting a worker', async () => {
+    const shared = join(root, 'target');
+    const parent = join(root, 'browser-sessions');
+    await mkdir(shared);
+    await mkdir(parent);
+    await symlink(shared, join(parent, createHash('sha256').update('unsafe').digest('hex')));
+    const client = new BrowserSessionClient({
+      session: { enabled: true, key: 'unsafe', retentionMs: 1000 },
+    });
+    await expect(client.connect()).rejects.toThrow('ownership is unsafe');
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'rejects a session directory owned by another user',
+    async () => {
+      const uid = vi.spyOn(process, 'getuid').mockReturnValue(process.getuid!() + 1);
+      try {
+        const client = new BrowserSessionClient({
+          session: { enabled: true, key: 'foreign-owner', retentionMs: 1000 },
+        });
+        await expect(client.connect()).rejects.toThrow('ownership is unsafe');
+        expect(spawn).not.toHaveBeenCalled();
+      } finally {
+        uid.mockRestore();
+      }
+    },
+  );
 
   it('keeps a reconnected client alive when an older heartbeat fails later', async () => {
     const config = {

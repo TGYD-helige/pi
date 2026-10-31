@@ -63,7 +63,7 @@ export function resolveOtelExporterConfig(telemetryConfig: TelemetryConfig): Ote
   const otel = telemetryConfig.otel;
   const endpoint = otel?.endpoint ?? '';
   return {
-    enabled: Boolean(otel?.enabled && endpoint),
+    enabled: Boolean(parseBoolean(otel?.enabled) && endpoint),
     configurationWarnings: configurationWarnings({ ...(otel ? { otel } : {}) }),
     endpoint,
     ...(otel?.headers ? { headers: otel.headers } : {}),

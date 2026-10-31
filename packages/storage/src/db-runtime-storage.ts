@@ -997,6 +997,7 @@ function sessionFromPrisma(row: PrismaRecord): RuntimeSession {
     ...(row.piSessionRef ? { piSessionFile: row.piSessionRef } : {}),
     ...(Object.keys(piSessionFilesByModel).length > 0 ? { piSessionFilesByModel } : {}),
     toolPolicyProfile: row.toolPolicyProfile,
+    ...(isJsonObject(metadataSession.metadata) ? { metadata: metadataSession.metadata } : {}),
   };
 }
 

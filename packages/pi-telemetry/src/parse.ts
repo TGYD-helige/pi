@@ -2,8 +2,8 @@
 // loaders. Kept at the package root so the generic otel entry point never
 // imports from the langfuse module directory.
 
-export function parseBoolean(value: string | undefined): boolean {
-  return value === '1' || value === 'true' || value === 'TRUE' || value === 'yes';
+export function parseBoolean(value: unknown): boolean {
+  return value === true || value === '1' || value === 'true' || value === 'TRUE' || value === 'yes';
 }
 
 export function parsePositiveInteger(value: unknown, fallback: number): number {

@@ -114,7 +114,7 @@ describe('createMem0Provider with resolveProvider', () => {
   it('maps custom provider to openai and injects baseURL', async () => {
     const { createMem0Provider: create } = await import('../provider.js');
 
-    await create({
+    const provider = await create({
       config: {
         mode: 'embedded',
         oss: {
@@ -133,6 +133,7 @@ describe('createMem0Provider with resolveProvider', () => {
         return undefined;
       },
     });
+    await provider.getAll({ userId: 'test-user' });
 
     expect(__capturedMem0Config).toBeDefined();
 
@@ -155,9 +156,10 @@ describe('createMem0Provider with resolveProvider', () => {
   it('keeps the historical open-source mode as an embedded runtime alias', async () => {
     const { createMem0Provider: create } = await import('../provider.js');
 
-    await create({
+    const provider = await create({
       config: { mode: 'open-source' as never },
     });
+    await provider.getAll({ userId: 'test-user' });
 
     expect(__capturedMem0Config).toBeDefined();
   });
@@ -165,7 +167,7 @@ describe('createMem0Provider with resolveProvider', () => {
   it('falls back to resolveKey when resolveProvider is not provided', async () => {
     const { createMem0Provider: create } = await import('../provider.js');
 
-    await create({
+    const provider = await create({
       config: {
         mode: 'embedded',
         oss: {
@@ -177,6 +179,7 @@ describe('createMem0Provider with resolveProvider', () => {
         return undefined;
       },
     });
+    await provider.getAll({ userId: 'test-user' });
 
     expect(__capturedMem0Config).toBeDefined();
     const embedder = __capturedMem0Config!.embedder as {
@@ -191,7 +194,7 @@ describe('createMem0Provider with resolveProvider', () => {
   it('keeps original provider name when resolveProvider returns undefined', async () => {
     const { createMem0Provider: create } = await import('../provider.js');
 
-    await create({
+    const provider = await create({
       config: {
         mode: 'embedded',
         oss: {
@@ -200,6 +203,7 @@ describe('createMem0Provider with resolveProvider', () => {
       },
       resolveProvider: async () => undefined,
     });
+    await provider.getAll({ userId: 'test-user' });
 
     expect(__capturedMem0Config).toBeDefined();
     const embedder = __capturedMem0Config!.embedder as {
@@ -222,9 +226,10 @@ describe('createMem0Provider additional scenarios', () => {
   it('uses default embedder and llm when oss config is empty', async () => {
     const { createMem0Provider: create } = await import('../provider.js');
 
-    await create({
+    const provider = await create({
       config: { mode: 'embedded' },
     });
+    await provider.getAll({ userId: 'test-user' });
 
     expect(__capturedMem0Config).toBeDefined();
     const embedder = __capturedMem0Config!.embedder as {
@@ -244,12 +249,13 @@ describe('createMem0Provider additional scenarios', () => {
   it('passes custom extraction instructions to mem0 OSS', async () => {
     const { createMem0Provider: create } = await import('../provider.js');
 
-    await create({
+    const provider = await create({
       config: {
         mode: 'embedded',
         oss: { customInstructions: 'Always record memories in Simplified Chinese.' },
       },
     });
+    await provider.getAll({ userId: 'test-user' });
 
     expect(__capturedMem0Config?.customInstructions).toBe(
       'Always record memories in Simplified Chinese.',
@@ -259,9 +265,10 @@ describe('createMem0Provider additional scenarios', () => {
   it('defaults vectorStore to memory provider', async () => {
     const { createMem0Provider: create } = await import('../provider.js');
 
-    await create({
+    const provider = await create({
       config: { mode: 'embedded' },
     });
+    await provider.getAll({ userId: 'test-user' });
 
     expect(__capturedMem0Config).toBeDefined();
     const vs = __capturedMem0Config!.vectorStore as {
@@ -275,7 +282,7 @@ describe('createMem0Provider additional scenarios', () => {
   it('fills Pi defaults for a custom memory vector store config', async () => {
     const { createMem0Provider: create } = await import('../provider.js');
 
-    await create({
+    const provider = await create({
       config: {
         mode: 'embedded',
         oss: {
@@ -283,6 +290,7 @@ describe('createMem0Provider additional scenarios', () => {
         },
       },
     });
+    await provider.getAll({ userId: 'test-user' });
 
     const vs = __capturedMem0Config!.vectorStore as {
       provider: string;
@@ -295,7 +303,7 @@ describe('createMem0Provider additional scenarios', () => {
   it('preserves an explicit in-memory SQLite dbPath', async () => {
     const { createMem0Provider: create } = await import('../provider.js');
 
-    await create({
+    const provider = await create({
       config: {
         mode: 'embedded',
         oss: {
@@ -303,6 +311,7 @@ describe('createMem0Provider additional scenarios', () => {
         },
       },
     });
+    await provider.getAll({ userId: 'test-user' });
 
     const vs = __capturedMem0Config!.vectorStore as {
       provider: string;
@@ -314,7 +323,7 @@ describe('createMem0Provider additional scenarios', () => {
   it('respects custom vectorStore config', async () => {
     const { createMem0Provider: create } = await import('../provider.js');
 
-    await create({
+    const provider = await create({
       config: {
         mode: 'embedded',
         oss: {
@@ -322,6 +331,7 @@ describe('createMem0Provider additional scenarios', () => {
         },
       },
     });
+    await provider.getAll({ userId: 'test-user' });
 
     expect(__capturedMem0Config).toBeDefined();
     const vs = __capturedMem0Config!.vectorStore as {
@@ -335,9 +345,10 @@ describe('createMem0Provider additional scenarios', () => {
   it('defaults historyStore to the Pi memories directory', async () => {
     const { createMem0Provider: create } = await import('../provider.js');
 
-    await create({
+    const provider = await create({
       config: { mode: 'embedded' },
     });
+    await provider.getAll({ userId: 'test-user' });
 
     expect(__capturedMem0Config).toBeDefined();
     const historyStore = __capturedMem0Config!.historyStore as {
@@ -353,7 +364,7 @@ describe('createMem0Provider additional scenarios', () => {
   it('respects custom historyStore config', async () => {
     const { createMem0Provider: create } = await import('../provider.js');
 
-    await create({
+    const provider = await create({
       config: {
         mode: 'embedded',
         oss: {
@@ -364,6 +375,7 @@ describe('createMem0Provider additional scenarios', () => {
         },
       },
     });
+    await provider.getAll({ userId: 'test-user' });
 
     expect(__capturedMem0Config).toBeDefined();
     const historyStore = __capturedMem0Config!.historyStore as {
@@ -377,7 +389,7 @@ describe('createMem0Provider additional scenarios', () => {
   it('does not inject baseURL when resolveProvider returns no baseUrl', async () => {
     const { createMem0Provider: create } = await import('../provider.js');
 
-    await create({
+    const provider = await create({
       config: {
         mode: 'embedded',
         oss: {
@@ -386,6 +398,7 @@ describe('createMem0Provider additional scenarios', () => {
       },
       resolveProvider: async () => ({ apiKey: 'key123', api: 'openai-completions' }),
     });
+    await provider.getAll({ userId: 'test-user' });
 
     expect(__capturedMem0Config).toBeDefined();
     const embedder = __capturedMem0Config!.embedder as {
@@ -400,7 +413,7 @@ describe('createMem0Provider additional scenarios', () => {
   it('does not override explicitly set apiKey in config', async () => {
     const { createMem0Provider: create } = await import('../provider.js');
 
-    await create({
+    const provider = await create({
       config: {
         mode: 'embedded',
         oss: {
@@ -409,6 +422,7 @@ describe('createMem0Provider additional scenarios', () => {
       },
       resolveProvider: async () => ({ apiKey: 'registry-key', api: 'openai-completions' }),
     });
+    await provider.getAll({ userId: 'test-user' });
 
     expect(__capturedMem0Config).toBeDefined();
     const embedder = __capturedMem0Config!.embedder as {
@@ -429,12 +443,13 @@ describe('createMem0Provider additional scenarios', () => {
   it('sets disableHistory when configured', async () => {
     const { createMem0Provider: create } = await import('../provider.js');
 
-    await create({
+    const provider = await create({
       config: {
         mode: 'embedded',
         oss: { disableHistory: true },
       },
     });
+    await provider.getAll({ userId: 'test-user' });
 
     expect(__capturedMem0Config).toBeDefined();
     expect(__capturedMem0Config!.disableHistory).toBe(true);

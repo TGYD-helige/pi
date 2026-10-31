@@ -580,12 +580,14 @@ class OSSProvider implements Mem0Provider {
     private readonly ossConfig: Mem0ExtensionConfig['oss'] | undefined,
     private readonly resolveKey?: KeyResolver,
     private readonly resolveProvider?: ProviderResolver,
-  ) {}
+  ) {
+    void this.ensureMemory().catch(() => {
+      console.error('[pi-memory-mem0] embedded initialization failed');
+    });
+  }
 
   private async ensureMemory(): Promise<void> {
-    if (this.memory) return;
-    if (this.initPromise) return this.initPromise;
-    this.initPromise = this._init();
+    this.initPromise ??= this._init();
     return this.initPromise;
   }
 
@@ -874,8 +876,6 @@ export async function createMem0Provider(opts: CreateProviderOptions): Promise<M
       useRegistry ? resolveKey : undefined,
       useRegistry ? resolveProvider : undefined,
     );
-    // biome-ignore lint/suspicious/noExplicitAny: mem0ai/oss lacks type definitions
-    await (provider as any).ensureMemory();
     return provider;
   }
 

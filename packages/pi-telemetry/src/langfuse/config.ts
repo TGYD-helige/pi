@@ -60,14 +60,15 @@ export function resolveLangfuseExporterConfig(
   telemetryConfig: TelemetryConfig,
 ): LangfuseExporterConfig {
   const lf = telemetryConfig.langfuse;
-  const publicKey = lf?.publicKey ?? '';
-  const secretKey = lf?.secretKey ?? '';
+  const publicKey = trim(lf?.publicKey) ?? '';
+  const secretKey = trim(lf?.secretKey) ?? '';
+  const baseUrl = lf?.baseUrl === undefined ? DEFAULT_LANGFUSE_BASE_URL : trim(lf.baseUrl);
   const credentialsPresent = Boolean(publicKey && secretKey);
   return {
-    enabled: Boolean(lf?.enabled && credentialsPresent),
+    enabled: Boolean(parseBoolean(lf?.enabled) && credentialsPresent && baseUrl),
     publicKey,
     secretKey,
-    baseUrl: lf?.baseUrl || DEFAULT_LANGFUSE_BASE_URL,
+    baseUrl: baseUrl ?? '',
     flushAt: parsePositiveInteger(lf?.flushAt, DEFAULT_FLUSH_AT),
     flushIntervalMs: parsePositiveInteger(lf?.flushIntervalMs, DEFAULT_FLUSH_INTERVAL_MS),
     serviceName: telemetryConfig.serviceName ?? 'pi-server',
