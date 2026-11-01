@@ -263,7 +263,7 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
   }
 
   function applyToolProfile(): void {
-    if (config?.toolProfile !== 'core') return;
+    if (config?.toolProfile !== 'core' && config?.toolProfile !== 'lazy') return;
     const core = new Set(CORE_TOOLS);
     pi.setActiveTools(
       pi
@@ -397,7 +397,8 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
                 description: 'Desktop and browser automation',
               },
               exposure:
-                config?.toolProfile === 'full' || CORE_TOOLS.includes(originalName)
+                config?.toolProfile === 'full' ||
+                (config?.toolProfile !== 'lazy' && CORE_TOOLS.includes(originalName))
                   ? ('direct' as const)
                   : ('deferred' as const),
             }
