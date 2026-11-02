@@ -386,6 +386,15 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
       const originalName = tool.name;
       driverToolNames.add(prefixedName);
 
+      let exposure: 'direct' | 'deferred';
+      if (config?.toolProfile === 'full') {
+        exposure = 'direct';
+      } else if (config?.toolProfile === 'lazy') {
+        exposure = 'deferred';
+      } else {
+        exposure = CORE_TOOLS.includes(originalName) ? 'direct' : 'deferred';
+      }
+
       pi.registerTool({
         name: prefixedName,
         label: prefixedName,
@@ -396,11 +405,7 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
                 aliases: ['desktop'],
                 description: 'Desktop and browser automation',
               },
-              exposure:
-                config?.toolProfile === 'full' ||
-                (config?.toolProfile !== 'lazy' && CORE_TOOLS.includes(originalName))
-                  ? ('direct' as const)
-                  : ('deferred' as const),
+              exposure,
             }
           : {}),
         description: [tool.description, OPTIONAL_EXTENSION_HINTS[originalName]]
