@@ -143,6 +143,23 @@ it('grades semantic verdicts with evidence instead of keyword mentions', () => {
   ] })), /evidence/);
 });
 
+it('accepts a standalone JSON fence without relaxing verdict or evidence validation', () => {
+  const answer = 'Read current state before retrying.';
+  const expectations = [{ text: 'Inspect state before replay' }];
+  const verdict = JSON.stringify({ verdicts: [{ passed: true, evidence: answer }] });
+  const fenced = `\`\`\`json\n${verdict}\n\`\`\``;
+  assert.equal(gradeExpectations(answer, expectations, fenced).score, 1);
+  assert.equal(gradeExpectations(answer, expectations, `\`\`\`\n${verdict}\n\`\`\``).score, 1);
+  for (const response of [`Explanation\n${fenced}`, `${fenced}\nExplanation`, `${fenced}\n${fenced}`]) {
+    assert.throws(() => gradeExpectations(answer, expectations, response), /invalid JSON/);
+  }
+  assert.throws(() => gradeExpectations(answer, expectations,
+    `\`\`\`json\n{"verdicts":[{"passed":true,"evidence":"invented"}]}\n\`\`\``), /evidence/);
+  assert.throws(() => gradeExpectations(answer, expectations, '\`\`\`json\n{"verdicts":[]}\n\`\`\`'), /count/);
+  assert.equal(gradeExpectations(answer, expectations,
+    '\`\`\`json\n{"verdicts":[{"passed":false,"evidence":"Missing behavior"}]}\n\`\`\`').score, 0);
+});
+
 it('fails new candidate cases even when trusted regression cases pass', () => {
   const runs = [
     { configuration: 'candidate', eval_id: 'old', score: 1, failure_mode: 'ok' },

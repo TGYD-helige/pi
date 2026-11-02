@@ -103,6 +103,8 @@ The extension includes bounded structured results in model-visible text for thes
 
 Upstream recovery `hint` and `next_call` fields are also included in bounded model-visible text for failed or unconfirmed actions. A `screen_locked` snapshot requires waking and unlocking the Mac before retrying; do not send foreground input to the lock screen.
 
+Action results also expose the Driver's `effect`, `delivery`, `evidence`, and `escalation` fields in bounded model-visible text when present. A dispatched action or an unconfirmed effect does not prove completion or non-delivery. If an MCP response is lost, the outcome is unknown: read the target's current state before repeating clicks, typing or submissions. The extension does not automatically replay failed tool calls.
+
 Long descriptive text and large lists are shortened with a truncation notice; opaque IDs and continuation tokens are never shortened. Narrow browser reads with `query` or `scope_ref` in `semantic_v2` when needed. If session records are omitted locally, repeat `list_sessions` with a smaller `limit` before using `next_cursor` to avoid skipping unseen records. Original structured results remain available in bounded details.
 
 Before typed browser actions such as navigation, clicks, typing, pointer input, file assignment, and downloads, the extension automatically inspects the exact tab's JavaScript dialog state. This establishes the driver's CDP dialog-event subscription before the action can open a modal, so callers do not need to manually inspect first. If a dialog is already open, the action is not dispatched and its current `dialog_id` is returned for `browser_dialog` to resolve. If a dialog opened before this driver ever subscribed and inspection times out, dismiss it manually once before retrying; the extension cannot recover that existing modal through the affected driver path.
@@ -189,6 +191,8 @@ Driver startup, reconnect, and the first macOS permission probe are session-owne
 | Windows ARM64 | `@amaster.ai/pi-computer-use-cua-driver-win32-arm64` |
 
 ## Canonical workflow
+
+The package ships a [computer-use skill](skills/computer-use/SKILL.md) for selecting existing tools, narrowing observations, checking desired state, batching known sequences and recovering uncertain actions. Pi discovers it through `pi.skills`; invoke `/skill:computer-use <task>` to load it explicitly. It adds guidance rather than another tool surface or secondary decision model.
 
 1. `computer_use_launch_app` or `computer_use_list_apps`
 2. `computer_use_get_window_state`

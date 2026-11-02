@@ -122,7 +122,8 @@ export function selectRegressionEvalSet(base, head) {
 // each complete requirement; malformed or ungrounded verdicts fail closed.
 export function gradeExpectations(answer, expectations, verdictText) {
   let parsed;
-  try { parsed = JSON.parse(verdictText); }
+  const json = /^```(?:json)?\r?\n([\s\S]*)\r?\n```$/.exec(verdictText.trim())?.[1] ?? verdictText;
+  try { parsed = JSON.parse(json); }
   catch { throw new Error('judge returned invalid JSON'); }
   const verdicts = parsed?.verdicts;
   if (!Array.isArray(verdicts) || verdicts.length !== expectations.length) {

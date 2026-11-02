@@ -836,6 +836,35 @@ describe('computerUseExtension', () => {
     expect(lastRequestOptions).toMatchObject({ signal: controller.signal, timeout });
   });
 
+  it('reports an unknown outcome without encouraging replay when an action response is lost', async () => {
+    await start();
+    await tools.get('computer_use_list_apps')!.execute('warmup', {}, undefined, undefined, mockCtx);
+    const dispatch = vi.fn(() => {
+      throw new Error('response lost after delivery: private upstream details');
+    });
+    mockCallTool = dispatch;
+
+    const result = (await tools
+      .get('computer_use_type_text')!
+      .execute(
+        'id',
+        { element_token: 's1:1', text: 'Hello' },
+        undefined,
+        undefined,
+        mockCtx,
+      )) as any;
+
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(result.isError).toBe(true);
+    const text = result.content.map((item: { text: string }) => item.text).join('\n');
+    expect(text).toContain('execution outcome is unknown');
+    expect(text).toContain('Read the current target state before retrying any action');
+    expect(text).not.toContain('retry the tool');
+    expect(text).not.toContain('Failed to connect');
+    expect(text).not.toContain('private upstream details');
+    expect(notify).toHaveBeenCalledWith(expect.not.stringContaining('cannot connect'), 'warning');
+  });
+
   it('reconnects after the MCP transport closes', async () => {
     let connects = 0;
     mockConnect = async () => {

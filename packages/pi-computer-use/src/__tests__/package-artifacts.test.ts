@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadSkillsFromDir } from '@earendil-works/pi-coding-agent';
 import { describe, expect, it } from 'vitest';
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -10,6 +11,7 @@ const mainPackage = JSON.parse(readFileSync(join(packageRoot, 'package.json'), '
   files: string[];
   scripts: Record<string, string>;
   optionalDependencies?: Record<string, string>;
+  pi: { skills: string[] };
 };
 const release = JSON.parse(readFileSync(join(packageRoot, 'driver-release.json'), 'utf8')) as {
   version: string;
@@ -36,6 +38,17 @@ const preparedPackageVersion = preparedForRelease
   : undefined;
 
 describe('pi-computer-use package artifacts', () => {
+  it('ships a discoverable desktop skill through the package manifest', () => {
+    const result = loadSkillsFromDir({
+      dir: join(packageRoot, mainPackage.pi.skills[0]!),
+      source: 'package',
+    });
+    expect(result.diagnostics).toEqual([]);
+    expect(result.skills.map((skill) => skill.name)).toEqual(['computer-use']);
+    expect(result.skills[0]?.disableModelInvocation).toBe(false);
+    expect(mainPackage.files).toContain('skills');
+  });
+
   it('installs Cua Driver through platform-specific optional packages', () => {
     expect(mainPackage.files).not.toContain('bin');
     expect(mainPackage.scripts.postinstall).toBeUndefined();
