@@ -64,10 +64,11 @@ export interface BrowserUseConfig {
   /**
    * Which upstream tools are active at session start: 'core' activates only
    * the everyday toolset (extra groups via the browser_tools tool or the
-   * /browser-tools command), 'full' activates every discovered tool.
+   * /browser-tools command), 'full' activates every discovered tool, 'lazy'
+   * defers every upstream tool on native hosts and falls back to 'core' on legacy hosts.
    * Ignored in slim mode. Default: 'core'
    */
-  toolProfile?: 'core' | 'full';
+  toolProfile?: 'core' | 'full' | 'lazy';
 }
 
 export const DEFAULT_PROFILE_DIR = join(homedir(), '.pi', 'browser-profile');

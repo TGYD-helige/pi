@@ -60,7 +60,7 @@ Project settings are loaded only after project trust is accepted. `${ENV_VAR}` i
 | `extraArgs` | `string[]` | — | Additional arguments appended to `cua-driver mcp` |
 | `confirmAppLaunch` | `boolean` | `true` | Ask once per app target before `launch_app` |
 | `confirmDangerousActions` | `boolean` | `true` | Confirm high-risk tools such as `kill_app`, `replay_trajectory`, and `install_extension` with `confirm:true`; recording always requires confirmation |
-| `toolProfile` | `"core" \| "full"` | `"core"` | `"core"` activates only the everyday toolset at session start; `"full"` activates all 62 driver tools |
+| `toolProfile` | `"core" \| "full" \| "lazy"` | `"core"` | `"core"` activates the 14 everyday driver tools at session start; `"full"` activates all 62 driver tools; `"lazy"` defers all driver tools on native hosts and falls back to `"core"` on older hosts |
 | `visionModel` | `{ provider, model }` | — | Register `computer_use_analyze_screenshot` |
 
 In non-interactive modes, confirmation-required tools return an error unless the corresponding confirmation setting is explicitly disabled.
@@ -83,6 +83,8 @@ With the default `core` profile, only everyday tools are visible to the model (`
 Activated groups stay active for the rest of the session; each new session starts from the configured profile again.
 
 Pi hosts with native tool-discovery support expose driver tools under the `computer_use` namespace (alias `desktop`). Optional tools use `deferred` exposure under the `core` profile, so codemode can discover and call them and the built-in `tool_search` can activate them for direct use. On Pi 1.2, enable these built-ins with `pi --tools +codemode,+tool_search`; SDK hosts must load their corresponding built-in extension factories. Existing group activation, the `full` profile, and older-host behavior remain available. Deferred calls retain the same driver permissions, high-risk confirmations, cancellation, and host tool hooks as direct calls.
+
+To load even the 14 core driver tool schemas only when needed, explicitly set `"toolProfile": "lazy"`. On hosts with native discovery, all driver tools then use deferred exposure; enable `tool_search` to discover and activate them on demand, or use codemode discovery. On older hosts without native discovery, this profile behaves like `core`, with the everyday tools active and additional groups available through `computer_use_tools` or `/computer-use-tools`. The default remains `core`; `full` is unchanged. This profile only affects driver tools, not the group-management tool or the optional screenshot-analysis tool.
 
 After `get_browser_state({ pid, window_id })` binds a browser window, its bounded model-visible text includes `target_id` and tab records with `tab_id`, shortened title and URL, and active state. Active tabs appear first. Use the returned `target_id` and `tab_id` for subsequent browser calls; these IDs remain available in structured details as well.
 

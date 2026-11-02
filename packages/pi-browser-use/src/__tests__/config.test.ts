@@ -172,8 +172,8 @@ describe('resolveConfig', () => {
     expect(config.toolProfile).toBe('core');
   });
 
-  test('preserves the full tool profile', () => {
-    expect(resolveConfig({ toolProfile: 'full' }).toolProfile).toBe('full');
+  it.each(['full', 'lazy'] as const)('preserves the %s tool profile', (toolProfile) => {
+    expect(resolveConfig({ toolProfile }).toolProfile).toBe(toolProfile);
   });
 
   test('returns defaults when called with empty object', () => {

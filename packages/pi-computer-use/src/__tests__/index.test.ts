@@ -1397,6 +1397,36 @@ describe('computerUseExtension', () => {
         namespace: { name: 'computer_use' },
       });
     });
+    it('defers every driver tool with the lazy profile on native Pi', async () => {
+      await start({ toolProfile: 'lazy' });
+
+      for (const tool of toolManifest.tools) {
+        const name = `computer_use_${tool.name}`;
+        expect(tools.get(name)).toMatchObject({
+          exposure: 'deferred',
+          namespace: { name: 'computer_use' },
+        });
+        expect(mockPi.getActiveTools()).not.toContain(name);
+      }
+      expect(mockPi.getActiveTools()).toEqual(expect.arrayContaining(['read', 'bash']));
+    });
+
+    it('falls back to core with the lazy profile on legacy Pi', async () => {
+      piVersion.value = '0.85.1';
+      await start({ toolProfile: 'lazy' });
+
+      expect(tools.get('computer_use_click')).not.toHaveProperty('exposure');
+      expect(tools.get('computer_use_browser_navigate')).not.toHaveProperty('exposure');
+      expect(mockPi.getActiveTools()).toEqual(
+        expect.arrayContaining(['computer_use_click', 'computer_use_list_apps', 'read', 'bash']),
+      );
+      expect(mockPi.getActiveTools()).not.toContain('computer_use_browser_navigate');
+      await tools
+        .get('computer_use_tools')!
+        .execute('id', { group: 'browser' }, undefined, undefined, mockCtx);
+      expect(mockPi.getActiveTools()).toContain('computer_use_browser_navigate');
+    });
+
     it('keeps manual activation on legacy Pi', async () => {
       piVersion.value = '0.85.1';
       await start();
@@ -1411,6 +1441,14 @@ describe('computerUseExtension', () => {
       await start();
 
       const active = mockPi.getActiveTools();
+      expect(
+        toolManifest.tools.filter((tool) => active.includes(`computer_use_${tool.name}`)),
+      ).toHaveLength(14);
+      for (const tool of toolManifest.tools) {
+        if (active.includes(`computer_use_${tool.name}`)) {
+          expect(tools.get(`computer_use_${tool.name}`)?.exposure).toBe('direct');
+        }
+      }
       expect(active).toContain('computer_use_click');
       expect(active).toContain('computer_use_list_apps');
       expect(active).toContain('computer_use_verify_state');
@@ -1426,6 +1464,10 @@ describe('computerUseExtension', () => {
       await start({ toolProfile: 'full' });
 
       const active = mockPi.getActiveTools();
+      for (const tool of toolManifest.tools) {
+        expect(active).toContain(`computer_use_${tool.name}`);
+        expect(tools.get(`computer_use_${tool.name}`)?.exposure).toBe('direct');
+      }
       expect(active).toContain('computer_use_browser_click');
       expect(active).toContain('computer_use_start_recording');
       expect(active).toContain('computer_use_kill_app');
@@ -1593,9 +1635,9 @@ describe('config', () => {
     expect(resolveConfig().toolProfile).toBe('core');
   });
 
-  it('preserves the full tool profile', async () => {
+  it.each(['full', 'lazy'] as const)('preserves the %s tool profile', async (toolProfile) => {
     const { resolveConfig } = await import('../config.js');
-    expect(resolveConfig({ toolProfile: 'full' }).toolProfile).toBe('full');
+    expect(resolveConfig({ toolProfile }).toolProfile).toBe(toolProfile);
   });
 
   it('preserves a custom path and vision model', async () => {

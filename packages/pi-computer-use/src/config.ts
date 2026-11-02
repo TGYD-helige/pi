@@ -21,9 +21,11 @@ export interface ComputerUseConfig {
   /**
    * Which driver tools are active at session start: 'core' activates only the
    * everyday toolset (extra groups via the computer_use_tools tool or the
-   * /computer-use-tools command), 'full' activates every tool. Default: 'core'
+   * /computer-use-tools command), 'full' activates every tool, 'lazy' defers
+   * every driver tool on native hosts and falls back to 'core' on legacy hosts.
+   * Default: 'core'
    */
-  toolProfile?: 'core' | 'full';
+  toolProfile?: 'core' | 'full' | 'lazy';
 }
 
 const DEFAULTS: Partial<ComputerUseConfig> = {

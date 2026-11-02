@@ -481,7 +481,7 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
   }
 
   function applyToolProfile(): void {
-    if (config?.slim || config?.toolProfile !== 'core') return;
+    if (config?.slim || (config?.toolProfile !== 'core' && config?.toolProfile !== 'lazy')) return;
     const core = new Set(CORE_TOOLS);
     pi.setActiveTools(
       pi
@@ -599,6 +599,15 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
         tool.inputSchema.required?.includes('pageId') ?? false,
       );
 
+      let exposure: 'direct' | 'deferred';
+      if (config?.slim || config?.toolProfile === 'full') {
+        exposure = 'direct';
+      } else if (config?.toolProfile === 'lazy') {
+        exposure = 'deferred';
+      } else {
+        exposure = CORE_TOOLS.includes(originalName) ? 'direct' : 'deferred';
+      }
+
       pi.registerTool({
         name: prefixedName,
         label: prefixedName,
@@ -609,10 +618,7 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
                 aliases: ['browser_use'],
                 description: 'Browser automation',
               },
-              exposure:
-                config?.slim || config?.toolProfile === 'full' || CORE_TOOLS.includes(originalName)
-                  ? ('direct' as const)
-                  : ('deferred' as const),
+              exposure,
             }
           : {}),
         description,
