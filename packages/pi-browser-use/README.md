@@ -404,13 +404,15 @@ Integration uses `pull_request_target`, so GitHub loads its workflow definition 
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `toolProfile` | `"core" \| "full"` | `"core"` | `"core"` activates only the everyday toolset at session start; `"full"` activates every discovered tool. Ignored in `slim` mode |
+| `toolProfile` | `"core" \| "full" \| "lazy"` | `"core"` | `"core"` activates only the everyday toolset at session start; `"full"` activates every discovered tool; `"lazy"` defers all upstream tools on native hosts and falls back to `"core"` on older hosts. Ignored in `slim` mode |
 
 With the default `core` profile, only the core loop is visible to the model: `list_pages`, `new_page`, `navigate_page`, `select_page`, `close_page`, `wait_for`, `take_snapshot`, `take_screenshot`, `click`, `fill`, `fill_form`, `press_key`, `handle_dialog`, `evaluate_script`, and `list_console_messages`. Every other discovered tool stays registered but inactive, grouped by its upstream chrome-devtools-mcp category (`input`, `debugging`, `network`, `emulation`, `memory`, `performance`, ...). The model activates a group itself with the `browser_tools` tool (no argument lists the groups); users can do the same with `/browser-tools <group>`. Activated groups stay active until the end of the session.
 
 Tools that used to be filtered out (`lighthouse_audit`, performance traces, screencast, extension management) are now registered and deferred instead — enabling their categories via the flags above makes them activatable through their group.
 
 Pi hosts with native tool-discovery support also expose upstream tools under the `browser` namespace (alias `browser_use`). Under the `core` profile, optional tools use `deferred` exposure: codemode can find and call them without a manual group activation, and the built-in `tool_search` can discover and activate them for direct calls. On Pi 1.2, enable these built-ins with `pi --tools +codemode,+tool_search`; SDK hosts must load their corresponding built-in extension factories. The existing group tool and command remain available, `full` keeps all tools direct, and older hosts retain manual activation. Tool exposure controls discovery and visibility, not authorization; execution still passes through the host's tool hooks.
+
+To load even the core upstream tool schemas only when needed, explicitly set `"toolProfile": "lazy"`. On hosts with native discovery, all upstream tools then use deferred exposure; enable `tool_search` to discover and activate them on demand, or use codemode discovery. On older hosts without native discovery, this profile behaves like `core`, including manual group activation through `browser_tools` or `/browser-tools`. The default remains `core`; `full` is unchanged. In `slim` mode, all upstream tools stay directly exposed regardless of the profile. This profile only affects upstream tools, not group management, browser-session control, or the optional screenshot-analysis tool. It does not defer the upstream connection at session start.
 
 ### Experimental
 

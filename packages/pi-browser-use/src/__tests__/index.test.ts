@@ -364,10 +364,32 @@ describe('browserUseExtension', () => {
     });
 
     describe('deferred tool groups', () => {
-      it('keeps manual activation on legacy Pi', async () => {
+      it('defers every upstream tool with the lazy profile on native Pi', async () => {
+        await startExtension({ toolProfile: 'lazy' });
+
+        for (const tool of await mockListAllTools()) {
+          const name = `browser_${tool.name}`;
+          expect(registeredTools.get(name)).toMatchObject({
+            exposure: 'deferred',
+            namespace: { name: 'browser' },
+          });
+          expect(mockPi.getActiveTools()).not.toContain(name);
+        }
+        expect(mockPi.getActiveTools()).toEqual(expect.arrayContaining(['read', 'bash']));
+      });
+
+      it.each([
+        'core',
+        'lazy',
+      ])('keeps manual activation on legacy Pi with %s', async (toolProfile) => {
         piVersion.value = '0.85.1';
-        await startExtension();
+        await startExtension({ toolProfile });
+        expect(registeredTools.get('browser_click')).not.toHaveProperty('exposure');
         expect(registeredTools.get('browser_lighthouse_audit')).not.toHaveProperty('exposure');
+        expect(mockPi.getActiveTools()).toEqual(
+          expect.arrayContaining(['browser_click', 'browser_navigate_page', 'read', 'bash']),
+        );
+        expect(mockPi.getActiveTools()).not.toContain('browser_lighthouse_audit');
         await registeredTools
           .get('browser_tools')!
           .execute('id', { group: 'debugging' }, undefined, undefined, {});
@@ -415,18 +437,24 @@ describe('browserUseExtension', () => {
         expect(mockPi.getActiveTools()).toContain('browser_lighthouse_audit');
       });
 
-      it('keeps every slim-mode tool active regardless of the profile', async () => {
+      it.each([
+        'core',
+        'full',
+        'lazy',
+      ])('keeps every slim-mode tool direct with the %s profile', async (toolProfile) => {
         mockListAllTools.mockReturnValueOnce(
           Promise.resolve([
             { name: 'navigate', description: 'Navigate.', inputSchema: { type: 'object' } },
             { name: 'evaluate', description: 'Evaluate.', inputSchema: { type: 'object' } },
           ]) as any,
         );
-        await startExtension({ slim: true });
+        await startExtension({ slim: true, toolProfile });
 
         const active = mockPi.getActiveTools();
         expect(active).toContain('browser_navigate');
         expect(active).toContain('browser_evaluate');
+        expect(registeredTools.get('browser_navigate')?.exposure).toBe('direct');
+        expect(registeredTools.get('browser_evaluate')?.exposure).toBe('direct');
       });
 
       it('lists groups without activating when no group is given', async () => {

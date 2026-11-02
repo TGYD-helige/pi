@@ -481,7 +481,7 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
   }
 
   function applyToolProfile(): void {
-    if (config?.slim || config?.toolProfile !== 'core') return;
+    if (config?.slim || (config?.toolProfile !== 'core' && config?.toolProfile !== 'lazy')) return;
     const core = new Set(CORE_TOOLS);
     pi.setActiveTools(
       pi
@@ -610,7 +610,9 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
                 description: 'Browser automation',
               },
               exposure:
-                config?.slim || config?.toolProfile === 'full' || CORE_TOOLS.includes(originalName)
+                config?.slim ||
+                config?.toolProfile === 'full' ||
+                (config?.toolProfile !== 'lazy' && CORE_TOOLS.includes(originalName))
                   ? ('direct' as const)
                   : ('deferred' as const),
             }
