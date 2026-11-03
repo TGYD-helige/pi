@@ -490,12 +490,12 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
           } catch (connErr) {
             if (signal?.aborted) throw connErr;
             const msg = connErr instanceof Error ? connErr.message : String(connErr);
-            ctx.ui.notify(`pi-computer-use: cannot connect to cua-driver — ${msg}`, 'warning');
+            ctx.ui.notify(`pi-computer-use: request failed — ${msg}`, 'warning');
             return {
               content: [
                 {
                   type: 'text' as const,
-                  text: `Failed to connect to cua-driver: ${msg}. ${permissionHint()}`,
+                  text: `Computer-use request failed: ${msg} ${permissionHint()}`,
                 },
               ],
               details: undefined,

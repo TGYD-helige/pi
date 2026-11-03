@@ -667,7 +667,9 @@ export class CuaDriverClient {
     } catch {
       if (signal?.aborted) throw abortError(signal);
       await this.disconnectUnhealthyClient(this.generation);
-      throw new Error('Cua Driver connection lost; retry the tool.');
+      throw new Error(
+        'Cua Driver response unavailable; execution outcome is unknown. Read the current target state before retrying any action.',
+      );
     }
   }
 

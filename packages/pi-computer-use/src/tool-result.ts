@@ -295,7 +295,17 @@ function buildEnrichment(toolName: string, result: McpToolResult): string | unde
     originalText.split('\n').length < ENRICHMENT_MAX_LINES
       ? originalText
       : '';
-  const parts = structuredFieldLines({ hint: sc.hint, next_call: sc.next_call }, existingText);
+  const parts = structuredFieldLines(
+    {
+      effect: sc.effect,
+      delivery: sc.delivery,
+      escalation: sc.escalation,
+      evidence: sc.evidence,
+      hint: sc.hint,
+      next_call: sc.next_call,
+    },
+    existingText,
+  );
 
   if (!result.isError) {
     switch (toolName) {

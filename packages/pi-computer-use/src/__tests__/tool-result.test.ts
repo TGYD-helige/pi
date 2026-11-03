@@ -68,6 +68,60 @@ describe('toPiToolResult', () => {
   });
 
   describe('model-visible enrichment', () => {
+    it.each([
+      false,
+      true,
+    ])('exposes action delivery and verification evidence with isError=%s', (isError) => {
+      const structuredContent = {
+        effect: 'unverifiable',
+        delivery: { mode: 'background', delivered_count: 1 },
+        evidence: [{ kind: 'value_readback', detail: 'Readback unavailable.' }],
+        escalation: { target: 'page', reason: 'effect_unconfirmed' },
+      };
+      const result = toPiToolResult(
+        {
+          content: [{ type: 'text', text: 'Action dispatched.' }],
+          structuredContent,
+          isError,
+        },
+        'type_text',
+      );
+      const text = result.content.map((item) => ('text' in item ? item.text : '')).join('\n');
+
+      expect(text).toContain('unverifiable');
+      expect(text).toContain('"delivered_count":1');
+      expect(text).toContain('Readback unavailable.');
+      expect(text).toContain('effect_unconfirmed');
+      expect(result.details).toEqual(structuredContent);
+      expect(Boolean(result.isError)).toBe(isError);
+    });
+
+    it('keeps action evidence bounded and visible after oversized driver text', () => {
+      const result = toPiToolResult(
+        {
+          content: [{ type: 'text', text: 'Action dispatched.\n'.repeat(8_000) }],
+          structuredContent: {
+            effect: 'partial',
+            delivery: { mode: 'background', delivered_count: 1 },
+            evidence: Array.from({ length: 2_000 }, () => ({
+              kind: 'value_readback',
+              detail: 'x'.repeat(200),
+            })),
+            hint: 'Read current state before repeating.',
+          },
+        },
+        'type_text',
+      );
+      const text = result.content.map((item) => ('text' in item ? item.text : '')).join('\n');
+
+      expect(text).toContain('partial');
+      expect(text).toContain('"delivered_count":1');
+      expect(text).toContain('Read current state before repeating.');
+      expect(text).toContain('evidence truncated');
+      expect(text.split('\n').length).toBeLessThanOrEqual(DEFAULT_MAX_LINES);
+      expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(DEFAULT_MAX_BYTES);
+    });
+
     it('includes recovery guidance only once when enriching all structured fields', () => {
       const result = toPiToolResult(
         { structuredContent: { hint: 'Read the window again.' } },
