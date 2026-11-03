@@ -5,7 +5,7 @@ import { Type } from 'typebox';
 export const SESSION_DESCRIPTION =
   'Retain the current live browser before waiting for human QR login, MFA, or another operation that must preserve the original page. Ordinary tasks do not need retention. Check status after resuming, re-list pages, and release retention when the handoff is complete or cancelled. Retention consumes resources and cannot extend website login deadlines.';
 
-export const sessionParameters = Type.Object({
+export const sessionParameters: ReturnType<typeof Type.Object> = Type.Object({
   action: StringEnum(['retain', 'status', 'release'] as const),
 });
 
