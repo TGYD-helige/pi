@@ -9,7 +9,7 @@ Choose each shot's source independently: existing media, a model-generated clip,
 
 ## Route the task
 
-Honor the user's specified method and existing usable material. Read only the relevant assembly guide:
+Honor the user's specified method and existing usable material. For a plan-only product film, choose a route from this table and follow film direction below; defer executable assembly guides until authoring. Otherwise read only the relevant assembly guide:
 
 | Goal | Tool and reference |
 |---|---|

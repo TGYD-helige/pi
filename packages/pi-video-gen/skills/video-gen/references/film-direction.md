@@ -2,7 +2,7 @@
 
 Use this workflow for product launch films, product demos and authored explainers. Scale the plan to the requested film: a short supplied edit can use a few lines in chat; a film with several scenes or collaborators benefits from a saved `treatment.md` beside its editable source. Keep planning/source files outside generated job directories. The selected Timeline or Remotion guide remains the authority for executable inputs, trust, paid scope and recovery.
 
-For a plan-only request, use one compact beat table plus short production and verification lists. Read the direction, motion and product-component guides when relevant; defer assembly schemas, sample source and implementation details until authoring. Describe planned checks without inventing observations from an export that does not exist.
+For a plan-only request, aim for about 600 words unless more detail is requested: one beat table plus short production and verification lists. Include a pre-build proof of representative opening, hero, densest and ending key frames, then concrete director-review questions about the opening, weakest passage and pacing or sound. Read the direction, motion and product-component guides when relevant; defer assembly schemas, sample source and implementation details until authoring. Describe planned checks without inventing observations from an export that does not exist.
 
 ## 1. Ground the film in the product
 
