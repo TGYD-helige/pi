@@ -4,6 +4,8 @@ Use this workflow for product launch films, product demos and authored explainer
 
 ## 1. Ground the film in the product
 
+For software shown through its source components or release notes, read [product component integration](product-components.md) before planning the demonstration.
+
 Read the supplied site, UI, brand assets, data and footage before designing scenes. State the audience, the one idea the viewer should retain, the target duration/aspect ratio and the evidence that demonstrates that idea. Trace on-screen claims, numbers and UI states to those materials. Label illustrative mockups as such; use actual product states for demonstrations. If access is unavailable, identify the missing evidence and work from the material available without inventing product capabilities.
 
 Resolve only decisions that change the result and remain unspecified. Use an established style and supplied media first. State reasonable defaults for missing creative preferences and continue; ask when a missing fact or choice prevents a faithful result. Record whether sound comes from existing footage, supplied music, narration, or a music/effects treatment. Follow the entry skill's authorization rules before any paid generation or narration upload.

@@ -22,6 +22,8 @@ Use one visible carrier across the transition, interpolating position, bounds an
 
 For sound, use supplied or appropriately licensed assets. Put sparse accents on meaningful results, not on every animated property. Music should leave room for speech and important effects; author gain changes in the project when needed. Word-triggered animation requires timing with a known source and precision. Sentence boundaries or interpolated estimates MUST NOT be described as measured word alignment. Missing sound assets remain a production gap, not evidence of a completed sound treatment.
 
+Keep music and effects separately editable. Align a recorded effect's relevant audible landmark to the action, accounting for any lead-in instead of aligning the file start. The [audio example](../examples/continuous-demo/README.md#prepare-and-preview) calibrates its synthesized sample peak and exports stems plus a reference report; sample peaks remain a timing heuristic. Listen to the stems and the encoded mix separately, and recheck balance/clipping after changing gains or timings.
+
 ## Review the vulnerable moments
 
 For each risky handoff, choose a small set of before, middle and after timestamps. Include the moment of greatest zoom or travel, dense text and the result hold. Put up to 32 selected seconds-based times into `qcTimesSec` in the existing Remotion spec. Batch work still supplies `videoGenShotTimesSec` for every shot. The checks validate times and extract actual export frames; they do not recognize the carrier or judge aesthetics.
