@@ -2,7 +2,11 @@
 
 Use this workflow for product launch films, product demos and authored explainers. Scale the plan to the requested film: a short supplied edit can use a few lines in chat; a film with several scenes or collaborators benefits from a saved `treatment.md` beside its editable source. Keep planning/source files outside generated job directories. The selected Timeline or Remotion guide remains the authority for executable inputs, trust, paid scope and recovery.
 
+For a plan-only request, aim for about 600 words unless more detail is requested: one beat table plus short production and verification lists. Include a pre-build proof of representative opening, hero, densest and ending key frames, then concrete director-review questions about the opening, weakest passage and pacing or sound. Read the direction, motion and product-component guides when relevant; defer assembly schemas, sample source and implementation details until authoring. Describe planned checks without inventing observations from an export that does not exist.
+
 ## 1. Ground the film in the product
+
+For software shown through its source components or release notes, read [product component integration](product-components.md) before planning the demonstration.
 
 Read the supplied site, UI, brand assets, data and footage before designing scenes. State the audience, the one idea the viewer should retain, the target duration/aspect ratio and the evidence that demonstrates that idea. Trace on-screen claims, numbers and UI states to those materials. Label illustrative mockups as such; use actual product states for demonstrations. If access is unavailable, identify the missing evidence and work from the material available without inventing product capabilities.
 
@@ -59,7 +63,7 @@ For continuous or hybrid films, read [motion authoring](motion-authoring.md). Fo
 
 Build the shot or transition most likely to fail first: a dense UI view, cross-device handoff, difficult chart, or hero reveal. Inspect it at delivery resolution using the Remotion project's native preview/still renderer, or source-frame and overlay stills for Timeline, before extending the same treatment to the full film. Correct unreadable text, collisions, unclear focus and broken continuity at this stage. Reserve `video_compose` or `video_render` for one complete initial film export after all scenes are ready; a full-length placeholder film is not a required proof stage. If a separate prototype video is genuinely necessary, explain that extra render explicitly rather than silently adding it to the default workflow.
 
-For a multi-scene film, inspect representative key frames for the opening, hero moment, densest information and ending. These may be frames from the same prototype rather than separate generated images. For missing mascot portraits or shot frames, use `image_generate` through the pi-image-gen skill and record the returned asset paths. Keep supplied screenshots as original assets. Then build the remaining scenes using the chosen Timeline or Remotion path and any generated shots the film actually needs.
+For a multi-scene film, inspect representative key frames for the opening, hero moment, densest information and ending. These may be frames from the same prototype rather than separate generated images. For missing bitmap mascot portraits or shot frames, use `image_generate` through the pi-image-gen skill and record the returned asset paths. A native vector mascot can remain editable in Remotion without image generation; explain that choice. If generated images are needed but not authorized, identify them as a gap and request scoped approval before calling. Keep supplied screenshots as original assets. Then build the remaining scenes using the chosen Timeline or Remotion path and any generated shots the film actually needs.
 
 ## 5. Plan sound on the same clock as picture
 

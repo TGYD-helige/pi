@@ -1,6 +1,7 @@
 import React from 'react';
 import { AbsoluteFill, Audio, Composition, Easing, interpolate, registerRoot, staticFile, useCurrentFrame, useVideoConfig } from 'remotion';
 import { durationSec, events, poses } from '../timing.mjs';
+import { ProductDemo, ProductPlayground } from './product-demo';
 
 const blue = '#275de9';
 const ink = '#12203c';
@@ -103,7 +104,7 @@ const Review = ({ t }: { t: number }) => {
   </div>;
 };
 
-const Demo = () => {
+const Demo = ({ musicVolume, effectsVolume }: { musicVolume: number; effectsVolume: number }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const t = frame / fps;
@@ -144,8 +145,13 @@ const Demo = () => {
       <div style={{ fontFamily: 'monospace', fontSize: 37, color: blue, marginTop: 30 }}>pi-video-gen</div>
       <div style={{ fontSize: 28, color: '#6c7c96', marginTop: 55, letterSpacing: 5 }}>生成 · 编排 · 审阅 · 交付</div>
     </div>
-    <Audio src={staticFile('score.wav')} volume={1} />
+    <Audio src={staticFile('music.wav')} volume={musicVolume} />
+    <Audio src={staticFile('effects.wav')} volume={effectsVolume} />
   </AbsoluteFill>;
 };
 
-registerRoot(() => <Composition id="ContinuousDemo" component={Demo} width={1920} height={1080} fps={30} durationInFrames={durationSec * 30} />);
+registerRoot(() => <>
+  <Composition id="ContinuousDemo" component={Demo} defaultProps={{ musicVolume: 1, effectsVolume: 1 }} width={1920} height={1080} fps={30} durationInFrames={durationSec * 30} />
+  <Composition id="ProductDemo" component={ProductDemo} width={1280} height={720} fps={30} durationInFrames={240} />
+  <Composition id="ProductPlayground" component={ProductPlayground} width={1280} height={720} fps={30} durationInFrames={240} />
+</>);
