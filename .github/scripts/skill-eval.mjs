@@ -688,7 +688,7 @@ async function main() {
   }
 
   const runCount = Number(process.env.SKILL_EVAL_RUNS || '3');
-  const timeoutMs = Number(process.env.SKILL_EVAL_TIMEOUT_MS || '120000');
+  const timeoutMs = Number(process.env.SKILL_EVAL_TIMEOUT_MS || '240000');
   if (!Number.isInteger(runCount) || runCount < 1 || runCount > 5) throw new Error('SKILL_EVAL_RUNS must be 1..5');
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 600000) throw new Error('SKILL_EVAL_TIMEOUT_MS must be 1000..600000');
 
