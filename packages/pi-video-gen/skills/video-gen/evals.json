@@ -76,9 +76,10 @@
           ]
         },
         {
-          "text": "Uses image_generate for needed mascot/reference frames while reusing suitable supplied screenshots; does not regenerate all supplied visuals by default.",
-          "includes": [
-            "image_generate"
+          "text": "Reuses suitable supplied screenshots and explains the missing mascot/reference asset route: image_generate for needed bitmap art subject to paid approval, or an editable native vector mascot that needs no image generation. Does not regenerate supplied visuals or bypass approval.",
+          "includes_any": [
+            "image_generate",
+            "vector"
           ]
         },
         {
@@ -166,13 +167,13 @@
           ]
         },
         {
-          "text": "Grounds demonstrated functionality in the release tag and identifies the experimental feature as outside it",
+          "text": "Grounds demonstrated functionality in the release tag and excludes the development-only bulk-action feature from the shipped demonstration",
           "includes_any": [
             "release",
             "released"
           ],
           "includes": [
-            "experimental"
+            "bulk"
           ]
         },
         {
