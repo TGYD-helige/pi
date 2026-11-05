@@ -82,9 +82,17 @@ describe('network', () => {
     globalThis.fetch = wrappedFetch;
 
     try {
-      await expect(safeFetch('https://does-not-resolve.invalid/private')).rejects.toThrow(
-        /public HTTP/i,
-      );
+      await expect(
+        safeFetch(
+          'https://does-not-resolve.invalid/private',
+          {},
+          {
+            lookup: async () => {
+              throw Object.assign(new Error('DNS unavailable'), { code: 'ENOTFOUND' });
+            },
+          },
+        ),
+      ).rejects.toMatchObject({ errorCategory: 'network_error' });
       expect(wrappedFetch).not.toHaveBeenCalled();
     } finally {
       globalThis.fetch = originalFetch;

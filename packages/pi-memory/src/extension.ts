@@ -111,8 +111,15 @@ export default function memoryExtension(
   let store: MemoryStore | undefined;
   let extractionRunner: ExtractionRunner | undefined;
   let systemPromptSnapshot = '';
+  let dreamController: AbortController | undefined;
 
   pi.on('session_start', async (_event, ctx) => {
+    dreamController?.abort();
+    const controller = new AbortController();
+    dreamController = controller;
+    const signal = ctx.signal
+      ? AbortSignal.any([ctx.signal, controller.signal])
+      : controller.signal;
     systemPromptSnapshot = '';
     const fileConfig = loadSettings(ctx.cwd, isProjectTrusted(ctx));
     const config = resolveConfig({ ...fileConfig, ...injectedConfig });
@@ -159,9 +166,9 @@ export default function memoryExtension(
         modelRegistry: ctx.modelRegistry as never,
         sessionDir: ctx.sessionManager.getSessionDir(),
         ...(config.dreaming ? { dreaming: config.dreaming } : {}),
-        ...(ctx.signal ? { signal: ctx.signal } : {}),
+        signal,
       }).catch((error) => {
-        if (ctx.signal?.aborted) return;
+        if (signal.aborted) return;
         const failure = describeToolError('Background memory dream', error);
         console.error(`[pi-memory] ${failure.errorCategory}: ${failure.error}`);
         ctx.ui.notify(failure.error, 'warning');
@@ -207,6 +214,8 @@ export default function memoryExtension(
   });
 
   pi.on('session_shutdown', async () => {
+    dreamController?.abort();
+    dreamController = undefined;
     extractionRunner?.shutdown();
     extractionRunner = undefined;
     store = undefined;

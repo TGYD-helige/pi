@@ -24,11 +24,11 @@ describe('memoryExtension', () => {
     rmSync(TEST_ROOT, { recursive: true, force: true });
   });
 
-  it('starts dreaming in the background', async () => {
+  it('starts dreaming and ignores late failures after session shutdown', async () => {
     let finishDream: (() => void) | undefined;
     runDreamMock.mockReturnValue(
-      new Promise<boolean>((resolve) => {
-        finishDream = () => resolve(false);
+      new Promise<boolean>((_resolve, reject) => {
+        finishDream = () => reject(new Error('late dream failure'));
       }),
     );
     const dir = path.join(TEST_ROOT, `dream-${Date.now()}`);
@@ -76,9 +76,24 @@ describe('memoryExtension', () => {
       memoryDir: dir,
       modelRegistry: ctx.modelRegistry,
       sessionDir: path.join(dir, 'sessions'),
-      signal: ctx.signal,
+      signal: expect.any(AbortSignal),
+    });
+    const dreamSignal = runDreamMock.mock.calls[0]![0].signal as AbortSignal;
+    expect(dreamSignal.aborted).toBe(false);
+    for (const handler of eventHandlers.session_shutdown ?? []) await handler({}, ctx);
+    expect(dreamSignal.aborted).toBe(true);
+    Object.defineProperty(ctx, 'signal', {
+      get: () => {
+        throw new Error('stale context');
+      },
+    });
+    Object.defineProperty(ctx, 'ui', {
+      get: () => {
+        throw new Error('stale UI');
+      },
     });
     finishDream?.();
+    await new Promise((resolve) => setImmediate(resolve));
   });
 
   it('scans global sessions only for the default global store', async () => {
@@ -116,6 +131,7 @@ describe('memoryExtension', () => {
 
       expect(runDreamMock).toHaveBeenCalledWith({
         includeGlobalSessions: true,
+        signal: expect.any(AbortSignal),
         memoryDir: path.join(dir, 'memories'),
         modelRegistry: ctx.modelRegistry,
         sessionDir: path.join(dir, 'sessions'),
