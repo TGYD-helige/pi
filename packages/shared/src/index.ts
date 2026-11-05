@@ -506,6 +506,7 @@ export {
 export {
   classifyError,
   createModelErrorCapture,
+  describeMcpError,
   describeToolError,
   type ErrorCategory,
   type ErrorClassification,

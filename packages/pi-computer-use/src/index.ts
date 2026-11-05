@@ -689,10 +689,10 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
           );
         }
 
-        return {
-          content: [{ type: 'text' as const, text: analysis }],
-          details: undefined,
-        };
+        return toPiToolResult(
+          { content: [{ type: 'text', text: analysis }] },
+          'analyze_screenshot',
+        );
       },
     });
   }

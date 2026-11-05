@@ -130,6 +130,54 @@ export async function runDream(options: RunDreamOptions): Promise<boolean> {
 const MAX_SESSION_FILES = 32;
 const MAX_SESSION_BYTES = 256 * 1024;
 const MAX_RECOVERY_BYTES = 8 * 1024 * 1024;
+const SESSION_ENTRY_TYPES: Record<SessionEntry['type'], true> = {
+  message: true,
+  thinking_level_change: true,
+  model_change: true,
+  usage: true,
+  compaction: true,
+  branch_summary: true,
+  custom: true,
+  custom_message: true,
+  context_edit: true,
+  label: true,
+  session_info: true,
+};
+
+function isBranchEntry(value: unknown): value is SessionEntry {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const entry = value as Record<string, unknown>;
+  const basic =
+    typeof entry.type === 'string' &&
+    Object.hasOwn(SESSION_ENTRY_TYPES, entry.type) &&
+    typeof entry.id === 'string' &&
+    entry.id.length > 0 &&
+    (entry.parentId === null ||
+      (typeof entry.parentId === 'string' && entry.parentId.length > 0)) &&
+    typeof entry.timestamp === 'string' &&
+    Number.isFinite(Date.parse(entry.timestamp));
+  if (!basic) return false;
+  if (entry.type !== 'message') return true;
+  if (!entry.message || typeof entry.message !== 'object' || Array.isArray(entry.message))
+    return false;
+  const message = entry.message as { role?: unknown; content?: unknown };
+  if (typeof message.role !== 'string' || !message.role) return false;
+  if (message.role !== 'user' && message.role !== 'assistant') return true;
+  const content = message.content;
+  // Pi normalizes missing legacy content to an empty collection.
+  if (content == null || typeof content === 'string') return true;
+  if (!Array.isArray(content)) return false;
+  return content.every((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
+    const part = item as Record<string, unknown>;
+    return (
+      typeof part.type === 'string' &&
+      part.type.length > 0 &&
+      (part.type !== 'text' || typeof part.text === 'string')
+    );
+  });
+}
+
 const INVALID_HISTORY =
   'Memory session history is malformed or its header exceeds the scan limit. Repair the session file before retrying; the checkpoint was not advanced.';
 
@@ -266,6 +314,7 @@ async function scanPiSessionTurns(
         const header = entries[0];
         if (
           entries.length !== content.split('\n').filter((line) => line.trim()).length ||
+          entries.some((entry) => !entry || typeof entry !== 'object' || Array.isArray(entry)) ||
           header?.type !== 'session' ||
           typeof header.id !== 'string' ||
           !header.id
@@ -276,14 +325,27 @@ async function scanPiSessionTurns(
         const byId = new Map<string, SessionEntry>();
         let leaf: SessionEntry | undefined;
         for (const entry of entries) {
-          if (entry.type === 'session') continue;
+          if (entry === header) continue;
+          if (!isBranchEntry(entry) || byId.has(entry.id)) {
+            throw new ValidationError(INVALID_HISTORY, 'configuration_error');
+          }
           byId.set(entry.id, entry);
           leaf = entry;
         }
+        const seenIds = new Set<string>();
+        for (const entry of byId.values()) {
+          // A missing parent may precede the window; retained parents must precede their children.
+          if (
+            entry.parentId !== null &&
+            !seenIds.has(entry.parentId) &&
+            (start === 0 || byId.has(entry.parentId))
+          ) {
+            throw new ValidationError(INVALID_HISTORY, 'configuration_error');
+          }
+          seenIds.add(entry.id);
+        }
         const branch: SessionEntry[] = [];
-        const visited = new Set<string>();
-        while (leaf && !visited.has(leaf.id)) {
-          visited.add(leaf.id);
+        while (leaf) {
           branch.push(leaf);
           leaf = leaf.parentId ? byId.get(leaf.parentId) : undefined;
         }

@@ -531,6 +531,40 @@ describe('browserUseExtension', () => {
       expect(tool!.promptSnippet).toContain('browser_list_pages');
     });
 
+    it.each([
+      ['error', 'http_error'],
+      ['aborted', 'cancelled'],
+      ['empty', 'invalid_response'],
+    ])('marks %s vision results as failed analysis', async (kind, category) => {
+      await startExtension({ visionModel: { provider: 'fixture', model: 'fixture' } });
+      mockCallTool.mockResolvedValueOnce({
+        content: [{ type: 'image', data: 'aW1hZ2U=', mimeType: 'image/png' }],
+      });
+      mockComplete.mockResolvedValueOnce(
+        Object.assign(
+          { content: [{ type: 'text', text: kind === 'empty' ? '  ' : 'partial test-token' }] },
+          {
+            stopReason: kind === 'empty' ? 'stop' : kind,
+            errorMessage: kind === 'error' ? 'HTTP 403: test-token' : 'test-token',
+          },
+        ),
+      );
+      const result = await registeredTools
+        .get('browser_analyze_screenshot')!
+        .execute('id', {}, undefined, undefined, {
+          modelRegistry: {
+            find: () => ({ id: 'fixture', provider: 'fixture' }),
+            getApiKeyAndHeaders: async () => ({ ok: true, apiKey: 'test-key' }),
+          },
+        });
+      expect(result).toMatchObject({
+        isError: true,
+        structuredContent: { errorCategory: category },
+      });
+      expect(JSON.stringify(result)).not.toContain('test-token');
+      expect(JSON.stringify(result)).not.toContain('Fields:');
+    });
+
     it('omits temperature when the configured vision model uses reasoning', async () => {
       await startExtension({
         visionModel: { provider: 'deepseek-integration', model: 'kimi-k2.6' },

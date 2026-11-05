@@ -32,16 +32,27 @@ export async function writeJsonFile(filePath: string, value: unknown): Promise<v
   await mkdir(path.dirname(filePath), { recursive: true });
   const tempPath = `${filePath}.${randomUUID()}.tmp`;
   const backupPath = jsonBackupPath(filePath);
-  await copyFile(filePath, backupPath).catch((error) => {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      throw error;
-    }
-  });
+  const backupCandidate = `${tempPath}.bak`;
+  try {
+    await copyFile(filePath, backupCandidate);
+    await readJsonFileStrict<unknown>(backupCandidate);
+    await rename(backupCandidate, backupPath);
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      console.error('[pi-task-scheduler] primary JSON is malformed; retained the existing backup');
+    } else if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  } finally {
+    await rm(backupCandidate, { force: true }).catch(() =>
+      console.error('[pi-task-scheduler] backup cleanup failed'),
+    );
+  }
   try {
     await writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`);
     await rename(tempPath, filePath);
   } catch (error) {
-    await rm(tempPath, { force: true }).catch(() => undefined);
+    await rm(tempPath, { force: true }).catch(() =>
+      console.error('[pi-task-scheduler] temporary JSON cleanup failed'),
+    );
     throw error;
   }
 }

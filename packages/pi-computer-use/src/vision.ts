@@ -1,3 +1,4 @@
+import { createModelErrorCapture, ValidationError } from '@amaster.ai/pi-shared';
 import type { TextContent as AiTextContent } from '@earendil-works/pi-ai';
 import { complete } from '@earendil-works/pi-ai/compat';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
@@ -36,16 +37,22 @@ export function createPiVisionCaller(
     mimeType: string,
     signal?: AbortSignal,
   ): Promise<string> => {
+    signal?.throwIfAborted();
     const model = ctx.modelRegistry.find(visionConfig.provider, visionConfig.model);
     if (!model) {
-      throw new Error(
-        `Vision model "${visionConfig.provider}/${visionConfig.model}" not found in model registry.`,
+      throw new ValidationError(
+        'Vision model not found in model registry. Check the configured provider/model.',
+        'configuration_error',
       );
     }
 
     const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+    signal?.throwIfAborted();
     if (!auth.ok) {
-      throw new Error(`Auth failed for vision model: ${auth.error}`);
+      throw new ValidationError(
+        'Auth failed for vision model: credentials are unavailable. Check the vision model credentials.',
+        'configuration_error',
+      );
     }
 
     const options: Record<string, unknown> = {
@@ -55,6 +62,8 @@ export function createPiVisionCaller(
     if (auth.headers) options.headers = auth.headers;
     if (signal) options.signal = signal;
 
+    const modelErrors = createModelErrorCapture();
+    Object.assign(options, modelErrors.fetchOptions(model.api));
     const result = await complete(
       model,
       {
@@ -75,6 +84,15 @@ export function createPiVisionCaller(
       },
       options,
     );
+
+    signal?.throwIfAborted();
+    if (result.stopReason === 'error' || result.stopReason === 'aborted') {
+      throw modelErrors.error(
+        'Vision model request',
+        result,
+        'Use accessibility tree elements instead.',
+      );
+    }
 
     if (process.env.DEBUG?.includes('pi-computer-use')) {
       const contentShape = result.content.map((c) => {
@@ -104,9 +122,15 @@ export function createPiVisionCaller(
       );
     }
 
-    return result.content
+    const analysis = result.content
       .filter((c): c is AiTextContent => c.type === 'text')
       .map((c) => c.text)
       .join('');
+    if (!analysis.trim())
+      throw new ValidationError(
+        'Vision model returned no analysis. Use accessibility tree elements instead.',
+        'invalid_response',
+      );
+    return analysis;
   };
 }

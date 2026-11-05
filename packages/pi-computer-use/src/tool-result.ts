@@ -1,4 +1,4 @@
-import { describeToolError } from '@amaster.ai/pi-shared';
+import { describeMcpError } from '@amaster.ai/pi-shared';
 import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
@@ -104,20 +104,22 @@ export function toPiToolResult(
     const message = (result.content ?? [])
       .slice(0, 4)
       .filter((item) => item.type === 'text')
-      .map((item) => item.text?.slice(0, 1024) ?? '')
+      .map((item) => item.text?.slice(0, 4096) ?? '')
       .join('\n')
-      .slice(0, 1024);
-    const failure = describeToolError(
+      .slice(0, 4096);
+    const failure = describeMcpError(
       'Computer tool',
-      Object.assign(new Error(message), {
-        errorCategory: result.structuredContent?.errorCategory,
-        httpStatus: result.structuredContent?.httpStatus,
-      }),
+      result,
       'The execution outcome is unknown. Read the current target state before retrying any action.',
     );
-    if (safeErrorText) failure.error = safeErrorText;
+    const setup = browserSetupRecovery(result.structuredContent, message, toolName);
+    if (setup) failure.error = setup.message;
+    if (safeErrorText) failure.error = safeErrorText + (setup ? `\n${setup.message}` : '');
     console.error(`[pi-computer-use] upstream tool failed (category=${failure.errorCategory})`);
-    const metadata = safeFailureMetadata(result.structuredContent);
+    const metadata = {
+      ...safeFailureMetadata(result.structuredContent),
+      ...(setup ? { code: setup.code, next_call: setup.nextCall } : {}),
+    };
     const extra = buildEnrichment(toolName ?? '', { structuredContent: metadata, isError: true });
     return {
       content: [{ type: 'text', text: failure.error + (extra ? `\n${extra}` : '') }],
@@ -538,4 +540,47 @@ function safeFailureMetadata(value: Record<string, unknown> = {}): Record<string
       delete metadata[key];
   }
   return metadata;
+}
+
+function browserSetupRecovery(value: unknown, text: string, toolName?: string) {
+  if (toolName !== 'get_browser_state' && !toolName?.startsWith('browser_')) return undefined;
+  const object = (item: unknown): Record<string, unknown> | undefined =>
+    item && typeof item === 'object' && !Array.isArray(item)
+      ? (item as Record<string, unknown>)
+      : undefined;
+  let root = object(value);
+  if (!root) {
+    try {
+      root = object(JSON.parse(text));
+    } catch {
+      /* Raw errors need not be JSON. */
+    }
+  }
+  const error = object(root?.error);
+  const code = [
+    root?.code,
+    error?.code,
+    text.match(/^(?:Error:\s*)?(browser_requires_setup|browser_consent_required)\b/)?.[1],
+  ].find((item) => item === 'browser_requires_setup' || item === 'browser_consent_required');
+  if (!code) return undefined;
+  const detail = object(root?.detail) ?? object(error?.detail);
+  const next = object(detail?.next_call) ?? object(root?.next_call);
+  const args = object(next?.arguments);
+  const pid = args?.pid;
+  const windowId = args?.window_id;
+  const existing = object(args?.strategy)?.kind === 'existing_profile';
+  const validId = (id: unknown): id is number =>
+    typeof id === 'number' && Number.isSafeInteger(id) && id > 0;
+  const nextCall =
+    next?.tool === 'browser_prepare' && existing && validId(pid) && validId(windowId)
+      ? {
+          tool: 'browser_prepare',
+          arguments: { pid, window_id: windowId, strategy: { kind: 'existing_profile' } },
+        }
+      : { tool: 'get_guide', arguments: { topic: 'browser' } };
+  return {
+    code,
+    nextCall,
+    message: `${code}: Browser inspection needs setup. With the required authorization, call computer_use_browser_prepare for the intended pid/window_id, keeping the same session and strategy {"kind":"existing_profile"}, then retry inspection. Use computer_use_get_guide with topic=browser if authorization or target IDs are unavailable.`,
+  };
 }

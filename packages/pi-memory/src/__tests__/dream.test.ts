@@ -117,6 +117,14 @@ describe('runDream', () => {
     'header JSON',
     'header type',
     'body JSON',
+    'entry shape',
+    'unknown entry type',
+    'duplicate id',
+    'invalid parent',
+    'invalid timestamp',
+    'missing message role',
+    'invalid message content',
+    'invalid text block',
   ])('preserves the checkpoint for corrupted %s and rescans repaired history', async (kind) => {
     const memoryDir = path.join(home, 'memories');
     const previous = { lastConsolidatedAt: null, lastSessionCount: 0 };
@@ -129,7 +137,34 @@ describe('runDream', () => {
     if (kind === 'header JSON') lines[0] = '{broken header';
     else if (kind === 'header type')
       lines[0] = JSON.stringify({ type: 'invalid', id: 'corrupt-history' });
-    else lines[1] = '{broken body';
+    else if (kind === 'body JSON') lines[1] = '{broken body';
+    else {
+      const last = JSON.parse(lines.filter(Boolean).at(-1)!);
+      const bad = { ...last, id: 'invalid-id', parentId: last.id };
+      if (kind === 'entry shape') lines.push(JSON.stringify({ type: 'invalid' }));
+      else {
+        if (kind === 'unknown entry type') bad.type = 'invalid';
+        if (kind === 'duplicate id') bad.id = last.id;
+        if (kind === 'invalid parent') bad.parentId = 42;
+        if (kind === 'invalid timestamp') bad.timestamp = 'not-a-date';
+        if (kind === 'missing message role') {
+          bad.type = 'message';
+          bad.parentId = null;
+          bad.message = {};
+        }
+        if (kind === 'invalid message content') {
+          bad.type = 'message';
+          bad.parentId = null;
+          bad.message = { role: 'assistant', content: 42 };
+        }
+        if (kind === 'invalid text block') {
+          bad.type = 'message';
+          bad.parentId = null;
+          bad.message = { role: 'user', content: [{ type: 'text', text: 42 }] };
+        }
+        lines.push(JSON.stringify(bad));
+      }
+    }
     await writeFile(file, lines.join('\n'));
     const options = {
       memoryDir,
@@ -145,6 +180,64 @@ describe('runDream', () => {
     await utimes(file, earlier, earlier);
     await expect(runDream(options)).resolves.toBe(true);
     expect(runConsolidationMock.mock.calls[0]![0].turns).toHaveLength(2);
+  });
+
+  it('rejects corrupt non-leaf cycles inside a retained tail and rescans repaired history', async () => {
+    session.appendCustomEntry('padding', { text: 'x'.repeat(400_000) });
+    for (let index = 2; index <= 7; index++) appendTurn(session, index);
+    const file = session.getSessionFile()!;
+    const original = await readFile(file, 'utf8');
+    const last = JSON.parse(original.trim().split('\n').at(-1)!);
+    const base = { type: 'custom', customType: 'probe', timestamp: new Date().toISOString() };
+    await writeFile(
+      file,
+      original +
+        [
+          { ...base, id: 'cycle-a', parentId: 'cycle-b' },
+          { ...base, id: 'cycle-b', parentId: 'cycle-a' },
+          { ...base, id: 'valid-leaf', parentId: last.id },
+        ]
+          .map((entry) => JSON.stringify(entry))
+          .join('\n'),
+    );
+    const memoryDir = path.join(home, 'memories');
+    const previous = { lastConsolidatedAt: null, lastSessionCount: 0 };
+    await writeDreamingState(previous, memoryDir);
+    const options = {
+      memoryDir,
+      modelRegistry: modelRegistry(),
+      sessionDir,
+      dreaming: { minTurnsSinceLastRun: 1 },
+    };
+    await expect(runDream(options)).rejects.toThrow(/history/);
+    expect(await readDreamingState(memoryDir)).toEqual(previous);
+    expect(runConsolidationMock).not.toHaveBeenCalled();
+    await writeFile(file, original);
+    await expect(runDream(options)).resolves.toBe(true);
+    expect(runConsolidationMock.mock.calls[0]![0].turns).toHaveLength(5);
+  });
+
+  it('validates legacy entries after their ids and parents are migrated', async () => {
+    const file = session.getSessionFile()!;
+    const entries = (await readFile(file, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    entries[0].version = 1;
+    for (const entry of entries.slice(1)) {
+      delete entry.id;
+      delete entry.parentId;
+    }
+    await writeFile(file, entries.map((entry) => JSON.stringify(entry)).join('\n'));
+    await expect(
+      runDream({
+        memoryDir: path.join(home, 'memories'),
+        modelRegistry: modelRegistry(),
+        sessionDir,
+        dreaming: { minTurnsSinceLastRun: 1 },
+      }),
+    ).resolves.toBe(true);
+    expect(runConsolidationMock.mock.calls[0]![0].turns).toHaveLength(1);
   });
 
   it('preserves the checkpoint and surfaces failed consolidation', async () => {

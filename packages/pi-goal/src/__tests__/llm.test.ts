@@ -65,6 +65,51 @@ describe('completeOnce', () => {
     }
   });
 
+  it('keeps verified HTTP 503 when pi-messages cannot read its response body', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.error(new Error('body read test-token'));
+              },
+            }),
+            { status: 503 },
+          ),
+      ),
+    );
+    const model = {
+      ...getModel('openai', 'gpt-4o-mini'),
+      api: 'pi-messages',
+      provider: 'local-error-test',
+      baseUrl: 'https://example.com/v1',
+    };
+    const onError = vi.fn();
+    try {
+      expect(
+        await completeOnce(
+          {
+            find: () => model,
+            getApiKeyAndHeaders: async () => ({ ok: true, apiKey: 'test-key' }),
+          },
+          { provider: model.provider, model: model.id },
+          'system',
+          'user',
+          undefined,
+          onError,
+        ),
+      ).toBeNull();
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({ errorCategory: 'http_error', httpStatus: 503 }),
+      );
+      expect(JSON.stringify(onError.mock.calls)).not.toContain('test-token');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('keeps resolution failures observable without changing the null fallback', async () => {
     const onError = vi.fn();
     const result = await completeOnce(

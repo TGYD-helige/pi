@@ -88,6 +88,31 @@ export function classifyError(error: unknown): ErrorClassification {
   return { errorCategory: fallback };
 }
 
+export function describeMcpError(
+  operation: string,
+  result: {
+    content?: Array<{ type: string; text?: string }>;
+    structuredContent?: Record<string, unknown>;
+  },
+  recoveryHint?: string,
+) {
+  const message = (result.content ?? [])
+    .slice(0, 4)
+    .filter((item) => item.type === 'text')
+    .map((item) => item.text?.slice(0, 1024) ?? '')
+    .join('\n')
+    .slice(0, 1024);
+  return describeToolError(
+    operation,
+    Object.assign(new Error(message), {
+      errorCategory: result.structuredContent?.errorCategory,
+      httpStatus: result.structuredContent?.httpStatus,
+      status: result.structuredContent?.httpStatus,
+    }),
+    recoveryHint,
+  );
+}
+
 export function describeToolError(operation: string, error: unknown, recoveryHint?: string) {
   const classification = classifyError(error);
   if (error instanceof SafeToolError) return { error: error.message, ...classification };
@@ -150,7 +175,7 @@ export function createModelErrorCapture() {
   let failure: ErrorClassification | undefined;
   const record = (error: unknown) => {
     const classified = classifyError(error);
-    failure = classified.errorCategory !== 'request_failed' ? classified : undefined;
+    if (classified.errorCategory !== 'request_failed') failure = { ...failure, ...classified };
   };
   return {
     run<T>(request: () => T): T {
@@ -171,6 +196,7 @@ export function createModelErrorCapture() {
         return {};
       return {
         fetch: async (...args: Parameters<typeof globalThis.fetch>) => {
+          failure = undefined;
           try {
             const response = await fetchImpl(...args);
             failure =

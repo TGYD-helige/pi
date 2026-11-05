@@ -1,4 +1,10 @@
-import { classifyError } from '@amaster.ai/pi-shared';
+import {
+  classifyError,
+  createModelErrorCapture,
+  describeMcpError,
+  SafeToolError,
+  ValidationError,
+} from '@amaster.ai/pi-shared';
 /**
  * Optional vision-model integration.
  *
@@ -49,10 +55,12 @@ export type VisionCaller = (
 /** Create a VisionCaller that resolves credentials from Pi's model registry. Used in CLI standalone mode. */
 export function createFetchVisionCaller(visionConfig: VisionModelConfig): VisionCaller {
   // Imported lazily: pi-ai and pi-coding-agent are heavy and only needed on an actual vision call.
-  const registryPromise = import('@earendil-works/pi-coding-agent').then(
-    ({ ModelRegistry, ModelRuntime }) =>
+  const initializeRegistry = () =>
+    import('@earendil-works/pi-coding-agent').then(({ ModelRegistry, ModelRuntime }) =>
       ModelRuntime.create().then((modelRuntime) => new ModelRegistry(modelRuntime)),
-  );
+    );
+
+  let registryPromise: ReturnType<typeof initializeRegistry> | undefined;
 
   return async (
     instruction: string,
@@ -60,20 +68,35 @@ export function createFetchVisionCaller(visionConfig: VisionModelConfig): Vision
     mimeType: string,
     signal?: AbortSignal,
   ): Promise<string> => {
+    signal?.throwIfAborted();
+    registryPromise ??= initializeRegistry().catch((error) => {
+      registryPromise = undefined;
+      throw new SafeToolError(
+        'Initialize vision registry',
+        error,
+        'Check the vision model registry before retrying.',
+      );
+    });
     const [registry, { complete }] = await Promise.all([
       registryPromise,
       import('@earendil-works/pi-ai/compat'),
     ]);
+    signal?.throwIfAborted();
     const model = registry.find(visionConfig.provider, visionConfig.model);
     if (!model) {
-      throw new Error(
-        `Vision model "${visionConfig.provider}/${visionConfig.model}" not found in model registry.`,
+      throw new ValidationError(
+        'Vision model not found in model registry. Check the configured provider/model.',
+        'configuration_error',
       );
     }
 
     const auth = await registry.getApiKeyAndHeaders(model);
+    signal?.throwIfAborted();
     if (!auth.ok) {
-      throw new Error(`Auth failed for vision model: ${auth.error}`);
+      throw new ValidationError(
+        'Auth failed for vision model: credentials are unavailable. Check the vision model credentials.',
+        'configuration_error',
+      );
     }
 
     const options: Record<string, unknown> = {
@@ -83,6 +106,8 @@ export function createFetchVisionCaller(visionConfig: VisionModelConfig): Vision
     if (auth.headers) options.headers = auth.headers;
     if (signal) options.signal = signal;
 
+    const modelErrors = createModelErrorCapture();
+    Object.assign(options, modelErrors.fetchOptions(model.api));
     const result = await complete(
       model,
       {
@@ -104,14 +129,25 @@ export function createFetchVisionCaller(visionConfig: VisionModelConfig): Vision
       options,
     );
 
-    if (result.stopReason === 'error') {
-      throw new Error(result.errorMessage || 'Vision model request failed');
+    signal?.throwIfAborted();
+    if (result.stopReason === 'error' || result.stopReason === 'aborted') {
+      throw modelErrors.error(
+        'Vision model request',
+        result,
+        'Use accessibility tree elements instead.',
+      );
     }
 
-    return result.content
+    const analysis = result.content
       .filter((c): c is AiTextContent => c.type === 'text')
       .map((c) => c.text)
       .join('');
+    if (!analysis.trim())
+      throw new ValidationError(
+        'Vision model returned no analysis. Use accessibility tree elements instead.',
+        'invalid_response',
+      );
+    return analysis;
   };
 }
 
@@ -139,6 +175,22 @@ export async function handleAnalyzeScreenshot(
 
   try {
     const screenshotResult = await client.callTool('take_screenshot', screenshotArgs, signal);
+    signal?.throwIfAborted();
+    if (screenshotResult.isError) {
+      const failure = describeMcpError(
+        'Screenshot capture',
+        screenshotResult,
+        'Use accessibility tree elements instead.',
+      );
+      console.error(
+        `[pi-browser-use] screenshot capture failed (category=${failure.errorCategory})`,
+      );
+      return {
+        content: [{ type: 'text', text: failure.error }],
+        isError: true,
+        structuredContent: { ...failure, phase },
+      };
+    }
 
     let imageBase64 = '';
     let mimeType = 'image/png';
@@ -153,34 +205,37 @@ export async function handleAnalyzeScreenshot(
     }
 
     if (!imageBase64) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: 'Failed to capture screenshot for visual analysis. Use accessibility tree elements instead.',
-          },
-        ],
-        isError: true,
-      };
+      throw new ValidationError(
+        'Failed to capture screenshot for visual analysis. Use accessibility tree elements instead.',
+        'invalid_response',
+      );
     }
 
     phase = 'vision';
     const analysis = await callVision(instruction, imageBase64, mimeType, signal);
+    signal?.throwIfAborted();
 
-    if (!analysis) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: 'Visual model returned no analysis. Use accessibility tree elements instead.',
-          },
-        ],
-        isError: true,
-      };
-    }
+    if (!analysis.trim())
+      throw new ValidationError(
+        'Visual model returned no analysis. Use accessibility tree elements instead.',
+        'invalid_response',
+      );
 
+    const { truncateHead } = await import('@earendil-works/pi-coding-agent');
+    signal?.throwIfAborted();
+    const bounded = truncateHead(`Visual Analysis Result:\n${analysis}`, {
+      maxBytes: 50 * 1024 - 128,
+      maxLines: 1998,
+    });
     return {
-      content: [{ type: 'text', text: `Visual Analysis Result:\n${analysis}` }],
+      content: [
+        {
+          type: 'text',
+          text:
+            bounded.content +
+            (bounded.truncated ? '\n[Visual analysis truncated; request a smaller result.]' : ''),
+        },
+      ],
     };
   } catch (error) {
     if (signal?.aborted) throw error;
@@ -197,8 +252,8 @@ export async function handleAnalyzeScreenshot(
         errorMsg.includes('not found') ||
         errorMsg.includes('permission'));
 
-    const status = errorMsg.match(/\b([45]\d{2})\b/)?.[1];
     const failure = classifyError(error);
+    const status = failure.httpStatus?.toString() ?? errorMsg.match(/\b([45]\d{2})\b/)?.[1];
     const category =
       failure.errorCategory === 'timeout'
         ? 'timeout'
@@ -206,13 +261,17 @@ export async function handleAnalyzeScreenshot(
           ? 'cancelled'
           : status
             ? 'http'
-            : phase === 'model_lookup' || phase === 'authentication'
-              ? 'configuration'
-              : /timeout|timed out/i.test(errorMsg)
-                ? 'timeout'
-                : /fetch failed|ECONN|ENOTFOUND/i.test(errorMsg)
-                  ? 'network'
-                  : 'unknown';
+            : failure.errorCategory === 'network_error'
+              ? 'network'
+              : failure.errorCategory === 'invalid_response'
+                ? 'invalid_response'
+                : phase === 'model_lookup' || phase === 'authentication'
+                  ? 'configuration'
+                  : /timeout|timed out/i.test(errorMsg)
+                    ? 'timeout'
+                    : /fetch failed|ECONN|ENOTFOUND/i.test(errorMsg)
+                      ? 'network'
+                      : 'unknown';
     const errorType =
       error instanceof Error &&
       ['Error', 'TypeError', 'RangeError', 'SyntaxError', 'TimeoutError'].includes(error.name)
@@ -226,7 +285,7 @@ export async function handleAnalyzeScreenshot(
       '408': 'Service request timed out.',
       '429': 'Service rate limit or quota was exceeded.',
     };
-    let reason = `Unexpected ${errorType}.`;
+    let reason = error instanceof SafeToolError ? error.message : `Unexpected ${errorType}.`;
     if (category === 'cancelled') reason = 'Request was cancelled.';
     if (category === 'timeout') reason = 'Request timed out.';
     if (category === 'network') reason = 'Could not connect to the service.';
@@ -248,7 +307,7 @@ export async function handleAnalyzeScreenshot(
       'messages',
       'stream',
       'model',
-    ].filter((field) => errorMsg.includes(field));
+    ].filter((field) => !(error instanceof SafeToolError) && errorMsg.includes(field));
     console.error(
       `[pi-browser-use] visual analysis failed (phase=${phase}, status=${status ?? 'unknown'}, category=${category}, fields=${fields.join(',') || 'none'}): ${reason}`,
     );

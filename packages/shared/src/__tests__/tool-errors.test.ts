@@ -84,6 +84,20 @@ describe('tool errors', () => {
     expect(errors.fetchOptions('bedrock-converse-stream', request)).toEqual({});
   });
 
+  it('clears an earlier HTTP status when a later fetch fails without a recognized cause', async () => {
+    const errors = createModelErrorCapture();
+    const raw = new Error('test-token');
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response('', { status: 503 }))
+      .mockRejectedValueOnce(raw);
+    const wrapped = errors.fetchOptions('openai-completions', request).fetch!;
+    await wrapped('https://example.com');
+    await expect(wrapped('https://example.com')).rejects.toBe(raw);
+    expect(errors.error('Model', { stopReason: 'error' }).errorCategory).toBe('request_failed');
+    expect(errors.error('Model', { stopReason: 'error' }).httpStatus).toBeUndefined();
+  });
+
   it('uses a later terminal timeout instead of an earlier retryable HTTP failure', async () => {
     const errors = createModelErrorCapture();
     const request = errors.fetchOptions(

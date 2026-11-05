@@ -54,6 +54,93 @@ describe('toPiToolResult', () => {
     expect(text.split('\n').length).toBeLessThanOrEqual(DEFAULT_MAX_LINES);
   });
 
+  it.each([
+    'browser_requires_setup',
+    'browser_consent_required',
+  ])('keeps vetted setup recovery for %s without raw payloads', (code) => {
+    const result = toPiToolResult(
+      {
+        isError: true,
+        content: [{ type: 'text', text: `${code}: test-token` }],
+        structuredContent: {
+          code,
+          hint: 'test-token',
+          detail: {
+            next_call: {
+              tool: 'browser_prepare',
+              arguments: {
+                pid: 123,
+                window_id: 456,
+                strategy: { kind: 'existing_profile', private: 'test-token' },
+                session: 'test-token',
+                allow_launch: true,
+              },
+            },
+          },
+        },
+      },
+      'get_browser_state',
+    );
+    expect(JSON.stringify(result)).toContain('browser_prepare');
+    expect(JSON.stringify(result)).not.toContain('test-token');
+    expect(result.details).toMatchObject({
+      code,
+      next_call: {
+        tool: 'browser_prepare',
+        arguments: { pid: 123, window_id: 456, strategy: { kind: 'existing_profile' } },
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain('allow_launch');
+  });
+
+  it('reads a bounded JSON setup refusal while removing its private fields', () => {
+    const payload = {
+      error: {
+        code: 'browser_requires_setup',
+        detail: {
+          next_call: {
+            tool: 'browser_prepare',
+            arguments: { pid: 1, window_id: 2, strategy: { kind: 'existing_profile' } },
+          },
+          private: 'test-token',
+        },
+      },
+    };
+    const result = toPiToolResult(
+      { isError: true, content: [{ type: 'text', text: JSON.stringify(payload) }] },
+      'get_browser_state',
+    );
+    expect(result.details).toMatchObject({
+      code: 'browser_requires_setup',
+      next_call: { tool: 'browser_prepare' },
+    });
+    expect(JSON.stringify(result)).not.toContain('test-token');
+  });
+
+  it('uses a fixed browser guide when suggested setup arguments are unsafe', () => {
+    const result = toPiToolResult(
+      {
+        isError: true,
+        content: [{ type: 'text', text: 'test-token' }],
+        structuredContent: {
+          code: 'browser_requires_setup',
+          detail: {
+            next_call: {
+              tool: 'run_script',
+              arguments: { pid: 'test-token', script: 'test-token' },
+            },
+          },
+        },
+      },
+      'get_browser_state',
+    );
+    expect(result.details).toMatchObject({
+      next_call: { tool: 'get_guide', arguments: { topic: 'browser' } },
+    });
+    expect(JSON.stringify(result)).not.toContain('test-token');
+    expect(JSON.stringify(result)).not.toContain('run_script');
+  });
+
   it('counts text block wrappers within the aggregate byte limit', () => {
     const result = toPiToolResult(
       {
