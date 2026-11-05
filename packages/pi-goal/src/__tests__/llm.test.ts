@@ -27,6 +27,55 @@ describe('completeOnce', () => {
     );
   });
 
+  it.each([
+    'default abort',
+    'network cause',
+  ])('keeps %s classification before the provider flattens errors', async (kind) => {
+    const provider = registerFauxProvider({ provider: 'pi-goal-transport-errors' });
+    const model = provider.getModel();
+    const controller = new AbortController();
+    controller.abort();
+    const error =
+      kind === 'default abort'
+        ? controller.signal.reason
+        : new TypeError('fetch failed', {
+            cause: Object.assign(new Error('private host test-token'), { code: 'ECONNRESET' }),
+          });
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(error));
+    provider.setResponses([
+      async (_context, options) => {
+        if (kind === 'default abort') throw controller.signal.reason;
+        await (options?.fetch ?? globalThis.fetch)('https://example.com');
+        return fauxAssistantMessage('unreachable');
+      },
+    ]);
+    const onError = vi.fn();
+    try {
+      expect(
+        await completeOnce(
+          {
+            find: () => model,
+            getApiKeyAndHeaders: async () => ({ ok: true, apiKey: 'test-key' }),
+          },
+          { provider: model.provider, model: model.id },
+          'system',
+          'user',
+          undefined,
+          onError,
+        ),
+      ).toBeNull();
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          errorCategory: kind === 'default abort' ? 'cancelled' : 'network_error',
+        }),
+      );
+      expect(JSON.stringify(onError.mock.calls)).not.toContain('test-token');
+    } finally {
+      vi.unstubAllGlobals();
+      provider.unregister();
+    }
+  });
+
   it('cancels the active request when its caller aborts', async () => {
     const provider = registerFauxProvider({ provider: 'pi-goal-caller-cancel' });
     const model = provider.getModel();

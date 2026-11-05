@@ -90,9 +90,15 @@ describe('toPiToolResult', () => {
 
       expect(text).toContain('unverifiable');
       expect(text).toContain('"delivered_count":1');
-      expect(text).toContain('Readback unavailable.');
+      if (isError) expect(text).not.toContain('Readback unavailable.');
+      else expect(text).toContain('Readback unavailable.');
       expect(text).toContain('effect_unconfirmed');
-      expect(result.details).toEqual(structuredContent);
+      if (isError)
+        expect(result.details).toMatchObject({
+          effect: 'unverifiable',
+          delivery: { delivered_count: 1 },
+        });
+      else expect(result.details).toEqual(structuredContent);
       expect(Boolean(result.isError)).toBe(isError);
     });
 
@@ -147,10 +153,15 @@ describe('toPiToolResult', () => {
         'browser_select',
       );
       const text = result.content.map((c) => ('text' in c ? c.text : '')).join('\n');
-      expect(text).toContain('Read the page before repeating the action.');
-      expect(text).toContain('get_browser_state');
-      expect(text).toContain('bt-123');
-      expect(text).toContain('tab-456');
+      if (isError) {
+        expect(text).toContain('Read the current target state');
+        expect(text).not.toContain('bt-123');
+      } else {
+        expect(text).toContain('Read the page before repeating the action.');
+        expect(text).toContain('get_browser_state');
+        expect(text).toContain('bt-123');
+        expect(text).toContain('tab-456');
+      }
     });
 
     it.each([
@@ -397,7 +408,11 @@ describe('toPiToolResult', () => {
         },
         'get_config',
       );
-      expect(result.content).toEqual([{ type: 'text', text: 'Request refused.' }]);
+      expect(result.content[0]).toMatchObject({
+        type: 'text',
+        text: expect.stringContaining('Computer tool failed'),
+      });
+      expect(JSON.stringify(result)).not.toContain('private diagnostic');
       expect(result.isError).toBe(true);
     });
 

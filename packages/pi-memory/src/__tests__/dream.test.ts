@@ -53,10 +53,32 @@ describe('runDream', () => {
   });
 
   it.each([
+    'dangling link',
+    'disappeared file',
+  ])('continues valid history past a %s', async (kind) => {
+    const memoryDir = path.join(home, 'memories');
+    if (kind === 'dangling link')
+      await symlink(path.join(home, 'missing.jsonl'), path.join(sessionDir, 'dangling.jsonl'));
+    else {
+      const other = SessionManager.create(home, sessionDir, { id: 'other-history' });
+      appendTurn(other, 2);
+      openFile.mockRejectedValueOnce(Object.assign(new Error('gone'), { code: 'ENOENT' }));
+    }
+    await expect(
+      runDream({
+        memoryDir,
+        modelRegistry: modelRegistry(),
+        sessionDir,
+        dreaming: { minTurnsSinceLastRun: 1 },
+      }),
+    ).resolves.toBe(true);
+    expect(runConsolidationMock.mock.calls[0]![0].turns).toHaveLength(1);
+  });
+
+  it.each([
     'directory',
     'metadata',
     'open',
-    'missing',
     'read',
   ])('preserves the scan checkpoint on a partial history %s failure', async (phase) => {
     const memoryDir = path.join(home, 'memories');
@@ -65,11 +87,11 @@ describe('runDream', () => {
     const other = SessionManager.create(home, sessionDir, { id: 'unreadable-history' });
     appendTurn(other, 2);
     const failure = Object.assign(new Error('secret file path'), {
-      code: phase === 'missing' ? 'ENOENT' : 'EACCES',
+      code: 'EACCES',
     });
     if (phase === 'directory') readDirectory.mockRejectedValueOnce(failure);
     else if (phase === 'metadata') metadata.mockRejectedValueOnce(failure);
-    else if (phase === 'open' || phase === 'missing') openFile.mockRejectedValueOnce(failure);
+    else if (phase === 'open') openFile.mockRejectedValueOnce(failure);
     else {
       const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
       openFile.mockImplementationOnce(async (file: string, flags: string) => {

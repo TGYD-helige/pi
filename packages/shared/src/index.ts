@@ -505,6 +505,7 @@ export {
 } from './network.js';
 export {
   classifyError,
+  createModelErrorCapture,
   describeToolError,
   type ErrorCategory,
   type ErrorClassification,

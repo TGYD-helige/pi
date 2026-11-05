@@ -65,7 +65,7 @@ export function classifyError(error: unknown): ErrorClassification {
     )
       return { errorCategory: 'timeout' };
     if (
-      /^(?:Error:\s*)?(?:AbortError\b|(?:the )?(?:request|operation) (?:was )?(?:aborted|cancelled|canceled)\b)/i.test(
+      /^(?:Error:\s*)?(?:AbortError\b|(?:(?:the|this) )?(?:request|operation) (?:was )?(?:aborted|cancelled|canceled)\b)/i.test(
         message,
       )
     )
@@ -143,4 +143,58 @@ export function modelResponseError(
   const error = new Error(message.errorMessage?.slice(0, 1024) ?? '');
   if (message.stopReason === 'aborted') error.name = 'AbortError';
   return new SafeToolError(operation, error, recoveryHint);
+}
+
+/** Keep only verified transport metadata before a provider serializes its exception. */
+export function createModelErrorCapture() {
+  let failure: ErrorClassification | undefined;
+  const record = (error: unknown) => {
+    const classified = classifyError(error);
+    failure = classified.errorCategory !== 'request_failed' ? classified : undefined;
+  };
+  return {
+    run<T>(request: () => T): T {
+      failure = undefined;
+      try {
+        return request();
+      } catch (error) {
+        record(error);
+        throw error;
+      }
+    },
+    fetchOptions(api: unknown, fetchImpl: typeof globalThis.fetch = globalThis.fetch) {
+      // These SDKs reject or ignore custom fetch; leave their transport unchanged.
+      if (
+        typeof api !== 'string' ||
+        ['google-generative-ai', 'google-vertex', 'bedrock-converse-stream'].includes(api)
+      )
+        return {};
+      return {
+        fetch: async (...args: Parameters<typeof globalThis.fetch>) => {
+          try {
+            const response = await fetchImpl(...args);
+            failure =
+              response.status >= 400 && response.status < 600
+                ? { errorCategory: 'http_error', httpStatus: response.status }
+                : undefined;
+            return response;
+          } catch (error) {
+            record(error);
+            throw error;
+          }
+        },
+      };
+    },
+    error(
+      operation: string,
+      message: { stopReason?: string; errorMessage?: string },
+      recoveryHint?: string,
+    ): SafeToolError {
+      const surviving = modelResponseError(operation, message, recoveryHint);
+      return failure &&
+        (failure.errorCategory === 'timeout' || surviving.errorCategory === 'request_failed')
+        ? new SafeToolError(operation, Object.assign(new Error(), failure), recoveryHint)
+        : surviving;
+    },
+  };
 }

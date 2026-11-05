@@ -24,20 +24,34 @@ describe('background extraction Agent boundary', () => {
   });
   afterEach(async () => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     await rm(dir, { recursive: true, force: true });
   });
 
   it.each([
     ['TimeoutError', 'request timed out: test-token', 'timed out'],
     ['AbortError', 'The operation was aborted: test-token', 'was cancelled'],
+    ['AbortError', 'This operation was aborted', 'was cancelled'],
+    ['NetworkError', 'fetch failed', 'network error'],
   ])('retains %s after the real Agent converts the error', async (name, message, expected) => {
     const provider = registerFauxProvider({ provider: 'pi-memory-extraction-errors' });
     const model = provider.getModel();
     const store = new MemoryStore({ dir });
     await store.loadFromDisk();
     const onNotify = vi.fn();
+    if (name === 'NetworkError')
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockRejectedValue(
+          new TypeError('fetch failed', {
+            cause: Object.assign(new Error('test-token'), { code: 'ECONNRESET' }),
+          }),
+        ),
+      );
     provider.setResponses([
-      () => {
+      async (_context, options) => {
+        if (name === 'NetworkError')
+          await (options?.fetch ?? globalThis.fetch)('https://example.com');
         throw new DOMException(message, name);
       },
     ]);

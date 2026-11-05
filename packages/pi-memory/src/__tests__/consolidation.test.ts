@@ -8,7 +8,7 @@ import {
   getCurrentTools,
   registerFauxProvider,
 } from '@earendil-works/pi-ai/compat';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildConsolidationUserPrompt,
   CONSOLIDATION_SYSTEM_PROMPT,
@@ -31,11 +31,24 @@ describe('consolidation', () => {
     it.each([
       ['TimeoutError', 'request timed out: test-token', 'timeout'],
       ['AbortError', 'The operation was aborted: test-token', 'cancelled'],
+      ['AbortError', 'This operation was aborted', 'cancelled'],
+      ['NetworkError', 'fetch failed', 'network_error'],
     ])('retains %s after the real Agent converts the error', async (name, message, category) => {
       const provider = registerFauxProvider({ provider: 'pi-memory-consolidation-errors' });
       const model = provider.getModel();
+      if (name === 'NetworkError')
+        vi.stubGlobal(
+          'fetch',
+          vi.fn().mockRejectedValue(
+            new TypeError('fetch failed', {
+              cause: Object.assign(new Error('test-token'), { code: 'ECONNRESET' }),
+            }),
+          ),
+        );
       provider.setResponses([
-        () => {
+        async (_context, options) => {
+          if (name === 'NetworkError')
+            await (options?.fetch ?? globalThis.fetch)('https://example.com');
           throw new DOMException(message, name);
         },
       ]);
@@ -52,6 +65,7 @@ describe('consolidation', () => {
           }),
         ).rejects.toMatchObject({ errorCategory: category });
       } finally {
+        vi.unstubAllGlobals();
         provider.unregister();
       }
     });

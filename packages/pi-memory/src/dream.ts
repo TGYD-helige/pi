@@ -215,9 +215,12 @@ async function scanPiSessionTurns(
       if (signal?.aborted) return { turns: [], turnCount: 0, hasMore: false, cursor: undefined };
       if (!name.endsWith('.jsonl')) continue;
       const path = join(dir, name);
-      const metadata = await stat(path);
+      const metadata = await stat(path).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'ENOENT') throw error;
+        return undefined;
+      });
       if (signal?.aborted) return { turns: [], turnCount: 0, hasMore: false, cursor: undefined };
-      if (!metadata.isFile() || (since !== undefined && metadata.mtimeMs <= since)) continue;
+      if (!metadata?.isFile() || (since !== undefined && metadata.mtimeMs <= since)) continue;
       const file = { path, modified: metadata.mtimeMs };
       if (cursor && compare(file, cursor) <= 0) continue;
       files.push(file);
@@ -231,7 +234,11 @@ async function scanPiSessionTurns(
   let turnCount = 0;
   for (const file of files) {
     if (signal?.aborted) return { turns: [], turnCount: 0, hasMore: false, cursor: undefined };
-    const handle = await open(file.path, 'r');
+    const handle = await open(file.path, 'r').catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ENOENT') throw error;
+      return undefined;
+    });
+    if (!handle) continue;
     try {
       if (signal?.aborted) return { turns: [], turnCount: 0, hasMore: false, cursor: undefined };
       const metadata = await handle.stat();

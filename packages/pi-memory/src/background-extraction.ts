@@ -1,6 +1,6 @@
 import {
+  createModelErrorCapture,
   describeToolError,
-  modelResponseError,
   SafeToolError,
   ValidationError,
 } from '@amaster.ai/pi-shared';
@@ -222,6 +222,7 @@ export function createExtractionRunner(opts: ExtractionRunnerOptions): Extractio
     const userPrompt = `Analyze this recent conversation and save any durable facts worth remembering:\n\n${serialized}`;
 
     let turnCount = 0;
+    const modelErrors = createModelErrorCapture();
     const agent = new Agent({
       initialState: {
         systemPrompt: REVIEW_SYSTEM_PROMPT,
@@ -232,7 +233,8 @@ export function createExtractionRunner(opts: ExtractionRunnerOptions): Extractio
         const merged = { ...streamOpts };
         if (auth.apiKey) (merged as Record<string, unknown>).apiKey = auth.apiKey;
         if (auth.headers) (merged as Record<string, unknown>).headers = auth.headers;
-        return streamSimple(m as never, ctx as never, merged);
+        Object.assign(merged, modelErrors.fetchOptions(m.api, merged.fetch));
+        return modelErrors.run(() => streamSimple(m as never, ctx as never, merged));
       },
       convertToLlm: (msgs) => msgs as never[],
     });
@@ -259,7 +261,7 @@ export function createExtractionRunner(opts: ExtractionRunnerOptions): Extractio
       last?.role === 'assistant' &&
       (last.stopReason === 'error' || last.stopReason === 'aborted')
     )
-      throw modelResponseError(
+      throw modelErrors.error(
         'Background extraction model',
         last,
         'Extraction did not complete. Inspect memory before retrying any writes.',

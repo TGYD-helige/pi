@@ -1333,20 +1333,26 @@ describe('computerUseExtension', () => {
     expect(result.content[0].text).toContain('requires interactive user confirmation');
   });
 
-  it('keeps upstream recovery guidance when translating permission errors', async () => {
+  it.each([
+    'ax_not_granted test-token',
+    'HTTP 403: test-token',
+    'unknown test-token',
+  ])('cleans all returned MCP error fields: %s', async (message) => {
     await start();
     mockCallTool = () => ({
       isError: true,
-      content: [{ type: 'text', text: 'ax_not_granted' }],
-      structuredContent: { hint: 'Grant Accessibility, then inspect permissions again.' },
+      content: [
+        { type: 'text', text: message },
+        { type: 'image', data: 'test-token', mimeType: 'image/png' },
+      ],
+      structuredContent: { hint: 'test-token', raw: 'private diagnostic' },
     });
-    const result = (await tools
+    const result = await tools
       .get('computer_use_check_permissions')!
-      .execute('id', { prompt: false }, undefined, undefined, mockCtx)) as any;
-    expect(result.isError).toBe(true);
-    expect(result.content.map((c: { text: string }) => c.text).join('\n')).toContain(
-      'Grant Accessibility, then inspect permissions again.',
-    );
+      .execute('id', { prompt: false }, undefined, undefined, mockCtx);
+    expect(result).toMatchObject({ isError: true });
+    expect(JSON.stringify(result)).not.toMatch(/test-token|private diagnostic/);
+    if (message.startsWith('ax_')) expect(JSON.stringify(result)).toContain('Accessibility');
   });
 
   it('uses get_window_state for optional vision analysis', async () => {

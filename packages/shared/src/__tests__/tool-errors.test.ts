@@ -1,12 +1,69 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   classifyError,
+  createModelErrorCapture,
   describeToolError,
   modelResponseError,
   SafeToolError,
 } from '../tool-errors.js';
 
 describe('tool errors', () => {
+  it('captures network causes before flattening and clears recovered transport failures', async () => {
+    const errors = createModelErrorCapture();
+    const raw = new TypeError('fetch failed', {
+      cause: Object.assign(new Error('test-token'), { code: 'ECONNRESET' }),
+    });
+    const request = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(raw)
+      .mockResolvedValueOnce(new Response('{}'));
+    const wrapped = errors.fetchOptions('openai-completions', request).fetch!;
+    errors.run(() => {});
+    await expect(wrapped('https://example.com')).rejects.toBe(raw);
+    expect(
+      errors.error('Model', { stopReason: 'error', errorMessage: 'fetch failed' }).errorCategory,
+    ).toBe('network_error');
+    expect(JSON.stringify(errors.error('Model', { stopReason: 'error' }))).not.toContain(
+      'test-token',
+    );
+    await wrapped('https://example.com');
+    expect(errors.error('Model', { stopReason: 'error' }).errorCategory).toBe('request_failed');
+    expect(errors.fetchOptions('google-generative-ai', request)).toEqual({});
+    expect(errors.fetchOptions('google-vertex', request)).toEqual({});
+    expect(errors.fetchOptions('bedrock-converse-stream', request)).toEqual({});
+  });
+
+  it('uses a later terminal timeout instead of an earlier retryable HTTP failure', async () => {
+    const errors = createModelErrorCapture();
+    const request = errors.fetchOptions(
+      'openai-completions',
+      async () => new Response('', { status: 503 }),
+    ).fetch!;
+    errors.run(() => {});
+    await request('https://example.com');
+    expect(
+      errors.error('Model', { stopReason: 'error', errorMessage: 'request timed out' })
+        .errorCategory,
+    ).toBe('timeout');
+  });
+
+  it('retains a synchronously thrown model cause without carrying raw error objects', () => {
+    const errors = createModelErrorCapture();
+    expect(() =>
+      errors.run(() => {
+        throw new TypeError('test-token', {
+          cause: Object.assign(new Error(), { code: 'ECONNRESET' }),
+        });
+      }),
+    ).toThrow();
+    const failure = errors.error('Model', { stopReason: 'error', errorMessage: 'fetch failed' });
+    expect(failure.errorCategory).toBe('network_error');
+    expect(failure.cause).toBeUndefined();
+    expect(failure.message).not.toContain('test-token');
+    errors.run(() => {});
+    expect(errors.error('Model', { stopReason: 'error' }).errorCategory).toBe('request_failed');
+  });
+
   it.each([
     ['TimeoutError: test-token', 'error', 'timeout'],
     ['request timed out: test-token', 'error', 'timeout'],

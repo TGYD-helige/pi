@@ -507,14 +507,15 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
             const result = await client!.callTool(originalName, params, signal);
 
             if (result.isError) {
-              const errorText = result.content?.map((c) => c.text ?? '').join('') ?? '';
-              const friendlyError = formatToolError(originalName, errorText, params);
-              if (friendlyError) {
-                return toPiToolResult(
-                  { ...result, content: [{ type: 'text', text: friendlyError }] },
-                  originalName,
-                );
-              }
+              const errorText = (result.content ?? [])
+                .slice(0, 4)
+                .map((c) => c.text?.slice(0, 1024) ?? '')
+                .join('');
+              return toPiToolResult(
+                result,
+                originalName,
+                formatToolError(originalName, errorText, params),
+              );
             }
 
             return toPiToolResult(result, originalName);
@@ -653,18 +654,16 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
           );
         }
 
-        if (!imageContent?.data) {
-          const errorText =
-            screenshotResult.content
-              ?.filter((c) => c.type === 'text' && c.text)
-              .map((c) => c.text)
-              .join('\n') || 'Failed to capture screenshot.';
-          const formatted = formatToolError('get_window_state', errorText, params);
-          return {
-            content: [{ type: 'text' as const, text: formatted ?? errorText }],
-            details: undefined,
-            isError: true,
-          };
+        if (screenshotResult.isError || !imageContent?.data) {
+          const errorText = (screenshotResult.content ?? [])
+            .slice(0, 4)
+            .map((c) => c.text?.slice(0, 1024) ?? '')
+            .join('');
+          return toPiToolResult(
+            { ...screenshotResult, isError: true },
+            'get_window_state',
+            formatToolError('get_window_state', errorText, params),
+          );
         }
 
         const callVision = createPiVisionCaller(visionConfig, ctx);

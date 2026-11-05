@@ -1,3 +1,4 @@
+import { describeToolError } from '@amaster.ai/pi-shared';
 import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
@@ -93,11 +94,37 @@ export function boundStructuredContent(
 export function toPiToolResult(
   result: McpToolResult,
   toolName?: string,
+  safeErrorText?: string,
 ): {
   content: PiToolContent[];
   details: Record<string, unknown> | undefined;
   isError?: boolean;
 } {
+  if (result.isError) {
+    const message = (result.content ?? [])
+      .slice(0, 4)
+      .filter((item) => item.type === 'text')
+      .map((item) => item.text?.slice(0, 1024) ?? '')
+      .join('\n')
+      .slice(0, 1024);
+    const failure = describeToolError(
+      'Computer tool',
+      Object.assign(new Error(message), {
+        errorCategory: result.structuredContent?.errorCategory,
+        httpStatus: result.structuredContent?.httpStatus,
+      }),
+      'The execution outcome is unknown. Read the current target state before retrying any action.',
+    );
+    if (safeErrorText) failure.error = safeErrorText;
+    console.error(`[pi-computer-use] upstream tool failed (category=${failure.errorCategory})`);
+    const metadata = safeFailureMetadata(result.structuredContent);
+    const extra = buildEnrichment(toolName ?? '', { structuredContent: metadata, isError: true });
+    return {
+      content: [{ type: 'text', text: failure.error + (extra ? `\n${extra}` : '') }],
+      details: { ...failure, ...metadata },
+      isError: true,
+    };
+  }
   const content: PiToolContent[] = [];
   const details = boundStructuredContent(result.structuredContent);
   const elementTokens = new Map<number, string>();
@@ -467,4 +494,38 @@ function buildEnrichment(toolName: string, result: McpToolResult): string | unde
   }
 
   return parts.length > 0 ? `[pi-computer-use model-visible]\n${parts.join('\n')}` : undefined;
+}
+
+function safeFailureMetadata(value: Record<string, unknown> = {}): Record<string, unknown> {
+  const pick = (item: unknown, allowed: string[]) =>
+    typeof item === 'string' && allowed.includes(item) ? item : undefined;
+  const delivery = value.delivery as { mode?: unknown; delivered_count?: unknown } | undefined;
+  const escalation = value.escalation as { target?: unknown; reason?: unknown } | undefined;
+  return {
+    effect: pick(value.effect, [
+      'confirmed',
+      'partial',
+      'unverifiable',
+      'suspected_noop',
+      'refused',
+    ]),
+    delivery: {
+      mode: pick(delivery?.mode, ['background', 'foreground', 'not_applicable', 'unknown']),
+      ...(typeof delivery?.delivered_count === 'number' &&
+      Number.isSafeInteger(delivery.delivered_count) &&
+      delivery.delivered_count >= 0
+        ? { delivered_count: delivery.delivered_count }
+        : {}),
+    },
+    escalation: {
+      target: pick(escalation?.target, ['pixel', 'foreground', 'page', 'session']),
+      reason: pick(escalation?.reason, [
+        'route_unavailable',
+        'delivery_failed',
+        'effect_unconfirmed',
+        'suspected_noop',
+        'permission_required',
+      ]),
+    },
+  };
 }

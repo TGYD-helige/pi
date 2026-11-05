@@ -1,4 +1,4 @@
-import { describeToolError, modelResponseError, ValidationError } from '@amaster.ai/pi-shared';
+import { createModelErrorCapture, describeToolError, ValidationError } from '@amaster.ai/pi-shared';
 /**
  * Single-turn, tool-less LLM completion helper shared by the derive and
  * evaluate steps. Wraps pi-agent-core's Agent + pi-ai's streamSimple, the same
@@ -54,6 +54,7 @@ export async function completeOnce(
         'Goal evaluator credentials are unavailable. Check the model credentials.',
         'configuration_error',
       );
+    const modelErrors = createModelErrorCapture();
     const agent = new Agent({
       initialState: { systemPrompt, model: model as never, tools: [] as never[] },
       streamFn: (m: unknown, c: unknown, streamOpts?: unknown) => {
@@ -63,7 +64,14 @@ export async function completeOnce(
         const existingSignal = (streamOpts as { signal?: AbortSignal } | undefined)?.signal;
         if (signal)
           merged.signal = existingSignal ? AbortSignal.any([existingSignal, signal]) : signal;
-        return streamSimple(m as never, c as never, merged as never);
+        Object.assign(
+          merged,
+          modelErrors.fetchOptions(
+            (m as { api?: string }).api,
+            merged.fetch as typeof fetch | undefined,
+          ),
+        );
+        return modelErrors.run(() => streamSimple(m as never, c as never, merged as never));
       },
       convertToLlm: (msgs: unknown) => msgs as never[],
     });
@@ -82,7 +90,7 @@ export async function completeOnce(
     const messages = agent.state.messages as AgentMessageLike[];
     const last = messages.filter((message) => message.role === 'assistant').at(-1);
     if (last?.stopReason === 'error' || last?.stopReason === 'aborted')
-      throw modelResponseError('Goal evaluator request', last);
+      throw modelErrors.error('Goal evaluator request', last);
     const text = lastAssistantText(messages);
     if (!text)
       throw new ValidationError(
