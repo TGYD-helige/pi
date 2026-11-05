@@ -7,16 +7,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runDream } from '../dream.js';
 import { readDreamingState, writeDreamingState } from '../dreaming-state.js';
 
-const { runConsolidationMock, metadata, openFile } = vi.hoisted(() => ({
+const { runConsolidationMock, metadata, openFile, readDirectory } = vi.hoisted(() => ({
   runConsolidationMock: vi.fn(),
   metadata: vi.fn(),
   openFile: vi.fn(),
+  readDirectory: vi.fn(),
 }));
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   metadata.mockImplementation(actual.stat);
   openFile.mockImplementation(actual.open);
-  return { ...actual, stat: metadata, open: openFile };
+  readDirectory.mockImplementation(actual.opendir);
+  return { ...actual, stat: metadata, open: openFile, opendir: readDirectory };
 });
 
 vi.mock('../consolidation.js', () => ({
@@ -30,6 +32,7 @@ describe('runDream', () => {
   let originalAgentDir: string | undefined;
 
   beforeEach(() => {
+    readDirectory.mockClear();
     metadata.mockClear();
     openFile.mockClear();
     originalAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -47,6 +50,45 @@ describe('runDream', () => {
     else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
     rmSync(home, { recursive: true, force: true });
     vi.restoreAllMocks();
+  });
+
+  it.each([
+    'directory',
+    'metadata',
+    'open',
+    'missing',
+    'read',
+  ])('preserves the scan checkpoint on a partial history %s failure', async (phase) => {
+    const memoryDir = path.join(home, 'memories');
+    const previous = { lastConsolidatedAt: null, lastSessionCount: 0 };
+    await writeDreamingState(previous, memoryDir);
+    const other = SessionManager.create(home, sessionDir, { id: 'unreadable-history' });
+    appendTurn(other, 2);
+    const failure = Object.assign(new Error('secret file path'), {
+      code: phase === 'missing' ? 'ENOENT' : 'EACCES',
+    });
+    if (phase === 'directory') readDirectory.mockRejectedValueOnce(failure);
+    else if (phase === 'metadata') metadata.mockRejectedValueOnce(failure);
+    else if (phase === 'open' || phase === 'missing') openFile.mockRejectedValueOnce(failure);
+    else {
+      const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+      openFile.mockImplementationOnce(async (file: string, flags: string) => {
+        const handle = await actual.open(file, flags);
+        vi.spyOn(handle, 'read').mockRejectedValueOnce(failure);
+        return handle;
+      });
+    }
+    const options = {
+      memoryDir,
+      modelRegistry: modelRegistry(),
+      sessionDir,
+      dreaming: { minTurnsSinceLastRun: 1 },
+    };
+    await expect(runDream(options)).rejects.toThrow(/history/);
+    expect(await readDreamingState(memoryDir)).toEqual(previous);
+    expect(runConsolidationMock).not.toHaveBeenCalled();
+    await expect(runDream(options)).resolves.toBe(true);
+    expect(runConsolidationMock.mock.calls[0]![0].turns).toHaveLength(2);
   });
 
   it('preserves the checkpoint and surfaces failed consolidation', async () => {

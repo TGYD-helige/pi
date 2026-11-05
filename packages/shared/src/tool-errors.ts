@@ -57,6 +57,19 @@ export function classifyError(error: unknown): ErrorClassification {
       (value as Error & { status?: unknown; statusCode?: unknown }).status ??
       (value as Error & { statusCode?: unknown }).statusCode;
     const message = typeof value.message === 'string' ? value.message.slice(0, 1024) : '';
+    // Providers can serialize exceptions before Agent sees them; retain only recognizable categories.
+    if (
+      /^(?:Error:\s*)?(?:TimeoutError\b|Timed out\b|Navigation timeout of \d+ ms exceeded\b|(?:the )?(?:request|operation|connection) (?:was )?(?:timed out|aborted due to timeout)\b)/i.test(
+        message,
+      )
+    )
+      return { errorCategory: 'timeout' };
+    if (
+      /^(?:Error:\s*)?(?:AbortError\b|(?:the )?(?:request|operation) (?:was )?(?:aborted|cancelled|canceled)\b)/i.test(
+        message,
+      )
+    )
+      fallback = 'cancelled';
     const httpStatus =
       typeof status === 'number' && Number.isInteger(status) && status >= 400 && status < 600
         ? status
@@ -119,4 +132,15 @@ export class ValidationError extends SafeToolError {
     this.message = message;
     this.errorCategory = category;
   }
+}
+
+/** Recover only the surviving category from an Agent terminal message. */
+export function modelResponseError(
+  operation: string,
+  message: { stopReason?: string; errorMessage?: string },
+  recoveryHint?: string,
+): SafeToolError {
+  const error = new Error(message.errorMessage?.slice(0, 1024) ?? '');
+  if (message.stopReason === 'aborted') error.name = 'AbortError';
+  return new SafeToolError(operation, error, recoveryHint);
 }

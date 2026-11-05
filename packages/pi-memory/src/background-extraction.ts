@@ -1,4 +1,9 @@
-import { describeToolError, SafeToolError, ValidationError } from '@amaster.ai/pi-shared';
+import {
+  describeToolError,
+  modelResponseError,
+  SafeToolError,
+  ValidationError,
+} from '@amaster.ai/pi-shared';
 /**
  * Background memory extraction via a sub-agent loop.
  *
@@ -117,6 +122,7 @@ export function createExtractionRunner(opts: ExtractionRunnerOptions): Extractio
   let inFlight = false;
   let shutdownFlag = false;
   let warnedOnce = false;
+  let activeAgent: Agent | undefined;
 
   /** Rolling buffer of conversation messages for the sub-agent's context. */
   const messageBuffer: Array<{ role: string; text: string }> = [];
@@ -203,6 +209,7 @@ export function createExtractionRunner(opts: ExtractionRunnerOptions): Extractio
         'configuration_error',
       );
     const auth = await registry.getApiKeyAndHeaders(model);
+    if (shutdownFlag) return 0;
     if (!auth.ok)
       throw new ValidationError(
         'Background extraction credentials are unavailable. Check the configured model credentials.',
@@ -240,16 +247,21 @@ export function createExtractionRunner(opts: ExtractionRunnerOptions): Extractio
       }
     });
 
-    await agent.prompt(userPrompt);
+    activeAgent = agent;
+    try {
+      await agent.prompt(userPrompt);
+    } finally {
+      activeAgent = undefined;
+    }
     if (shutdownFlag) return 0;
     const last = agent.state.messages.filter((message) => message.role === 'assistant').at(-1);
     if (
       last?.role === 'assistant' &&
       (last.stopReason === 'error' || last.stopReason === 'aborted')
     )
-      throw new SafeToolError(
+      throw modelResponseError(
         'Background extraction model',
-        new Error(last.errorMessage ?? ''),
+        last,
         'Extraction did not complete. Inspect memory before retrying any writes.',
       );
     if (agent.state.messages.some((message) => message.role === 'toolResult' && message.isError))
@@ -263,6 +275,7 @@ export function createExtractionRunner(opts: ExtractionRunnerOptions): Extractio
 
   function shutdown(): void {
     shutdownFlag = true;
+    activeAgent?.abort();
     messageBuffer.length = 0;
     bufferedChars = 0;
   }

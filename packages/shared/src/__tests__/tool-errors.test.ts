@@ -1,7 +1,27 @@
 import { describe, expect, it } from 'vitest';
-import { classifyError, describeToolError, SafeToolError } from '../tool-errors.js';
+import {
+  classifyError,
+  describeToolError,
+  modelResponseError,
+  SafeToolError,
+} from '../tool-errors.js';
 
 describe('tool errors', () => {
+  it.each([
+    ['TimeoutError: test-token', 'error', 'timeout'],
+    ['request timed out: test-token', 'error', 'timeout'],
+    ['The operation was aborted due to timeout', 'error', 'timeout'],
+    ['AbortError: test-token', 'error', 'cancelled'],
+    ['test-token', 'aborted', 'cancelled'],
+    ['test-token', 'error', 'request_failed'],
+    ['x'.repeat(1024) + 'TimeoutError', 'error', 'request_failed'],
+  ])('recovers only surviving model error categories', (errorMessage, stopReason, category) => {
+    const failure = modelResponseError('Model', { errorMessage, stopReason });
+    expect(classifyError(failure)).toEqual({ errorCategory: category });
+    expect(failure.message).not.toContain('test-token');
+    expect(failure.cause).toBeUndefined();
+  });
+
   it.each([
     [new DOMException('secret', 'TimeoutError'), 'timeout'],
     [new DOMException('secret', 'AbortError'), 'cancelled'],

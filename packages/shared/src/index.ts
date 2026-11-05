@@ -508,6 +508,7 @@ export {
   describeToolError,
   type ErrorCategory,
   type ErrorClassification,
+  modelResponseError,
   SafeToolError,
   ValidationError,
 } from './tool-errors.js';

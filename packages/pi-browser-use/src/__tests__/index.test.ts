@@ -1,3 +1,5 @@
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+
 const { piVersion } = vi.hoisted(() => ({ piVersion: { value: '1.2.0' } }));
 
 import { afterEach, beforeEach, describe, expect, it, test, vi } from 'vitest';
@@ -42,10 +44,11 @@ const mockListAllTools = vi.fn(() =>
   ]),
 );
 
-const mockCallTool = vi.fn((_name: string, _args: Record<string, unknown>, _signal?: AbortSignal) =>
-  Promise.resolve({
-    content: [{ type: 'text', text: 'Tool result' }],
-  }),
+const mockCallTool = vi.fn(
+  (_name: string, _args: Record<string, unknown>, _signal?: AbortSignal): Promise<CallToolResult> =>
+    Promise.resolve({
+      content: [{ type: 'text', text: 'Tool result' }],
+    }),
 );
 
 const mockConnect = vi.fn(() => Promise.resolve());
@@ -573,6 +576,30 @@ describe('browserUseExtension', () => {
       expect(result.isError).toBe(true);
     });
 
+    it.each([
+      ['HTTP 403: test-token', 'http_error'],
+      ['Timed out after 5000 ms: test-token', 'timeout'],
+      ['test-token', 'request_failed'],
+    ])('sanitizes explicit upstream failures before converting content: %s', async (message, category) => {
+      await startExtension();
+      mockCallTool.mockResolvedValueOnce({
+        isError: true,
+        content: [
+          { type: 'text', text: message },
+          { type: 'image', data: 'test-token', mimeType: 'image/png' },
+        ],
+        structuredContent: { error: 'test-token', body: 'private body' },
+      });
+      const result = await registeredTools
+        .get('browser_click')!
+        .execute('call-1', {}, undefined, undefined, {});
+      expect(result).toMatchObject({
+        isError: true,
+        structuredContent: { errorCategory: category },
+      });
+      expect(JSON.stringify(result)).not.toMatch(/test-token|stack trace|private body/);
+    });
+
     it('forwards the Pi abort signal during visual screenshot capture', async () => {
       await startExtension({
         visionModel: { provider: 'openai', model: 'gpt-4o' },
@@ -672,7 +699,8 @@ describe('browserUseExtension', () => {
         isError?: boolean;
       };
 
-      expect(result.content[0]!.text).toContain('element not found');
+      expect(result.content[0]!.text).toContain('Browser tool failed');
+      expect(result.content[0]!.text).not.toContain('element not found');
       expect(result.isError).toBe(true);
     });
 

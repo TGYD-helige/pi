@@ -1,5 +1,6 @@
 import { mkdir, open, opendir, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { SafeToolError } from '@amaster.ai/pi-shared';
 import { resolveConfigDir } from '@amaster.ai/pi-shared/settings';
 import {
   migrateSessionEntries,
@@ -151,7 +152,13 @@ async function readDreamInputs(
       options.includeGlobalSessions ?? false,
       signal,
       cursor,
-    );
+    ).catch((error) => {
+      throw new SafeToolError(
+        'Read memory session history',
+        error,
+        'Some history could not be read. The checkpoint was not advanced; restore access before retrying consolidation.',
+      );
+    });
     return signal.aborted ? undefined : { ...history, credentials };
   })();
   discovery.active = operation;
@@ -177,8 +184,7 @@ async function readDreamInputs(
 
 async function* directoryEntries(path: string) {
   const dir = await opendir(path).catch((error: NodeJS.ErrnoException) => {
-    if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR')
-      console.error('[pi-memory] unable to read session directory');
+    if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error;
     return undefined;
   });
   if (dir) yield* dir;
@@ -209,13 +215,9 @@ async function scanPiSessionTurns(
       if (signal?.aborted) return { turns: [], turnCount: 0, hasMore: false, cursor: undefined };
       if (!name.endsWith('.jsonl')) continue;
       const path = join(dir, name);
-      const metadata = await stat(path).catch((error: NodeJS.ErrnoException) => {
-        if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR')
-          console.error('[pi-memory] unable to inspect session file');
-        return undefined;
-      });
+      const metadata = await stat(path);
       if (signal?.aborted) return { turns: [], turnCount: 0, hasMore: false, cursor: undefined };
-      if (!metadata?.isFile() || (since !== undefined && metadata.mtimeMs <= since)) continue;
+      if (!metadata.isFile() || (since !== undefined && metadata.mtimeMs <= since)) continue;
       const file = { path, modified: metadata.mtimeMs };
       if (cursor && compare(file, cursor) <= 0) continue;
       files.push(file);
@@ -229,11 +231,7 @@ async function scanPiSessionTurns(
   let turnCount = 0;
   for (const file of files) {
     if (signal?.aborted) return { turns: [], turnCount: 0, hasMore: false, cursor: undefined };
-    const handle = await open(file.path, 'r').catch((error: NodeJS.ErrnoException) => {
-      if (error.code !== 'ENOENT') console.error('[pi-memory] unable to open session file');
-      return undefined;
-    });
-    if (!handle) continue;
+    const handle = await open(file.path, 'r');
     try {
       if (signal?.aborted) return { turns: [], turnCount: 0, hasMore: false, cursor: undefined };
       const metadata = await handle.stat();

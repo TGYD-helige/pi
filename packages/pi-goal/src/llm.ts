@@ -1,4 +1,4 @@
-import { describeToolError, SafeToolError, ValidationError } from '@amaster.ai/pi-shared';
+import { describeToolError, modelResponseError, ValidationError } from '@amaster.ai/pi-shared';
 /**
  * Single-turn, tool-less LLM completion helper shared by the derive and
  * evaluate steps. Wraps pi-agent-core's Agent + pi-ai's streamSimple, the same
@@ -48,6 +48,7 @@ export async function completeOnce(
         'configuration_error',
       );
     const auth = await registry.getApiKeyAndHeaders(model);
+    if (signal?.aborted) return null;
     if (!auth.ok)
       throw new ValidationError(
         'Goal evaluator credentials are unavailable. Check the model credentials.',
@@ -60,7 +61,8 @@ export async function completeOnce(
         if (auth.apiKey) merged.apiKey = auth.apiKey;
         if (auth.headers) merged.headers = auth.headers;
         const existingSignal = (streamOpts as { signal?: AbortSignal } | undefined)?.signal;
-        if (!existingSignal && signal) merged.signal = signal;
+        if (signal)
+          merged.signal = existingSignal ? AbortSignal.any([existingSignal, signal]) : signal;
         return streamSimple(m as never, c as never, merged as never);
       },
       convertToLlm: (msgs: unknown) => msgs as never[],
@@ -68,12 +70,19 @@ export async function completeOnce(
     agent.subscribe((event: unknown) => {
       if ((event as { type?: string }).type === 'turn_end') void agent.abort();
     });
-    await agent.prompt(userPrompt);
+    const onAbort = () => agent.abort();
+    signal?.addEventListener('abort', onAbort, { once: true });
+    try {
+      signal?.throwIfAborted();
+      await agent.prompt(userPrompt);
+    } finally {
+      signal?.removeEventListener('abort', onAbort);
+    }
     if (signal?.aborted) return null;
     const messages = agent.state.messages as AgentMessageLike[];
     const last = messages.filter((message) => message.role === 'assistant').at(-1);
     if (last?.stopReason === 'error' || last?.stopReason === 'aborted')
-      throw new SafeToolError('Goal evaluator request', new Error(last.errorMessage ?? ''));
+      throw modelResponseError('Goal evaluator request', last);
     const text = lastAssistantText(messages);
     if (!text)
       throw new ValidationError(

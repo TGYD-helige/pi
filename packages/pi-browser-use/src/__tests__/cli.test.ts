@@ -57,7 +57,7 @@ describe('cli startup', () => {
         { type: 'image', data: 'image', mimeType: 'image/png' },
       ],
       structuredContent: { records: [{ id: 'record-1', body: large }] },
-      isError: true,
+      isError: false,
     });
     const result = (await mockHandlers[1]!(
       { params: { name: 'browser_take_snapshot', arguments: {} } },
@@ -77,8 +77,26 @@ describe('cli startup', () => {
       12 * 1024,
     );
     expect(result.content).toContainEqual({ type: 'image', data: 'image', mimeType: 'image/png' });
-    expect(result.isError).toBe(true);
+    expect(result.isError).not.toBe(true);
   });
+  it('sanitizes explicit MCP failures on the standalone route', async () => {
+    await mockHandlers[0]!({}, {});
+    mockCliCall.mockResolvedValueOnce({
+      isError: true,
+      content: [{ type: 'text', text: 'TimeoutError: test-token' }],
+      structuredContent: { body: 'test-token' },
+    });
+    const result = await mockHandlers[1]!(
+      { params: { name: 'browser_take_snapshot', arguments: {} } },
+      {},
+    );
+    expect(result).toMatchObject({
+      isError: true,
+      structuredContent: { errorCategory: 'timeout' },
+    });
+    expect(JSON.stringify(result)).not.toContain('test-token');
+  });
+
   it('logs diagnostic categories without raw errors or credentials', () => {
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
