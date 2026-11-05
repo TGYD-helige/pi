@@ -495,6 +495,19 @@ Key tools receive additional usage hints in their descriptions:
 
 None. Previously excluded upstream tools (`lighthouse_audit`, performance traces, screencast, extension management) are registered but inactive under the default `core` tool profile — see [Tool Profile](#tool-profile).
 
+## Sealed Sandbox tool catalog
+
+Image builders may call the exported `buildSandboxToolCatalog(config)` to discover
+the installed MCP's complete tool schemas and categories before sealing the image.
+Store its JSON result as `dist/sandbox-tool-catalog.json` beside the extension entry.
+Only isolated Linux Sandboxes with a protected root-owned installation and matching
+MCP/config identity use the catalog. All tools still register during session start;
+the first actual browser operation connects through the existing client.
+
+Missing, changed or untrusted catalogs use normal live discovery. Ordinary Pi
+sessions keep live discovery. This optimizes metadata loading; it does not provide
+a browser or change browser-session authorization and retention.
+
 ## License
 
 Apache-2.0

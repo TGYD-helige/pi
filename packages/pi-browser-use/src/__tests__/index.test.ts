@@ -198,6 +198,84 @@ describe('browserUseExtension', () => {
 
   afterEach(() => vi.restoreAllMocks());
 
+  it('registers the sealed Sandbox catalog without connecting until the first browser call', async () => {
+    const { buildSandboxToolCatalog } = await import('../index.js');
+    const catalog = await buildSandboxToolCatalog({ envAllowlist: ['UNSET_BROWSER_OPTION'] });
+    expect(catalog.tools.map((tool) => tool.name)).toContain('click');
+    mockConnect.mockClear();
+    mockListAllTools.mockClear();
+    vi.stubEnv('MIRRORX_EXECUTION_ISOLATED', '1');
+    vi.spyOn(fs, 'lstatSync').mockReturnValue({
+      uid: 0,
+      mode: 0o444,
+      isSymbolicLink: () => false,
+      isFile: () => true,
+    } as any);
+    vi.mocked(fs.readFileSync).mockImplementation((file) => {
+      if (String(file).endsWith('sandbox-tool-catalog.json')) return JSON.stringify(catalog);
+      throw Error('ENOENT');
+    });
+    try {
+      await startExtension({
+        envAllowlist: ['UNSET_BROWSER_OPTION'],
+        executablePath: '/usr/bin/browser-from-image',
+      });
+      expect(registeredTools.has('browser_click')).toBe(true);
+      expect(mockConnect).not.toHaveBeenCalled();
+      expect(mockListAllTools).not.toHaveBeenCalled();
+      await registeredTools
+        .get('browser_click')!
+        .execute('first-browser-call', { pageId: 7 }, undefined, undefined, {});
+      expect(mockConnect).toHaveBeenCalledOnce();
+      expect(mockCallTool).toHaveBeenCalledWith('click', { pageId: 7 }, undefined);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.mocked(fs.lstatSync).mockRestore();
+    }
+  });
+
+  it.each([
+    'ordinary',
+    'version',
+    'configuration',
+    'tools',
+    'owner',
+    'writable',
+    'symlink',
+    'environment',
+  ])('retains live discovery for an unusable Sandbox catalog: %s', async (fault) => {
+    const { buildSandboxToolCatalog } = await import('../index.js');
+    const catalog = await buildSandboxToolCatalog({});
+    mockConnect.mockClear();
+    mockListAllTools.mockClear();
+    vi.stubEnv('MIRRORX_EXECUTION_ISOLATED', fault === 'ordinary' ? '0' : '1');
+    if (fault === 'version') catalog.mcpVersion = 'incompatible';
+    if (fault === 'configuration') catalog.configurationSha256 = 'different';
+    if (fault === 'environment') vi.stubEnv('CUSTOM_MCP_FEATURE', 'changes-tools');
+    if (fault === 'tools') catalog.tools = [{}] as any;
+    vi.spyOn(fs, 'lstatSync').mockReturnValue({
+      uid: fault === 'owner' ? 20001 : 0,
+      mode: fault === 'writable' ? 0o666 : 0o444,
+      isSymbolicLink: () => fault === 'symlink',
+      isFile: () => true,
+    } as any);
+    vi.mocked(fs.readFileSync).mockImplementation((file) => {
+      if (String(file).endsWith('sandbox-tool-catalog.json')) return JSON.stringify(catalog);
+      throw Error('ENOENT');
+    });
+    try {
+      await startExtension(
+        fault === 'environment' ? { envAllowlist: ['CUSTOM_MCP_FEATURE'] } : undefined,
+      );
+      expect(registeredTools.has('browser_click')).toBe(true);
+      expect(mockConnect).toHaveBeenCalledOnce();
+      expect(mockListAllTools).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllEnvs();
+      vi.mocked(fs.lstatSync).mockRestore();
+    }
+  });
+
   test('registers session_start and session_shutdown handlers', () => {
     browserUseExtension(mockPi as any);
 

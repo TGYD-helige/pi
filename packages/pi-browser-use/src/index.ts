@@ -24,6 +24,11 @@ import {
   type VisionModelConfig,
 } from './config.js';
 import { prepareBrowserProfile } from './profile.js';
+import {
+  readSandboxToolCatalog,
+  type SandboxToolCatalog,
+  sandboxCatalogIdentity,
+} from './sandbox-tool-catalog.js';
 import { type ManagedBrowser, readBrowserSessionBinding } from './session-backend.js';
 import { BrowserSessionClient } from './session-client.js';
 import type { SessionAction } from './session-control.js';
@@ -440,6 +445,19 @@ function loadConfigFromFile(options?: PiSettingsOptions): BrowserUseConfig {
  * Config is loaded from config.json["pi-browser-use"] in the working directory.
  * If visionModel is configured, an additional analyze_screenshot tool is registered.
  */
+/** Build metadata using the installed MCP's public discovery protocol before sealing an image. */
+export async function buildSandboxToolCatalog(
+  config: BrowserUseConfig,
+): Promise<SandboxToolCatalog> {
+  const client = new DevToolsClient({ ...config, session: { ...config.session, enabled: false } });
+  try {
+    const tools = await client.listAllTools();
+    return { ...sandboxCatalogIdentity(config), tools, categories: await loadCategoryMap() };
+  } finally {
+    await client.close();
+  }
+}
+
 export default function browserUseExtension(pi: ExtensionAPI): void {
   let config: BrowserUseConfig | undefined;
   let client: DevToolsClient | undefined;
@@ -584,11 +602,15 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
     });
   }
 
-  async function registerUpstreamTools(): Promise<void> {
+  async function registerUpstreamTools(cached?: Tool[]): Promise<void> {
     // Inspect the host, since the extension's installed peer can be a different version.
     const nativeDiscovery = pi.getAllTools?.().some((tool) => 'exposure' in tool) ?? false;
-    await ensureConnected();
-    const upstreamTools = await client!.listAllTools();
+    const upstreamTools =
+      cached ??
+      (await (async () => {
+        await ensureConnected();
+        return client!.listAllTools();
+      })());
 
     for (const tool of upstreamTools) {
       const prefixedName = `${TOOL_PREFIX}${tool.name}`;
@@ -808,10 +830,11 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
     else pi.setActiveTools(pi.getActiveTools().filter((name) => name !== 'browser_session'));
     upstreamToolNames.clear();
     toolGroups = new Map();
-    await registerUpstreamTools();
+    const catalog = readSandboxToolCatalog(config);
+    await registerUpstreamTools(catalog?.tools);
     toolGroups = buildGroups(
       [...upstreamToolNames].map((name) => name.slice(TOOL_PREFIX.length)),
-      await loadCategoryMap(),
+      catalog?.categories ?? (await loadCategoryMap()),
     );
     if (config.visionModel) {
       await registerVisionTool(config.visionModel);
