@@ -501,7 +501,7 @@ function safeFailureMetadata(value: Record<string, unknown> = {}): Record<string
     typeof item === 'string' && allowed.includes(item) ? item : undefined;
   const delivery = value.delivery as { mode?: unknown; delivered_count?: unknown } | undefined;
   const escalation = value.escalation as { target?: unknown; reason?: unknown } | undefined;
-  return {
+  const metadata: Record<string, unknown> = {
     effect: pick(value.effect, [
       'confirmed',
       'partial',
@@ -528,4 +528,14 @@ function safeFailureMetadata(value: Record<string, unknown> = {}): Record<string
       ]),
     },
   };
+  for (const [key, item] of Object.entries(metadata)) {
+    if (
+      item === undefined ||
+      (item &&
+        typeof item === 'object' &&
+        Object.values(item).every((field) => field === undefined))
+    )
+      delete metadata[key];
+  }
+  return metadata;
 }

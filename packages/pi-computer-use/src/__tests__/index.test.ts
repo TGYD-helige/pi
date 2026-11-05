@@ -1334,6 +1334,7 @@ describe('computerUseExtension', () => {
   });
 
   it.each([
+    'permissions_pending: test-token',
     'ax_not_granted test-token',
     'HTTP 403: test-token',
     'unknown test-token',
@@ -1352,6 +1353,8 @@ describe('computerUseExtension', () => {
       .execute('id', { prompt: false }, undefined, undefined, mockCtx);
     expect(result).toMatchObject({ isError: true });
     expect(JSON.stringify(result)).not.toMatch(/test-token|private diagnostic/);
+    if (message.startsWith('permissions_pending'))
+      expect(JSON.stringify(result)).toContain('permissions_pending');
     if (message.startsWith('ax_')) expect(JSON.stringify(result)).toContain('Accessibility');
   });
 

@@ -771,6 +771,9 @@ function formatToolError(
   errorText: string,
   params: Record<string, unknown>,
 ): string | undefined {
+  if (errorText.startsWith('permissions_pending')) {
+    return `permissions_pending: Computer automation permissions are pending. ${accessibilityHint()} ${screenRecordingHint()}`;
+  }
   if (errorText.includes('ax_not_granted')) {
     return accessibilityHint();
   }
