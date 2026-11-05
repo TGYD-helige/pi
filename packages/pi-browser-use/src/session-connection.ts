@@ -1,14 +1,49 @@
 import { randomBytes } from 'node:crypto';
+import { once } from 'node:events';
 import {
   createServer,
   request as httpRequest,
+  type Server,
   validateHeaderName,
   validateHeaderValue,
 } from 'node:http';
 import { request as httpsRequest } from 'node:https';
+import { type AddressInfo, connect } from 'node:net';
 import type { Duplex } from 'node:stream';
 import type { BrowserUseConfig } from './config.js';
 import { BrowserSessionError } from './session-control.js';
+
+const LOOPBACK = '127.0.0.1';
+
+export async function listenOnReachablePort(server: Server, signal: AbortSignal): Promise<number> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    signal.throwIfAborted();
+    const listening = once(server, 'listening');
+    server.listen(0, LOOPBACK);
+    await listening;
+    const { port } = server.address() as AddressInfo;
+
+    // Binding can succeed on an ephemeral port that the Run UID's firewall rules reject.
+    // Probe with the caller's UID and address before publishing the listener.
+    const probeSignal = AbortSignal.any([signal, AbortSignal.timeout(1000)]);
+    const socket = connect(port, LOOPBACK);
+    const reachable = await once(socket, 'connect', { signal: probeSignal })
+      .then(
+        () => true,
+        () => false,
+      )
+      .finally(() => socket.destroy());
+    if (reachable && !signal.aborted) return port;
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+      server.closeAllConnections();
+    });
+  }
+  signal.throwIfAborted();
+  throw new BrowserSessionError(
+    'Could not allocate a reachable local port for the browser session. Retry opening the browser. If it persists, check the loopback policy.',
+  );
+}
 
 export function parseBrowserHeaders(value?: string): Record<string, string> {
   try {
@@ -136,15 +171,9 @@ export async function createBrowserConnection(config: BrowserUseConfig, signal: 
     });
     request.end();
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === 'string')
-    throw new BrowserSessionError('Could not start the browser connection tunnel.');
+  const port = await listenOnReachablePort(server, signal);
   return {
-    wsEndpoint: `ws://127.0.0.1:${address.port}${path}`,
+    wsEndpoint: `ws://${LOOPBACK}:${port}${path}`,
     get alive() {
       return !lost;
     },
