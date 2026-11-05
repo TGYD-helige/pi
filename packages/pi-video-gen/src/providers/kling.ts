@@ -88,6 +88,7 @@ async function resolveAmbiguous(
   taskType: string,
   fetchImpl: typeof fetch,
   signal?: AbortSignal,
+  cause?: unknown,
 ): Promise<RemoteTaskHandle> {
   const r = await tryRecoverByExternalId(provider, fp, taskType, fetchImpl);
   if (r.outcome === 'found') return r.handle;
@@ -96,17 +97,20 @@ async function resolveAmbiguous(
     throw new AmbiguousSubmitError(
       'Cancelled before we could verify whether the task was created. A paid task MAY exist — check the Kling console for this external id before retrying, or you may be billed twice.',
       'kling submit: aborted, recovery unknown',
+      signal?.reason ?? cause,
     );
   }
   if (r.outcome === 'not-found') {
     throw new VideoGenError(
       'Task creation failed, but a lookup by external id confirmed NO task was created — nothing was billed. Safe to retry once.',
       'kling submit: failed, verified not created',
+      cause,
     );
   }
   throw new AmbiguousSubmitError(
     'Task creation failed with an ambiguous result and the idempotency lookup could not complete. A paid task MAY exist — check the Kling console before retrying to avoid double billing.',
     'kling submit: ambiguous, recovery unknown',
+    cause,
   );
 }
 
@@ -194,14 +198,21 @@ export const klingAdapter: VideoProviderAdapter = {
         body: JSON.stringify(body),
         signal: signal ?? null,
       });
-    } catch {
+    } catch (error) {
       // Network failure = ambiguous. Recover via external-id lookup (fresh
       // timeout, never the caller's possibly-aborted signal).
-      return resolveAmbiguous(provider, fp, taskType, fetchImpl, signal);
+      return resolveAmbiguous(provider, fp, taskType, fetchImpl, signal, error);
     }
     if (!res.ok) {
       if (res.status >= 500) {
-        return resolveAmbiguous(provider, fp, taskType, fetchImpl, signal);
+        return resolveAmbiguous(
+          provider,
+          fp,
+          taskType,
+          fetchImpl,
+          signal,
+          Object.assign(new Error(), { status: res.status }),
+        );
       }
       throw httpStatusError('kling', 'submit', res.status);
     }
@@ -215,7 +226,7 @@ export const klingAdapter: VideoProviderAdapter = {
     } catch (error) {
       if (error instanceof VideoGenError && error.logSummary.startsWith('kling submit: code'))
         throw error;
-      return resolveAmbiguous(provider, fp, taskType, fetchImpl, signal);
+      return resolveAmbiguous(provider, fp, taskType, fetchImpl, signal, error);
     }
     if (!taskId) {
       // 2xx but no id: the task MAY exist server-side — this is ambiguous,
@@ -245,8 +256,8 @@ export const klingAdapter: VideoProviderAdapter = {
           signal: signal ?? null,
         },
       );
-    } catch {
-      throw networkError('kling', 'inspect');
+    } catch (error) {
+      throw networkError('kling', 'inspect', error);
     }
     if (!res.ok) throw httpStatusError('kling', 'inspect', res.status);
 

@@ -1,6 +1,7 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { classifyError } from '@amaster.ai/pi-shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { AmbiguousSubmitError, RemoteTaskNotFoundError, VideoGenError } from '../errors.js';
 import { minimaxAdapter } from '../providers/minimax.js';
@@ -29,6 +30,21 @@ function jsonResponse(status: number, body: unknown): Response {
 }
 
 describe('minimaxAdapter.submit (v2)', () => {
+  it('retains timeout classification while preserving paid-submit uncertainty', async () => {
+    const result = await minimaxAdapter
+      .submit(
+        provider,
+        'MiniMax-H3',
+        { prompt: 'sea' },
+        mockFetch(() => Promise.reject(new DOMException('secret-token', 'TimeoutError'))),
+      )
+      .catch((error) => error);
+    expect(result).toBeInstanceOf(AmbiguousSubmitError);
+    expect(classifyError(result).errorCategory).toBe('timeout');
+    expect(result.message).toContain('MAY have created a paid task');
+    expect(JSON.stringify(result)).not.toContain('secret-token');
+  });
+
   beforeEach(() => {
     mkdirSync(suiteDir, { recursive: true });
     writeFileSync(join(suiteDir, 'frame.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));

@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, test, vi } from 'vitest';
 import { loadChannelConfig, updateLocalChannelConfig } from '../config.js';
 
 describe('loadChannelConfig', () => {
@@ -22,6 +22,18 @@ describe('loadChannelConfig', () => {
     process.env = originalEnv;
     vi.restoreAllMocks();
     rmSync(base, { recursive: true, force: true });
+  });
+
+  it('refuses to overwrite existing malformed settings during an update', () => {
+    const project = join(base, 'project');
+    mkdirSync(join(project, '.pi'), { recursive: true });
+    const file = join(project, '.pi', 'settings.json');
+    const original = '{"other-extension":{"keep":true}, "unfinished":';
+    writeFileSync(file, original);
+    expect(() => updateLocalChannelConfig(project, () => ({ adapters: {} }), true)).toThrow(
+      /settings/i,
+    );
+    expect(readFileSync(file, 'utf8')).toBe(original);
   });
 
   test('loads project settings from an ancestor .pi directory', () => {

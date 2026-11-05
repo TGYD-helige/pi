@@ -230,6 +230,26 @@ describe('3-layer settings resolution', () => {
     rmSync(base, { recursive: true, force: true });
   });
 
+  it.each([
+    'global',
+    'agent',
+    'project',
+  ])('reports malformed %s settings instead of using defaults', async (layer) => {
+    const dir =
+      layer === 'global' ? globalDir : layer === 'agent' ? configDir : join(projectDir, '.pi');
+    writeFileSync(join(dir, 'settings.json'), '{secret-provider-body');
+    const { loadPiSettings } = await import('../../src/settings.js');
+    expect(() =>
+      loadPiSettings('ext', { configDir, cwd: projectDir, projectTrusted: true }),
+    ).toThrow(/settings/i);
+  });
+
+  it('rejects an explicit null section instead of using defaults', async () => {
+    writeFileSync(join(configDir, 'settings.json'), JSON.stringify({ ext: null }));
+    const { loadPiSettings } = await import('../../src/settings.js');
+    expect(() => loadPiSettings('ext', { configDir })).toThrow(/settings/i);
+  });
+
   it('configDir settings override global settings', async () => {
     writeFileSync(
       join(globalDir, 'settings.json'),

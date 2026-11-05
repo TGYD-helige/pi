@@ -3,7 +3,7 @@
  */
 
 import type { GoalModelConfig } from './config.js';
-import { completeOnce, type GoalModelRegistry } from './llm.js';
+import { type CompletionFailure, completeOnce, type GoalModelRegistry } from './llm.js';
 import { buildEvaluateUserPrompt, EVALUATE_SYSTEM_PROMPT } from './prompts.js';
 
 export interface GoalVerdict {
@@ -20,6 +20,7 @@ export interface EvaluateOptions {
   /** Text-bearing messages dropped to fit the cap; surfaced to the evaluator. */
   omittedCount?: number;
   signal?: AbortSignal;
+  onError?: (failure: CompletionFailure) => void;
 }
 
 /**
@@ -36,6 +37,7 @@ export async function evaluateCondition(opts: EvaluateOptions): Promise<GoalVerd
     EVALUATE_SYSTEM_PROMPT,
     buildEvaluateUserPrompt(condition, transcript, omittedCount ?? 0),
     signal,
+    opts.onError,
   );
   if (raw === null) {
     console.error('[pi-goal] evaluate: model unavailable or call failed');
@@ -43,9 +45,7 @@ export async function evaluateCondition(opts: EvaluateOptions): Promise<GoalVerd
   }
 
   const verdict = parseVerdict(raw);
-  console.error(
-    `[pi-goal] evaluation: ok=${verdict.ok} impossible=${verdict.impossible} reason=${verdict.reason}`,
-  );
+  console.error(`[pi-goal] evaluation: ok=${verdict.ok} impossible=${verdict.impossible} `);
   return verdict;
 }
 

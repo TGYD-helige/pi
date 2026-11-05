@@ -1,3 +1,4 @@
+import { describeToolError, SafeToolError, ValidationError } from '@amaster.ai/pi-shared';
 /**
  * Single-turn, tool-less LLM completion helper shared by the derive and
  * evaluate steps. Wraps pi-agent-core's Agent + pi-ai's streamSimple, the same
@@ -19,6 +20,8 @@ export interface GoalModelRegistry {
 interface AgentMessageLike {
   role: string;
   content: unknown;
+  stopReason?: string;
+  errorMessage?: string;
 }
 
 /**
@@ -26,50 +29,69 @@ interface AgentMessageLike {
  * Returns null on any resolution/auth failure so callers can degrade gracefully
  * (never throws for expected failures).
  */
+export type CompletionFailure = ReturnType<typeof describeToolError>;
+
 export async function completeOnce(
   registry: GoalModelRegistry,
   modelConfig: GoalModelConfig,
   systemPrompt: string,
   userPrompt: string,
   signal?: AbortSignal,
+  onError?: (failure: CompletionFailure) => void,
 ): Promise<string | null> {
-  const model = registry.find(modelConfig.provider, modelConfig.model);
-  if (!model) return null;
-
-  const auth = await registry.getApiKeyAndHeaders(model);
-  if (!auth.ok) return null;
-
-  const agent = new Agent({
-    initialState: {
-      systemPrompt,
-      model: model as never,
-      tools: [] as never[],
-    },
-    streamFn: (m: unknown, c: unknown, streamOpts?: unknown) => {
-      const merged = { ...((streamOpts as Record<string, unknown>) ?? {}) };
-      if (auth.apiKey) merged.apiKey = auth.apiKey;
-      if (auth.headers) merged.headers = auth.headers;
-      const existingSignal = (streamOpts as { signal?: AbortSignal } | undefined)?.signal;
-      if (!existingSignal && signal) merged.signal = signal;
-      return streamSimple(m as never, c as never, merged as never);
-    },
-    convertToLlm: (msgs: unknown) => msgs as never[],
-  });
-
-  // Tool-less: a single assistant turn ends the run. Guard against runaway anyway.
-  agent.subscribe((event: unknown) => {
-    if ((event as { type?: string }).type === 'turn_end') {
-      void agent.abort();
-    }
-  });
-
   try {
+    if (signal?.aborted) return null;
+    const model = registry.find(modelConfig.provider, modelConfig.model);
+    if (!model)
+      throw new ValidationError(
+        'The configured goal evaluator model is not registered.',
+        'configuration_error',
+      );
+    const auth = await registry.getApiKeyAndHeaders(model);
+    if (!auth.ok)
+      throw new ValidationError(
+        'Goal evaluator credentials are unavailable. Check the model credentials.',
+        'configuration_error',
+      );
+    const agent = new Agent({
+      initialState: { systemPrompt, model: model as never, tools: [] as never[] },
+      streamFn: (m: unknown, c: unknown, streamOpts?: unknown) => {
+        const merged = { ...((streamOpts as Record<string, unknown>) ?? {}) };
+        if (auth.apiKey) merged.apiKey = auth.apiKey;
+        if (auth.headers) merged.headers = auth.headers;
+        const existingSignal = (streamOpts as { signal?: AbortSignal } | undefined)?.signal;
+        if (!existingSignal && signal) merged.signal = signal;
+        return streamSimple(m as never, c as never, merged as never);
+      },
+      convertToLlm: (msgs: unknown) => msgs as never[],
+    });
+    agent.subscribe((event: unknown) => {
+      if ((event as { type?: string }).type === 'turn_end') void agent.abort();
+    });
     await agent.prompt(userPrompt);
-  } catch {
+    if (signal?.aborted) return null;
+    const messages = agent.state.messages as AgentMessageLike[];
+    const last = messages.filter((message) => message.role === 'assistant').at(-1);
+    if (last?.stopReason === 'error' || last?.stopReason === 'aborted')
+      throw new SafeToolError('Goal evaluator request', new Error(last.errorMessage ?? ''));
+    const text = lastAssistantText(messages);
+    if (!text)
+      throw new ValidationError(
+        'Goal evaluator returned no text. No judgment was made.',
+        'invalid_response',
+      );
+    return text;
+  } catch (error) {
+    if (signal?.aborted) return null;
+    const failure = describeToolError(
+      'Goal evaluator request',
+      error,
+      'No goal judgment was made. Check the evaluator before resuming.',
+    );
+    console.error(`[pi-goal] evaluator unavailable (category=${failure.errorCategory})`);
+    onError?.(failure);
     return null;
   }
-
-  return lastAssistantText(agent.state.messages as AgentMessageLike[]);
 }
 
 function lastAssistantText(messages: AgentMessageLike[]): string | null {

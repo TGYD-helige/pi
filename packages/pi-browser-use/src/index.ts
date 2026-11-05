@@ -1,12 +1,17 @@
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
+import { classifyError, describeToolError, SafeToolError } from '@amaster.ai/pi-shared';
 import {
   isProjectTrusted,
   loadPiSettings,
   type PiSettingsOptions,
 } from '@amaster.ai/pi-shared/settings';
 import type { TextContent as AiTextContent } from '@earendil-works/pi-ai';
-import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  ToolDefinition,
+} from '@earendil-works/pi-coding-agent';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { CallToolResultSchema, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import { Type } from 'typebox';
@@ -103,7 +108,16 @@ function summarizeMcpFailure(stderr: string, errorName: string, errorCode?: stri
   if (/(?:browser|chrome).+already running|profile.+in use/i.test(stderr)) {
     return 'Chrome profile is already in use.';
   }
-  const safeErrorName = /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(errorName) ? errorName : 'UnknownError';
+  const safeErrorName = [
+    'Error',
+    'TypeError',
+    'RangeError',
+    'SyntaxError',
+    'TimeoutError',
+    'AbortError',
+  ].includes(errorName)
+    ? errorName
+    : 'UnknownError';
   return `MCP transport failed (${safeErrorName}).`;
 }
 
@@ -207,7 +221,7 @@ export class DevToolsClient {
         if (generation !== this.generation) return;
         transportErrorCode = safeMcpSystemErrorCode((error as Error & { code?: unknown }).code);
         console.error(
-          `[pi-browser-use] chrome-devtools-mcp transport error (${transportErrorCode ?? error.name})`,
+          `[pi-browser-use] chrome-devtools-mcp transport error (${transportErrorCode ?? classifyError(error).errorCategory})`,
         );
         void this.disconnectUnhealthyClient(generation);
       };
@@ -237,7 +251,7 @@ export class DevToolsClient {
           : undefined;
       const diagnostic = summarizeMcpFailure(stderr, errorName, transportErrorCode ?? errorCode);
       console.error(`[pi-browser-use] browser connection failed: ${diagnostic}`);
-      throw new Error(`Browser connection failed. ${diagnostic}`);
+      throw new SafeToolError('Browser connection', error, diagnostic);
     }
   }
 
@@ -353,11 +367,21 @@ export class DevToolsClient {
     } catch (error) {
       if (signal?.aborted) throw error;
       if (this.state !== 'ready' || this.client !== client) {
-        throw new Error('Browser connection lost; retry the tool.');
+        throw new SafeToolError(
+          'Browser tool call',
+          error,
+          'The browser connection was lost. The action may have completed; inspect the current page before retrying.',
+        );
       }
-      const errorName = error instanceof Error ? error.name : 'UnknownError';
-      console.error(`[pi-browser-use] upstream tool call failed (${errorName})`);
-      throw new Error('Browser tool call failed.');
+      const failure = new SafeToolError(
+        'Browser tool call',
+        error,
+        'The action may have completed. Inspect the current page before retrying.',
+      );
+      console.error(
+        `[pi-browser-use] upstream tool call failed (category=${failure.errorCategory})`,
+      );
+      throw failure;
     }
   }
 
@@ -441,6 +465,30 @@ function loadConfigFromFile(options?: PiSettingsOptions): BrowserUseConfig {
  * If visionModel is configured, an additional analyze_screenshot tool is registered.
  */
 export default function browserUseExtension(pi: ExtensionAPI): void {
+  const registerTool = (tool: ToolDefinition) =>
+    pi.registerTool({
+      ...tool,
+      async execute(...args) {
+        try {
+          return await tool.execute(...args);
+        } catch (error) {
+          if (args[2]?.aborted) throw error;
+          const failure = describeToolError(
+            tool.name,
+            error,
+            'The action may have completed. Inspect the current page before retrying.',
+          );
+          console.error(`[pi-browser-use] ${tool.name} failed (category=${failure.errorCategory})`);
+          return {
+            content: [{ type: 'text' as const, text: failure.error }],
+            structuredContent: failure,
+            details: undefined,
+            isError: true,
+          };
+        }
+      },
+    });
+
   let config: BrowserUseConfig | undefined;
   let client: DevToolsClient | undefined;
   const upstreamToolNames = new Set<string>();
@@ -491,7 +539,7 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
   }
 
   function registerToolGroupSurface(): void {
-    pi.registerTool({
+    registerTool({
       name: TOOLS_META_TOOL,
       exposure: 'model-only',
       label: TOOLS_META_TOOL,
@@ -608,7 +656,7 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
         exposure = CORE_TOOLS.includes(originalName) ? 'direct' : 'deferred';
       }
 
-      pi.registerTool({
+      registerTool({
         name: prefixedName,
         label: prefixedName,
         ...(nativeDiscovery
@@ -714,7 +762,7 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
         }
       : {};
 
-    pi.registerTool({
+    registerTool({
       name: `${TOOL_PREFIX}analyze_screenshot`,
       label: `${TOOL_PREFIX}analyze_screenshot`,
       description:
@@ -751,7 +799,12 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
           content.push({ type: 'text', text: '' });
         }
         return result.isError
-          ? { content, isError: true, details: undefined }
+          ? {
+              content,
+              isError: true,
+              details: undefined,
+              ...(result.structuredContent ? { structuredContent: result.structuredContent } : {}),
+            }
           : { content, details: undefined };
       },
     });
@@ -759,7 +812,7 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
 
   registerToolGroupSurface();
   function registerSessionSurface() {
-    pi.registerTool({
+    registerTool({
       name: 'browser_session',
       label: 'Browser session',
       description: SESSION_DESCRIPTION,
@@ -772,7 +825,7 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
         config?.session?.enabled ? undefined : { hiddenDeclarations: ['browser_session'] },
       async execute(_id, params, signal) {
         return sessionToolResult(
-          params.action,
+          (params as { action: string }).action,
           config?.session?.enabled && client
             ? (action, callerSignal) => client!.sessionControl(action, callerSignal)
             : undefined,

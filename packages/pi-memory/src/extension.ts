@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { describeToolError } from '@amaster.ai/pi-shared';
 import { isProjectTrusted, loadPiSettings, resolveHome } from '@amaster.ai/pi-shared/settings';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import {
@@ -96,15 +97,11 @@ function resolveConfig(raw?: PiMemoryExtensionConfig): ResolvedConfig {
 }
 
 function loadSettings(cwd: string, projectTrusted = false): PiMemoryExtensionConfig | undefined {
-  try {
-    const config = loadPiSettings<Partial<PiMemoryExtensionConfig>>(SETTINGS_KEY, {
-      cwd,
-      projectTrusted,
-    });
-    return Object.keys(config).length > 0 ? (config as PiMemoryExtensionConfig) : undefined;
-  } catch {
-    return undefined;
-  }
+  const config = loadPiSettings<Partial<PiMemoryExtensionConfig>>(SETTINGS_KEY, {
+    cwd,
+    projectTrusted,
+  });
+  return Object.keys(config).length > 0 ? (config as PiMemoryExtensionConfig) : undefined;
 }
 
 export default function memoryExtension(
@@ -164,16 +161,16 @@ export default function memoryExtension(
         ...(config.dreaming ? { dreaming: config.dreaming } : {}),
         ...(ctx.signal ? { signal: ctx.signal } : {}),
       }).catch((error) => {
-        console.error(
-          `[pi-memory] background dream failed: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        if (ctx.signal?.aborted) return;
+        const failure = describeToolError('Background memory dream', error);
+        console.error(`[pi-memory] ${failure.errorCategory}: ${failure.error}`);
+        ctx.ui.notify(failure.error, 'warning');
       });
     } catch (err) {
       ctx.ui.setStatus(STATUS_KEY, 'memory: unavailable');
-      ctx.ui.notify(
-        `pi-memory failed to initialize: ${err instanceof Error ? err.message : String(err)}`,
-        'error',
-      );
+      const failure = describeToolError('Initialize memory', err);
+      console.error(`[pi-memory] ${failure.errorCategory}: ${failure.error}`);
+      ctx.ui.notify(failure.error, 'error');
     }
   });
 

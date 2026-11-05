@@ -61,14 +61,10 @@ function inheritCapabilities(
 }
 
 export function loadImageGenSettings(cwd: string, projectTrusted = false): ImageGenSettings {
-  try {
-    return loadPiSettings<ImageGenSettings>(SETTINGS_KEY, {
-      cwd,
-      projectTrusted,
-    });
-  } catch {
-    return {};
-  }
+  return loadPiSettings<ImageGenSettings>(SETTINGS_KEY, {
+    cwd,
+    projectTrusted,
+  });
 }
 
 function buildBuiltInProvider(

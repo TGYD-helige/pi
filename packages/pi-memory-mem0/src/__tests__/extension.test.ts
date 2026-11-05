@@ -589,7 +589,7 @@ describe('session_start — delayed backend init', () => {
     );
     controller.abort();
 
-    expect((await pending).isError).toBe(true);
+    await expect(pending).rejects.toBe(controller.signal.reason);
   });
 
   it('reports not active and withdraws the tool when init fails', async () => {
@@ -1002,7 +1002,9 @@ describe('mem0Extension recallFrequency', () => {
       await handlers.input![0]!({ text: 'first' }, ctx);
       const first = handlers.before_agent_start![0]!({}, ctx);
       await vi.advanceTimersByTimeAsync(3000);
-      expect(await first).toBeUndefined();
+      expect(await first).toMatchObject({
+        message: { content: expect.stringContaining('Memory recall unavailable') },
+      });
       expect(pi.appendEntry).not.toHaveBeenCalled();
       initialize();
       await vi.advanceTimersByTimeAsync(0);

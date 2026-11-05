@@ -28,7 +28,7 @@ export {
   isClearKeyword,
   MAX_CONDITION_LENGTH,
 } from './goal-state.js';
-export { completeOnce, type GoalModelRegistry } from './llm.js';
+export { type CompletionFailure, completeOnce, type GoalModelRegistry } from './llm.js';
 export {
   buildActivationMessage,
   buildContinueMessage,

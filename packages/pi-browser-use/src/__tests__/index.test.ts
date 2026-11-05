@@ -83,7 +83,7 @@ vi.mock('node:fs', async (importOriginal) => {
   return {
     ...actual,
     readFileSync: vi.fn(() => {
-      throw new Error('ENOENT');
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     }),
   };
 });
@@ -179,7 +179,7 @@ describe('browserUseExtension', () => {
     vi.mocked(fs.readFileSync)
       .mockReset()
       .mockImplementation(() => {
-        throw new Error('ENOENT');
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
       });
     piVersion.value = '1.2.0';
     registeredTools.clear();

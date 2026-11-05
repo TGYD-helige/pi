@@ -5,6 +5,7 @@
  * update entries. Follows a 4-phase prompt: Orient → Gather → Consolidate → Prune.
  */
 
+import { SafeToolError } from '@amaster.ai/pi-shared';
 import { Agent } from '@earendil-works/pi-agent-core';
 import { streamSimple } from '@earendil-works/pi-ai/compat';
 import { MEMORY_GUIDANCE } from './guidance.js';
@@ -149,5 +150,19 @@ export async function runConsolidation(opts: ConsolidationOptions): Promise<bool
   });
 
   await agent.prompt(userPrompt);
+  signal?.throwIfAborted();
+  const last = agent.state.messages.filter((message) => message.role === 'assistant').at(-1);
+  if (last?.role === 'assistant' && (last.stopReason === 'error' || last.stopReason === 'aborted'))
+    throw new SafeToolError(
+      'Memory consolidation model',
+      new Error(last.errorMessage ?? ''),
+      'Consolidation did not complete. Inspect memory before retrying any writes; the checkpoint was not advanced.',
+    );
+  if (agent.state.messages.some((message) => message.role === 'toolResult' && message.isError))
+    throw new SafeToolError(
+      'Memory consolidation',
+      undefined,
+      'A memory tool failed; consolidation may be incomplete. Inspect memory before retrying any writes; the checkpoint was not advanced.',
+    );
   return true;
 }

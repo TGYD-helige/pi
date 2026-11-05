@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { describeToolError } from '@amaster.ai/pi-shared';
 import { isProjectTrusted, loadPiSettings, resolveHome } from '@amaster.ai/pi-shared/settings';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import {
@@ -42,15 +43,11 @@ function resolveConfig(raw?: PiSchedulerExtensionConfig): ResolvedConfig {
 }
 
 function loadSettings(cwd: string, projectTrusted = false): PiSchedulerExtensionConfig | undefined {
-  try {
-    const config = loadPiSettings<Partial<PiSchedulerExtensionConfig>>(SETTINGS_KEY, {
-      cwd,
-      projectTrusted,
-    });
-    return Object.keys(config).length > 0 ? (config as PiSchedulerExtensionConfig) : undefined;
-  } catch {
-    return undefined;
-  }
+  const config = loadPiSettings<Partial<PiSchedulerExtensionConfig>>(SETTINGS_KEY, {
+    cwd,
+    projectTrusted,
+  });
+  return Object.keys(config).length > 0 ? (config as PiSchedulerExtensionConfig) : undefined;
 }
 
 function sessionStorageKey(sessionId: string): string {
@@ -115,7 +112,10 @@ export default function taskSchedulerExtension(
       for (const tool of tools) {
         pi.registerTool(tool);
       }
-    } catch {
+    } catch (error) {
+      const failure = describeToolError('Initialize scheduler', error);
+      console.error(`[pi-task-scheduler] ${failure.errorCategory}: ${failure.error}`);
+      ctx.ui.notify(failure.error, 'error');
       ctx.ui.setStatus(STATUS_KEY, 'scheduler: unavailable');
     }
   });

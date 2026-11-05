@@ -1,3 +1,4 @@
+import { classifyError } from '@amaster.ai/pi-shared';
 /**
  * Optional vision-model integration.
  *
@@ -127,7 +128,11 @@ export async function handleAnalyzeScreenshot(
   callVision: VisionCaller,
   args: Record<string, unknown>,
   signal?: AbortSignal,
-): Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }> {
+): Promise<{
+  content: Array<{ type: string; text: string }>;
+  isError?: boolean;
+  structuredContent?: { error?: string; errorCategory: string; httpStatus?: number; phase: string };
+}> {
   const instruction = String(args.instruction ?? '');
   const screenshotArgs = typeof args.pageId === 'number' ? { pageId: args.pageId } : {};
   let phase = 'capture';
@@ -193,15 +198,21 @@ export async function handleAnalyzeScreenshot(
         errorMsg.includes('permission'));
 
     const status = errorMsg.match(/\b([45]\d{2})\b/)?.[1];
-    const category = status
-      ? 'http'
-      : phase === 'model_lookup' || phase === 'authentication'
-        ? 'configuration'
-        : /timeout|timed out/i.test(errorMsg)
-          ? 'timeout'
-          : /fetch failed|ECONN|ENOTFOUND/i.test(errorMsg)
-            ? 'network'
-            : 'unknown';
+    const failure = classifyError(error);
+    const category =
+      failure.errorCategory === 'timeout'
+        ? 'timeout'
+        : failure.errorCategory === 'cancelled'
+          ? 'cancelled'
+          : status
+            ? 'http'
+            : phase === 'model_lookup' || phase === 'authentication'
+              ? 'configuration'
+              : /timeout|timed out/i.test(errorMsg)
+                ? 'timeout'
+                : /fetch failed|ECONN|ENOTFOUND/i.test(errorMsg)
+                  ? 'network'
+                  : 'unknown';
     const errorType =
       error instanceof Error &&
       ['Error', 'TypeError', 'RangeError', 'SyntaxError', 'TimeoutError'].includes(error.name)
@@ -216,6 +227,7 @@ export async function handleAnalyzeScreenshot(
       '429': 'Service rate limit or quota was exceeded.',
     };
     let reason = `Unexpected ${errorType}.`;
+    if (category === 'cancelled') reason = 'Request was cancelled.';
     if (category === 'timeout') reason = 'Request timed out.';
     if (category === 'network') reason = 'Could not connect to the service.';
     if (phase === 'model_lookup') reason = 'Configured vision model is not registered.';
@@ -245,13 +257,10 @@ export async function handleAnalyzeScreenshot(
       ? 'Visual analysis model is not available. Use accessibility tree elements (uids from take_snapshot) for all interactions instead.'
       : 'Visual analysis failed. Use accessibility tree elements instead.';
 
+    const message = `${fallbackMsg}\nFailure at ${phase}: ${reason}${fields.length ? ` Fields: ${fields.join(', ')}.` : ''}`;
     return {
-      content: [
-        {
-          type: 'text',
-          text: `${fallbackMsg}\nFailure at ${phase}: ${reason}${fields.length ? ` Fields: ${fields.join(', ')}.` : ''}`,
-        },
-      ],
+      content: [{ type: 'text', text: message }],
+      structuredContent: { error: message, ...failure, phase },
       isError: true,
     };
   }

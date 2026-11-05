@@ -27,14 +27,29 @@ function setup(exec: ReturnType<typeof vi.fn>) {
   return { tools, handlers, start };
 }
 describe('piTeamworkExtension execution', () => {
+  it('keeps a provider timeout distinct from configuration failures', async () => {
+    const exec = vi.fn(async (_command, args) => {
+      if (args[0] === 'issue') throw new DOMException('secret-token', 'TimeoutError');
+      return { stdout: '{}', stderr: '', code: 0 };
+    });
+    const { tools, handlers, start } = setup(exec);
+    await start();
+    await new Promise((resolve) => setImmediate(resolve));
+    const result = await tools.get('issue_get')!.execute('call', { id: 'one' });
+    expect(result).toHaveProperty('structuredContent.errorCategory', 'timeout');
+    expect(JSON.stringify(result)).not.toContain('secret-token');
+    await handlers.get('session_shutdown')!({}, {});
+  });
+
   afterEach(() => vi.restoreAllMocks());
   it('stops the issue write sequence on caller cancellation without cancelling other calls', async () => {
     const controller = new AbortController();
+    const cancellation = new DOMException('Cancelled', 'AbortError');
     const exec = vi.fn(
       async (_command: string, args: string[], options: { signal: AbortSignal }) => {
         if (args[0] === 'issue' && args[1] === 'status') {
           expect(options.signal.aborted).toBe(false);
-          controller.abort();
+          controller.abort(cancellation);
         }
         return { stdout: '{"id":"other","title":"Other","status":"todo"}', stderr: '', code: 0 };
       },
@@ -42,10 +57,11 @@ describe('piTeamworkExtension execution', () => {
     const { tools, handlers, start } = setup(exec);
     await start();
     await new Promise((resolve) => setImmediate(resolve));
-    const result = await tools
-      .get('issue_update')!
-      .execute('call', { id: 'one', status: 'done', title: 'New' }, controller.signal);
-    expect(result.isError).toBe(true);
+    await expect(
+      tools
+        .get('issue_update')!
+        .execute('call', { id: 'one', status: 'done', title: 'New' }, controller.signal),
+    ).rejects.toBe(cancellation);
     expect(
       exec.mock.calls.filter(([, args]) => args[0] === 'issue').map(([, args]) => args[1]),
     ).toEqual(['status']);
@@ -89,7 +105,7 @@ describe('piTeamworkExtension execution', () => {
       .get('issue_update')!
       .execute('call', { id: 'one', title: 'New' }, controller.signal);
     controller.abort();
-    expect((await pending).isError).toBe(true);
+    await expect(pending).rejects.toBe(controller.signal.reason);
     expect(exec).toHaveBeenCalledTimes(1);
     await handlers.get('session_shutdown')!({}, {});
   });

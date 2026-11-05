@@ -28,6 +28,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { setImmediate as yieldImmediate } from 'node:timers/promises';
+import { describeToolError } from '@amaster.ai/pi-shared';
 import { resolveHome } from '@amaster.ai/pi-shared/settings';
 import type { ExtensionAPI, InputEventResult } from '@earendil-works/pi-coding-agent';
 import {
@@ -208,8 +209,9 @@ export default function piAttachmentsExtension(pi: ExtensionAPI): void {
                 data: bytes.toString('base64'),
               },
             });
-          } catch {
-            // skip unreadable images
+          } catch (error) {
+            ctx.signal?.throwIfAborted();
+            items.push({ kind: 'notice', block: attachmentFailure(name, error) });
           }
         } else {
           items.push({
@@ -223,8 +225,12 @@ export default function piAttachmentsExtension(pi: ExtensionAPI): void {
             },
           });
         }
-      } catch {
-        // skip files that don't exist or can't be accessed
+      } catch (error) {
+        ctx.signal?.throwIfAborted();
+        items.push({
+          kind: 'notice',
+          block: attachmentFailure(path.basename(absolutePath), error),
+        });
       }
     }
 
@@ -466,4 +472,14 @@ function escapeXmlAttribute(value: string): string {
 function guessMimeType(name: string): string | undefined {
   const ext = name.toLowerCase().split('.').pop();
   return ext ? MIME_BY_EXT[ext] : undefined;
+}
+
+function attachmentFailure(name: string, error: unknown): string {
+  const failure = describeToolError(
+    'Read attachment',
+    error,
+    'This attachment was not inspected. Restore file access or provide it again before drawing conclusions from its contents.',
+  );
+  console.error(`[pi-attachments] attachment unavailable (category=${failure.errorCategory})`);
+  return `## Attachment unavailable: ${escapeMarkdown(name.slice(0, 256))}\n${failure.error}`;
 }

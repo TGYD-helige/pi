@@ -1,3 +1,4 @@
+import { describeToolError, SafeToolError } from '@amaster.ai/pi-shared';
 import { StringEnum } from '@earendil-works/pi-ai';
 import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import { Type } from 'typebox';
@@ -25,20 +26,32 @@ export async function sessionToolResult(
     return { content: [{ type: 'text' as const, text: JSON.stringify(status) }], details: status };
   } catch (error) {
     if (signal?.aborted) throw error;
-    if (control && !(error instanceof BrowserSessionError))
-      console.error('[pi-browser-use] browser session control failed');
-    // Only our own bounded messages may reach the model.
-    const message =
-      error instanceof BrowserSessionError
-        ? error.message
-        : !control
-          ? 'Browser session retention is not configured.'
-          : 'Browser session operation failed.';
-    return { isError: true, content: [{ type: 'text' as const, text: message }], details: {} };
+    const failure = describeToolError(
+      'Browser session operation',
+      error,
+      'The action may have completed. Inspect the original page before retrying.',
+    );
+    if (error instanceof SafeToolError) failure.error = error.message;
+    if (!control) failure.error = 'Browser session retention is not configured.';
+    console.error(
+      `[pi-browser-use] browser session control failed (category=${failure.errorCategory})`,
+    );
+    return {
+      isError: true,
+      content: [{ type: 'text' as const, text: failure.error }],
+      structuredContent: failure,
+      details: {},
+    };
   }
 }
 
-export class BrowserSessionError extends Error {}
+export class BrowserSessionError extends SafeToolError {
+  constructor(message: string, cause?: unknown) {
+    super('Browser session', cause ?? new Error(message));
+    this.message = message;
+    this.name = 'BrowserSessionError';
+  }
+}
 
 export function scriptValue(value: unknown): unknown {
   const result = CallToolResultSchema.parse(value);

@@ -1,3 +1,4 @@
+import { ValidationError } from '@amaster.ai/pi-shared';
 import {
   BaseProvider,
   getEnvironmentContext,
@@ -38,8 +39,9 @@ export class OpenAIProvider extends BaseProvider {
     const variant = VARIANTS[this.id];
     const name = variant.name;
     if (!provider.apiKey) {
-      throw new Error(
+      throw new ValidationError(
         `${name} API key not configured. Set ${variant.envVar} or configure settings.json.`,
+        'configuration_error',
       );
     }
 

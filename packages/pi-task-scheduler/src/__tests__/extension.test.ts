@@ -122,6 +122,17 @@ async function setupExtension(
 }
 
 describe('extension — default file storage mode', () => {
+  it('reports safe startup failures and releases the lock', async () => {
+    const store = new MemStore();
+    vi.spyOn(store, 'list').mockRejectedValue(new DOMException('secret response', 'TimeoutError'));
+    const lock = new MemLock();
+    const { pi, ctx } = await setupExtension({ store, lock });
+    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining('timed out'), 'error');
+    expect(JSON.stringify(ctx.ui.notify.mock.calls)).not.toContain('secret response');
+    expect(lock.isAcquired()).toBe(false);
+    expect(pi.tools.size).toBe(0);
+  });
+
   it('registers all tools and commands on session_start', async () => {
     const { pi } = await setupExtension({ dataDir: '/tmp/pi-test-ext' });
 

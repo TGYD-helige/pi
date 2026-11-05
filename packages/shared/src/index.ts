@@ -503,5 +503,12 @@ export {
   type TrustedHosts,
   trustedHostsFromUrls,
 } from './network.js';
-
+export {
+  classifyError,
+  describeToolError,
+  type ErrorCategory,
+  type ErrorClassification,
+  SafeToolError,
+  ValidationError,
+} from './tool-errors.js';
 export { boundStructuredContent } from './tool-output.js';

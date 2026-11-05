@@ -20,6 +20,19 @@ describe('evaluateCondition', () => {
 
   beforeEach(() => completeOnce.mockReset());
 
+  it('forwards the safe failure callback to the completion boundary', async () => {
+    const onError = vi.fn();
+    completeOnce.mockImplementation(async (...args: unknown[]) => {
+      (args[5] as (failure: object) => void)?.({
+        error: 'Evaluator timed out.',
+        errorCategory: 'timeout',
+      });
+      return null;
+    });
+    await evaluateCondition({ ...base, onError });
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ errorCategory: 'timeout' }));
+  });
+
   it('returns null and logs when the model call fails', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     completeOnce.mockResolvedValue(null);

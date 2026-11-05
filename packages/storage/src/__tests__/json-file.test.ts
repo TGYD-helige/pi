@@ -36,15 +36,14 @@ describe('json-file', () => {
     await expect(readJsonFile(filePath, [])).resolves.toEqual([{ id: 'backup' }]);
   });
 
-  it('falls back instead of throwing when corrupt primary has no backup', async () => {
+  it('refuses to initialize empty data when corrupt primary has no backup', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'pi-json-'));
     tmpDirs.push(dir);
     const filePath = path.join(dir, 'state.json');
 
     await writeFile(filePath, '[');
 
-    await expect(readJsonFile(filePath, [{ id: 'fallback' }])).resolves.toEqual([
-      { id: 'fallback' },
-    ]);
+    await expect(readJsonFile(filePath, [{ id: 'fallback' }])).rejects.toThrow(/backup/i);
+    expect(await readFile(filePath, 'utf8')).toBe('[');
   });
 });

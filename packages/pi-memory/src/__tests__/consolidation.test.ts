@@ -28,6 +28,34 @@ describe('consolidation', () => {
       await rm(memoryDir, { recursive: true, force: true });
     });
 
+    it('rejects a failed memory tool even when the model finishes normally', async () => {
+      const provider = registerFauxProvider({ provider: 'pi-memory-failed-consolidation' });
+      const model = provider.getModel();
+      provider.setResponses([
+        () =>
+          fauxAssistantMessage(
+            fauxToolCall('memory_remove', { target: 'memory', oldText: 'missing entry' }),
+            { stopReason: 'toolUse' },
+          ),
+        () => fauxAssistantMessage('Finished.'),
+      ]);
+      try {
+        await expect(
+          runConsolidation({
+            memoryDir,
+            turns: [],
+            modelConfig: { provider: model.provider, model: model.id },
+            modelRegistry: {
+              find: () => model,
+              getApiKeyAndHeaders: async () => ({ ok: true, apiKey: 'test-key' }),
+            },
+          }),
+        ).rejects.toThrow(/memory tool failed/);
+      } finally {
+        provider.unregister();
+      }
+    });
+
     it('executes memory tools and preserves their results through the real Agent loop', async () => {
       const provider = registerFauxProvider({ provider: 'pi-memory-test' });
       const model = provider.getModel();

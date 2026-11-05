@@ -1,4 +1,4 @@
-import { boundStructuredContent } from '@amaster.ai/pi-shared';
+import { boundStructuredContent, describeToolError } from '@amaster.ai/pi-shared';
 /**
  * Active memory tool — the LLM-callable interface over the Mem0 provider.
  *
@@ -74,7 +74,12 @@ const mem0OutputSchema = Type.Union([
     writeStatus: Type.Optional(StringEnum(['saved', 'pending', 'unknown', 'empty'] as const)),
     truncated: Type.Boolean(),
   }),
-  Type.Object({ error: Type.String(), truncated: Type.Boolean() }),
+  Type.Object({
+    error: Type.String(),
+    errorCategory: Type.Optional(Type.String()),
+    httpStatus: Type.Optional(Type.Integer()),
+    truncated: Type.Boolean(),
+  }),
 ]);
 
 function textResult(text: string, value: object = { message: text }): AgentToolResult<unknown> {
@@ -220,12 +225,16 @@ export function createMem0MemoryTool(opts: Mem0MemoryToolOptions): ToolDefinitio
             );
         }
       } catch (err) {
-        const raw = err instanceof Error ? err.message : '';
-        const message = /^Mem0 request failed \(\d{3}\)\.$/.test(raw)
-          ? raw
-          : 'Mem0 operation failed. Inspect stored memories before retrying a write.';
-        console.error('[pi-memory-mem0] mem0_memory operation failed');
-        return errorResult(`mem0_memory operation failed: ${message}`);
+        if (signal?.aborted) throw err;
+        const failure = describeToolError(
+          'mem0_memory operation',
+          err,
+          'Inspect stored memories before retrying a write.',
+        );
+        console.error(
+          `[pi-memory-mem0] mem0_memory failed (category=${failure.errorCategory}${failure.httpStatus ? `, HTTP ${failure.httpStatus}` : ''})`,
+        );
+        return textResult(failure.error, failure);
       }
     },
   };

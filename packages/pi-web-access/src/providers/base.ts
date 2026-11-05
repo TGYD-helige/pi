@@ -1,3 +1,4 @@
+import { ValidationError } from '@amaster.ai/pi-shared';
 import type { BuiltInProviderId, ProviderConfig } from '../types.js';
 
 // ─── Shared constants for LLM-based providers ────────────────────────────────
@@ -80,7 +81,7 @@ export abstract class BaseProvider implements WebProvider {
   abstract readonly id: BuiltInProviderId;
 
   async search(_params: SearchParams, _provider: ResolvedProvider): Promise<SearchResponse> {
-    throw new Error(`${this.id} does not support web_search.`);
+    throw new ValidationError(`${this.id} does not support web_search.`, 'configuration_error');
   }
 
   async fetch(
@@ -88,7 +89,7 @@ export abstract class BaseProvider implements WebProvider {
     _provider: ResolvedProvider,
     _signal?: AbortSignal,
   ): Promise<FetchResponse> {
-    throw new Error(`${this.id} does not support web_fetch.`);
+    throw new ValidationError(`${this.id} does not support web_fetch.`, 'configuration_error');
   }
 
   async imageSearch(
@@ -96,6 +97,6 @@ export abstract class BaseProvider implements WebProvider {
     _provider: ResolvedProvider,
     _signal?: AbortSignal,
   ): Promise<SearchResponse> {
-    throw new Error(`${this.id} does not support image_search.`);
+    throw new ValidationError(`${this.id} does not support image_search.`, 'configuration_error');
   }
 }

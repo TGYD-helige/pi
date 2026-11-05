@@ -3,6 +3,7 @@
  */
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { SafeToolError } from '@amaster.ai/pi-shared';
 import { resolveHome } from '@amaster.ai/pi-shared/settings';
 
 export interface DreamScanCursor {
@@ -25,9 +26,33 @@ function statePath(memoryDir?: string): string {
 export async function readDreamingState(memoryDir?: string): Promise<DreamingState> {
   try {
     const raw = await readFile(statePath(memoryDir), 'utf-8');
-    return JSON.parse(raw) as DreamingState;
-  } catch {
-    return { lastConsolidatedAt: null, lastSessionCount: 0 };
+    const state = JSON.parse(raw) as DreamingState | null;
+    if (
+      !state ||
+      typeof state !== 'object' ||
+      Array.isArray(state) ||
+      !(
+        state.lastConsolidatedAt === null ||
+        (typeof state.lastConsolidatedAt === 'string' &&
+          Number.isFinite(Date.parse(state.lastConsolidatedAt)))
+      ) ||
+      !Number.isInteger(state.lastSessionCount) ||
+      state.lastSessionCount < 0 ||
+      (state.scanCursor !== undefined &&
+        (!state.scanCursor ||
+          typeof state.scanCursor.path !== 'string' ||
+          !Number.isFinite(state.scanCursor.modified)))
+    )
+      throw new Error('Invalid checkpoint schema');
+    return state;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT')
+      return { lastConsolidatedAt: null, lastSessionCount: 0 };
+    throw new SafeToolError(
+      'Read memory consolidation checkpoint',
+      error,
+      'The checkpoint is unreadable or malformed. Restore it before running consolidation; progress was not reset.',
+    );
   }
 }
 

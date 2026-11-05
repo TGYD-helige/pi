@@ -1,3 +1,4 @@
+import { describeToolError, SafeToolError } from '@amaster.ai/pi-shared';
 import { createDingTalkAdapter } from './adapters/dingtalk.js';
 import { createFeishuAdapter } from './adapters/feishu.js';
 import { createWebhookAdapter } from './adapters/webhook.js';
@@ -208,16 +209,29 @@ export class ChannelRegistry {
       });
       return { ok: true };
     } catch (error) {
-      const messageError = errorMessage(error);
+      if (signal?.aborted) throw error;
+      const failure = describeToolError(
+        'Channel send',
+        error,
+        'Delivery may have completed. Inspect delivery state before retrying.',
+      );
+      if (
+        error instanceof Error &&
+        !(error instanceof SafeToolError) &&
+        error.message.startsWith('Outbound URL must use a public HTTP(S) destination.')
+      )
+        failure.error = 'Outbound URL must use a public HTTP(S) destination.';
       this.log?.(
         'message_send_failed',
         {
           adapter: resolved.adapter,
           source: message.source,
+          errorCategory: failure.errorCategory,
+          ...(failure.httpStatus ? { httpStatus: failure.httpStatus } : {}),
         },
         'ERROR',
       );
-      return { ok: false, error: messageError };
+      return { ok: false, ...failure };
     }
   }
 
@@ -303,6 +317,5 @@ function recipientForDisplay(recipient: string): string {
 }
 
 export function errorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error);
+  return describeToolError('Channel operation', error).error;
 }

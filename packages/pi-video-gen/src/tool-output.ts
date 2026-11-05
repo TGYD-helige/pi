@@ -2,6 +2,8 @@ import { Type } from 'typebox';
 
 const errorSchema = Type.Object({
   error: Type.String(),
+  errorCategory: Type.Optional(Type.String()),
+  httpStatus: Type.Optional(Type.Integer()),
   truncated: Type.Boolean(),
   jobId: Type.Optional(Type.String()),
   taskId: Type.Optional(Type.String()),

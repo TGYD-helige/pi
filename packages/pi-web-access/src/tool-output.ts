@@ -3,7 +3,20 @@ import { Type } from 'typebox';
 import type { FetchResponse, SearchResponse } from './providers/index.js';
 
 const MAX_BYTES = 16 * 1024;
-const errorSchema = Type.Object({ error: Type.String() });
+const errorSchema = Type.Object({
+  error: Type.String(),
+  errorCategory: Type.Union([
+    Type.Literal('timeout'),
+    Type.Literal('http_error'),
+    Type.Literal('cancelled'),
+    Type.Literal('network_error'),
+    Type.Literal('request_failed'),
+    Type.Literal('configuration_error'),
+    Type.Literal('invalid_request'),
+    Type.Literal('invalid_response'),
+  ]),
+  httpStatus: Type.Optional(Type.Integer({ minimum: 400, maximum: 599 })),
+});
 export const searchOutputSchema = Type.Union([
   Type.Object({
     provider: Type.String(),

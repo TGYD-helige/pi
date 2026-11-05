@@ -203,6 +203,15 @@ describe('skill loading via extension input handler', () => {
     };
   }
 
+  it('keeps failed file references visible alongside successfully read attachments', async () => {
+    await writeFile(join(cwd, 'available.txt'), 'Available source evidence.');
+    const { runInput } = await loadExtension();
+    const result = await runInput('Compare @available.txt and @missing.txt');
+    expect(result?.text).toContain('Available source evidence.');
+    expect(result?.text).toContain('Attachment unavailable: missing.txt');
+    expect(result?.text).toContain('not inspected');
+  });
+
   it('loads SKILL.md from the user agent dir', async () => {
     const skillDir = join(agentDir, 'skills', 'demo');
     await mkdir(skillDir, { recursive: true });

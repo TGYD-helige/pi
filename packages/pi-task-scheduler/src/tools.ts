@@ -1,4 +1,4 @@
-import { boundStructuredContent } from '@amaster.ai/pi-shared';
+import { boundStructuredContent, describeToolError } from '@amaster.ai/pi-shared';
 import type {
   AgentToolResult,
   AgentToolUpdateCallback,
@@ -69,7 +69,12 @@ const taskSchema = Type.Union([
   }),
   Type.Object({ id: Type.String(), truncated: Type.Literal(true) }),
 ]);
-const errorSchema = Type.Object({ error: Type.String(), truncated: Type.Boolean() });
+const errorSchema = Type.Object({
+  error: Type.String(),
+  errorCategory: Type.Optional(Type.String()),
+  httpStatus: Type.Optional(Type.Integer()),
+  truncated: Type.Boolean(),
+});
 const taskOutputSchema = Type.Union([
   Type.Object({ task: taskSchema, truncated: Type.Boolean() }),
   errorSchema,
@@ -146,37 +151,37 @@ export function createSchedulerTools(scheduler: TaskScheduler): ToolDefinition[]
         _onUpdate: AgentToolUpdateCallback | undefined,
         ctx: ExtensionContext,
       ): Promise<AgentToolResult<unknown>> {
+        let definition: ReturnType<typeof resolveScheduledTaskDefinition>;
         try {
-          const definition = resolveScheduledTaskDefinition({
+          definition = resolveScheduledTaskDefinition({
             type: params.type as ScheduledTaskType,
             schedule: params.schedule as string,
           });
-          const input: ScheduledTaskCreateInput = {
-            ...definition,
-            prompt: params.prompt as string,
-            sessionId: ctx.sessionManager?.getSessionId?.() ?? 'unknown',
-            model: {
-              provider: ctx.model?.provider ?? 'anthropic',
-              model: ctx.model?.id ?? 'unknown',
-            },
-            toolPolicyProfile: 'workspace-write',
-            enabled: params.enabled !== false,
-            ...(params.name ? { name: params.name as string } : {}),
-            ...(params.description ? { description: params.description as string } : {}),
-            ...(typeof params.timeoutMs === 'number'
-              ? { timeoutMs: params.timeoutMs as number }
-              : {}),
-          };
-          const task = await scheduler.create(input);
-          return textResult(JSON.stringify(formatTaskSummary(task), null, 2), {
-            task: { ...formatTaskSummary(task), prompt: task.prompt },
-          });
         } catch {
-          console.error('[pi-task-scheduler] scheduler_create failed');
           return errorResult(
-            'Failed to create task. Check the schedule and scheduler configuration.',
+            'Invalid schedule. Use a valid cron, ISO timestamp, relative delay or interval.',
           );
         }
+        const input: ScheduledTaskCreateInput = {
+          ...definition,
+          prompt: params.prompt as string,
+          sessionId: ctx.sessionManager?.getSessionId?.() ?? 'unknown',
+          model: {
+            provider: ctx.model?.provider ?? 'anthropic',
+            model: ctx.model?.id ?? 'unknown',
+          },
+          toolPolicyProfile: 'workspace-write',
+          enabled: params.enabled !== false,
+          ...(params.name ? { name: params.name as string } : {}),
+          ...(params.description ? { description: params.description as string } : {}),
+          ...(typeof params.timeoutMs === 'number'
+            ? { timeoutMs: params.timeoutMs as number }
+            : {}),
+        };
+        const task = await scheduler.create(input);
+        return textResult(JSON.stringify(formatTaskSummary(task), null, 2), {
+          task: { ...formatTaskSummary(task), prompt: task.prompt },
+        });
       },
     },
     {
@@ -266,11 +271,9 @@ export function createSchedulerTools(scheduler: TaskScheduler): ToolDefinition[]
           ...(enabled !== undefined ? { enabled } : {}),
         };
         if (type !== undefined || schedule !== undefined) {
+          const existing = await scheduler.get(taskId, sessionScope(ctx));
+          if (!existing) return errorResult(`Task not found: ${taskId}`);
           try {
-            const existing = await scheduler.get(taskId, sessionScope(ctx));
-            if (!existing) {
-              return errorResult(`Task not found: ${taskId}`);
-            }
             const definition = resolveScheduledTaskDefinition({
               type: (type ?? existing.type) as ScheduledTaskType,
               schedule: schedule ?? existing.schedule,
@@ -344,9 +347,17 @@ export function createSchedulerTools(scheduler: TaskScheduler): ToolDefinition[]
     async execute(...args: Parameters<ToolDefinition['execute']>) {
       try {
         return await tool.execute(...args);
-      } catch {
-        console.error(`[pi-task-scheduler] ${tool.name} failed`);
-        return errorResult('Scheduler operation failed. Inspect task state before retrying.');
+      } catch (error) {
+        if (args[2]?.aborted) throw error;
+        const failure = describeToolError(
+          tool.name,
+          error,
+          'The operation may have completed. Inspect task state before retrying.',
+        );
+        console.error(
+          `[pi-task-scheduler] ${tool.name} failed (category=${failure.errorCategory})`,
+        );
+        return textResult(failure.error, failure);
       }
     },
   }));

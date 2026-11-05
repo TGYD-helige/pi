@@ -99,20 +99,13 @@ export async function runDream(options: RunDreamOptions): Promise<boolean> {
     if (turnCount < (state.scanCursor || inputs.hasMore ? 1 : minTurns)) return false;
 
     // Consolidation
-    let succeeded = false;
-    try {
-      succeeded = await runConsolidation({
-        memoryDir: options.memoryDir,
-        turns,
-        modelConfig,
-        modelRegistry: { find: () => model, getApiKeyAndHeaders: async () => credentials },
-        ...(options.signal ? { signal: options.signal } : {}),
-      });
-    } catch (error) {
-      console.error(
-        `[pi-memory] consolidation failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+    const succeeded = await runConsolidation({
+      memoryDir: options.memoryDir,
+      turns,
+      modelConfig,
+      modelRegistry: { find: () => model, getApiKeyAndHeaders: async () => credentials },
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
 
     if (!succeeded || options.signal?.aborted) return false;
 

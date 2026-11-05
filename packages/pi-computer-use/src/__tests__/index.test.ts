@@ -137,7 +137,7 @@ vi.mock('node:fs', async (importOriginal) => {
     chmodSync: vi.fn(),
     readFileSync: vi.fn(() => {
       if (mockConfigContent !== null) return mockConfigContent;
-      throw new Error('ENOENT');
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     }),
   };
 });
@@ -857,7 +857,7 @@ describe('computerUseExtension', () => {
     expect(dispatch).toHaveBeenCalledOnce();
     expect(result.isError).toBe(true);
     const text = result.content.map((item: { text: string }) => item.text).join('\n');
-    expect(text).toContain('execution outcome is unknown');
+    expect(text).toMatch(/execution outcome is unknown/i);
     expect(text).toContain('Read the current target state before retrying any action');
     expect(text).not.toContain('retry the tool');
     expect(text).not.toContain('Failed to connect');

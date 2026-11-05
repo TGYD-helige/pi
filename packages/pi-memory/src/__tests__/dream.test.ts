@@ -49,6 +49,21 @@ describe('runDream', () => {
     vi.restoreAllMocks();
   });
 
+  it('preserves the checkpoint and surfaces failed consolidation', async () => {
+    const failure = new Error('consolidation failed');
+    runConsolidationMock.mockRejectedValueOnce(failure);
+    const memoryDir = path.join(home, 'memories');
+    await expect(
+      runDream({
+        memoryDir,
+        modelRegistry: modelRegistry(),
+        sessionDir,
+        dreaming: { minTurnsSinceLastRun: 1, minHoursSinceLastRun: 0 },
+      }),
+    ).rejects.toBe(failure);
+    expect((await readDreamingState(memoryDir)).lastConsolidatedAt).toBeNull();
+  });
+
   it('skips history discovery when the consolidation model is unavailable', async () => {
     const registry = modelRegistry();
     registry.find.mockReturnValue(undefined as never);

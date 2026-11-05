@@ -1,4 +1,4 @@
-import { readResponseBytes } from '@amaster.ai/pi-shared';
+import { readResponseBytes, ValidationError } from '@amaster.ai/pi-shared';
 import {
   BaseProvider,
   getEnvironmentContext,
@@ -62,8 +62,9 @@ export class KimiProvider extends BaseProvider {
     signal?: AbortSignal,
   ): Promise<SearchResponse> {
     if (!provider.apiKey) {
-      throw new Error(
+      throw new ValidationError(
         'Kimi API key not configured. Set MOONSHOT_API_KEY env var or configure in settings.json.',
+        'configuration_error',
       );
     }
 
@@ -217,7 +218,10 @@ export class KimiProvider extends BaseProvider {
   ): AbortSignal {
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
-      throw new Error('Kimi Formula web search exceeded the elapsed-time budget');
+      throw new DOMException(
+        'Kimi Formula web search exceeded the elapsed-time budget',
+        'TimeoutError',
+      );
     }
     return timeoutSignal(Math.min(provider.timeoutMs ?? DEFAULT_TIMEOUT_MS, remainingMs), signal);
   }

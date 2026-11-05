@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { copyFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { SafeToolError } from '@amaster.ai/pi-shared';
 
 export async function readJsonFile<T>(filePath: string, fallback: T): Promise<T> {
   const backupPath = jsonBackupPath(filePath);
@@ -12,9 +13,15 @@ export async function readJsonFile<T>(filePath: string, fallback: T): Promise<T>
     }
     if (error instanceof SyntaxError) {
       try {
-        return await readJsonFileStrict<T>(backupPath);
-      } catch {
-        return fallback;
+        const restored = await readJsonFileStrict<T>(backupPath);
+        console.error('[pi-task-scheduler] primary JSON is malformed; recovered from backup');
+        return restored;
+      } catch (backupError) {
+        throw new SafeToolError(
+          'Read stored JSON',
+          backupError,
+          'The primary file is corrupt and its backup is unavailable or malformed. Refusing to initialize empty data; restore the file or backup before retrying.',
+        );
       }
     }
     throw error;

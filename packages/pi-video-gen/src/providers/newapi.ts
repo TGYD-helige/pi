@@ -108,10 +108,11 @@ function unwrapTaskRecord(json: Record<string, unknown>): Record<string, unknown
   return json;
 }
 
-function ambiguousSubmitError(): AmbiguousSubmitError {
+function ambiguousSubmitError(error?: unknown): AmbiguousSubmitError {
   return new AmbiguousSubmitError(
     'Task creation failed with an ambiguous result (network error or server 5xx). The provider MAY have created a paid task — check the NewAPI logs/console before retrying to avoid double billing.',
     'newapi submit: ambiguous outcome',
+    error,
   );
 }
 
@@ -149,11 +150,12 @@ export const newapiAdapter: VideoProviderAdapter = {
         body: JSON.stringify(body),
         signal: signal ?? null,
       });
-    } catch {
-      throw ambiguousSubmitError();
+    } catch (error) {
+      throw ambiguousSubmitError(error);
     }
     if (!res.ok) {
-      if (res.status >= 500) throw ambiguousSubmitError();
+      if (res.status >= 500)
+        throw ambiguousSubmitError(Object.assign(new Error(), { status: res.status }));
       throw httpStatusError('newapi', 'submit', res.status);
     }
 
@@ -161,8 +163,8 @@ export const newapiAdapter: VideoProviderAdapter = {
     try {
       const rec = unwrapTaskRecord((await res.json()) as Record<string, unknown>);
       taskId = (rec.task_id ?? rec.id) as string | undefined;
-    } catch {
-      throw ambiguousSubmitError();
+    } catch (error) {
+      throw ambiguousSubmitError(error);
     }
     if (!taskId) {
       // 2xx but no id: the task MAY exist server-side — this is ambiguous,
@@ -191,8 +193,8 @@ export const newapiAdapter: VideoProviderAdapter = {
           signal: signal ?? null,
         },
       );
-    } catch {
-      throw networkError('newapi', 'inspect');
+    } catch (error) {
+      throw networkError('newapi', 'inspect', error);
     }
     if (!res.ok) throw httpStatusError('newapi', 'inspect', res.status);
 

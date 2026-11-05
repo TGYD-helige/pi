@@ -3,7 +3,12 @@ import { lstat, rename, unlink } from 'node:fs/promises';
 import { isIP } from 'node:net';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { hostFromUrl, safeFetch, trustedHostsFromUrls } from '@amaster.ai/pi-shared';
+import {
+  describeToolError,
+  hostFromUrl,
+  safeFetch,
+  trustedHostsFromUrls,
+} from '@amaster.ai/pi-shared';
 import {
   RemoteTaskFailedError,
   RetryableProviderError,
@@ -42,7 +47,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
     }, ms);
     const onAbort = () => {
       clearTimeout(timer);
-      reject(new VideoGenError('Cancelled.', 'cancelled'));
+      reject(new CancelledError());
     };
     if (signal?.aborted) {
       onAbort();
@@ -54,7 +59,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 
 export class CancelledError extends VideoGenError {
   constructor() {
-    super('Cancelled.', 'cancelled');
+    super('Cancelled.', 'cancelled', new DOMException('Cancelled', 'AbortError'));
   }
 }
 
@@ -91,6 +96,7 @@ export async function pollTask(opts: {
         throw new VideoGenError(
           'Lost contact with the video provider while polling (repeated network errors). The remote task may still be running and billable; check usage before retrying.',
           'poll: consecutive transport errors',
+          error,
         );
       }
       await sleep(intervalMs, opts.signal);
@@ -115,6 +121,7 @@ export async function pollTask(opts: {
   throw new VideoGenError(
     'Video generation did not finish within the polling budget. The remote task may still complete later and be billable; check provider usage before retrying.',
     'poll: max attempts exceeded',
+    new DOMException('Polling deadline exceeded', 'TimeoutError'),
   );
 }
 
@@ -189,15 +196,23 @@ export async function downloadFile(opts: {
     if (error instanceof Error && /public HTTP|redirect limit/i.test(error.message)) {
       throw new VideoGenError(error.message, 'download: unsafe URL');
     }
+    if (opts.signal?.aborted) throw new CancelledError();
+    const failure = describeToolError(
+      'Video download',
+      signal.aborted ? signal.reason : error,
+      'The paid task is preserved. Resume this job to retry the download; do not regenerate.',
+    );
     throw new VideoGenError(
-      'Downloading the finished video failed: network error. The video URL may have expired — rerun to regenerate.',
-      'download: network error',
+      failure.error,
+      `download: ${failure.errorCategory}`,
+      signal.aborted ? signal.reason : error,
     );
   }
   if (!res.ok || !res.body) {
     throw new VideoGenError(
-      `Downloading the finished video failed with HTTP ${res.status}. The video URL may have expired — rerun to regenerate.`,
+      `Downloading the finished video failed with HTTP ${res.status}. The paid task is preserved. Inspect the task and resume the download; do not regenerate.`,
       `download: HTTP ${res.status}`,
+      Object.assign(new Error(), { status: res.status }),
     );
   }
 
@@ -233,6 +248,7 @@ export async function downloadFile(opts: {
       throw new VideoGenError(
         'Downloading the video timed out. Retry once — the clip is large or the connection slow.',
         'download: timeout',
+        signal.reason,
       );
     }
     throw new VideoGenError(
