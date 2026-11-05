@@ -483,21 +483,20 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
                 },
                 signal,
               );
-              if (
-                dialog.isError ||
-                dialog.structuredContent?.status !== 'ok' ||
-                dialog.structuredContent.present !== false
-              ) {
+              const state = dialog.structuredContent;
+              const blockedMessage = `${originalName} was not executed. Resolve any current dialog with browser_dialog before retrying; dialog observation must be available.`;
+              if (dialog.isError || state?.status !== 'ok' || typeof state.present !== 'boolean') {
+                return toPiToolResult(
+                  { ...dialog, isError: true },
+                  'browser_dialog',
+                  blockedMessage,
+                );
+              }
+              if (state.present) {
                 const blocked = toPiToolResult(
                   {
                     ...dialog,
-                    content: [
-                      {
-                        type: 'text',
-                        text: `${originalName} was not executed. Resolve any current dialog with browser_dialog before retrying; dialog observation must be available.`,
-                      },
-                      ...(dialog.content ?? []),
-                    ],
+                    content: [{ type: 'text', text: blockedMessage }, ...(dialog.content ?? [])],
                   },
                   'browser_dialog',
                 );

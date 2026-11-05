@@ -177,7 +177,7 @@ export function createModelErrorCapture() {
               response.status >= 400 && response.status < 600
                 ? { errorCategory: 'http_error', httpStatus: response.status }
                 : undefined;
-            return response;
+            return captureResponseBody(response, record);
           } catch (error) {
             record(error);
             throw error;
@@ -197,4 +197,52 @@ export function createModelErrorCapture() {
         : surviving;
     },
   };
+}
+
+function captureResponseBody(response: Response, record: (error: unknown) => void): Response {
+  if (!response.body || response.status < 200) return response;
+  const reader = response.body.getReader();
+  let stopped = false;
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const chunk = await reader.read();
+        if (stopped) return;
+        if (chunk.done) {
+          stopped = true;
+          controller.close();
+          reader.releaseLock();
+        } else controller.enqueue(chunk.value);
+      } catch (error) {
+        if (stopped) return;
+        stopped = true;
+        record(error);
+        controller.error(error);
+        reader.releaseLock();
+      }
+    },
+    async cancel(reason) {
+      stopped = true;
+      try {
+        await reader.cancel(reason);
+      } finally {
+        reader.releaseLock();
+      }
+    },
+  });
+  const wrapped = new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+  const preserveMetadata = (target: Response): Response => {
+    Object.defineProperties(target, {
+      url: { value: response.url },
+      redirected: { value: response.redirected },
+      type: { value: response.type },
+      clone: { value: () => preserveMetadata(Response.prototype.clone.call(target)) },
+    });
+    return target;
+  };
+  return preserveMetadata(wrapped);
 }

@@ -1,6 +1,6 @@
 import { mkdir, open, opendir, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { SafeToolError } from '@amaster.ai/pi-shared';
+import { SafeToolError, ValidationError } from '@amaster.ai/pi-shared';
 import { resolveConfigDir } from '@amaster.ai/pi-shared/settings';
 import {
   migrateSessionEntries,
@@ -130,6 +130,8 @@ export async function runDream(options: RunDreamOptions): Promise<boolean> {
 const MAX_SESSION_FILES = 32;
 const MAX_SESSION_BYTES = 256 * 1024;
 const MAX_RECOVERY_BYTES = 8 * 1024 * 1024;
+const INVALID_HISTORY =
+  'Memory session history is malformed or its header exceeds the scan limit. Repair the session file before retrying; the checkpoint was not advanced.';
 
 async function readDreamInputs(
   options: RunDreamOptions,
@@ -255,14 +257,22 @@ async function scanPiSessionTurns(
           const first = await handle.read(header, 0, header.length, 0);
           const headerText = header.subarray(0, first.bytesRead).toString('utf8');
           const headerEnd = headerText.indexOf('\n');
-          if (headerEnd < 0) break;
-          content = `${headerText.slice(0, headerEnd)}\n${content.slice(content.indexOf('\n') + 1)}`;
+          if (headerEnd < 0) throw new ValidationError(INVALID_HISTORY, 'configuration_error');
+          const firstCompleteLine = content.indexOf('\n');
+          content = `${headerText.slice(0, headerEnd)}\n${firstCompleteLine >= 0 ? content.slice(firstCompleteLine + 1) : ''}`;
         }
         if (signal?.aborted) return { turns: [], turnCount: 0, hasMore: false, cursor: undefined };
         const entries = parseSessionEntries(content);
-        migrateSessionEntries(entries);
         const header = entries[0];
-        if (header?.type !== 'session') break;
+        if (
+          entries.length !== content.split('\n').filter((line) => line.trim()).length ||
+          header?.type !== 'session' ||
+          typeof header.id !== 'string' ||
+          !header.id
+        ) {
+          throw new ValidationError(INVALID_HISTORY, 'configuration_error');
+        }
+        migrateSessionEntries(entries);
         const byId = new Map<string, SessionEntry>();
         let leaf: SessionEntry | undefined;
         for (const entry of entries) {

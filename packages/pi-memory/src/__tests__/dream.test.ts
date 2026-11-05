@@ -1,5 +1,5 @@
 import { existsSync, rmSync } from 'node:fs';
-import { mkdir, symlink, utimes } from 'node:fs/promises';
+import { mkdir, readFile, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { SessionManager } from '@earendil-works/pi-coding-agent';
@@ -109,6 +109,40 @@ describe('runDream', () => {
     await expect(runDream(options)).rejects.toThrow(/history/);
     expect(await readDreamingState(memoryDir)).toEqual(previous);
     expect(runConsolidationMock).not.toHaveBeenCalled();
+    await expect(runDream(options)).resolves.toBe(true);
+    expect(runConsolidationMock.mock.calls[0]![0].turns).toHaveLength(2);
+  });
+
+  it.each([
+    'header JSON',
+    'header type',
+    'body JSON',
+  ])('preserves the checkpoint for corrupted %s and rescans repaired history', async (kind) => {
+    const memoryDir = path.join(home, 'memories');
+    const previous = { lastConsolidatedAt: null, lastSessionCount: 0 };
+    await writeDreamingState(previous, memoryDir);
+    const other = SessionManager.create(home, sessionDir, { id: 'corrupt-history' });
+    appendTurn(other, 2);
+    const file = other.getSessionFile()!;
+    const original = await readFile(file, 'utf8');
+    const lines = original.split('\n');
+    if (kind === 'header JSON') lines[0] = '{broken header';
+    else if (kind === 'header type')
+      lines[0] = JSON.stringify({ type: 'invalid', id: 'corrupt-history' });
+    else lines[1] = '{broken body';
+    await writeFile(file, lines.join('\n'));
+    const options = {
+      memoryDir,
+      modelRegistry: modelRegistry(),
+      sessionDir,
+      dreaming: { minTurnsSinceLastRun: 1 },
+    };
+    await expect(runDream(options)).rejects.toThrow(/history/);
+    expect(await readDreamingState(memoryDir)).toEqual(previous);
+    expect(runConsolidationMock).not.toHaveBeenCalled();
+    await writeFile(file, original);
+    const earlier = new Date(Date.now() - 60_000);
+    await utimes(file, earlier, earlier);
     await expect(runDream(options)).resolves.toBe(true);
     expect(runConsolidationMock.mock.calls[0]![0].turns).toHaveLength(2);
   });

@@ -8,6 +8,57 @@ import {
 } from '../tool-errors.js';
 
 describe('tool errors', () => {
+  it('preserves streamed response metadata, consumption, and cloning', async () => {
+    const source = new Response('{"ok":true}', {
+      status: 201,
+      statusText: 'Created',
+      headers: { 'x-test': 'value' },
+    });
+    Object.defineProperties(source, {
+      url: { value: 'https://example.com/result' },
+      redirected: { value: true },
+      type: { value: 'basic' },
+    });
+    const errors = createModelErrorCapture();
+    const response = await errors.fetchOptions('openai-completions', async () => source).fetch!(
+      'https://example.com',
+    );
+    expect(response).toBeInstanceOf(Response);
+    expect(response.bodyUsed).toBe(false);
+    const clone = response.clone();
+    for (const item of [response, clone]) {
+      expect(item.url).toBe(source.url);
+      expect(item.redirected).toBe(true);
+      expect(item.type).toBe('basic');
+      expect(item.status).toBe(201);
+      expect(item.headers.get('x-test')).toBe('value');
+    }
+    await expect(Promise.all([response.json(), clone.json()])).resolves.toEqual([
+      { ok: true },
+      { ok: true },
+    ]);
+    expect(response.bodyUsed).toBe(true);
+    expect(() => response.clone()).toThrow();
+  });
+
+  it('cancels and unlocks a pending response body read', async () => {
+    const cancel = vi.fn();
+    const source = new ReadableStream<Uint8Array>({ cancel });
+    const errors = createModelErrorCapture();
+    const response = await errors.fetchOptions(
+      'openai-completions',
+      async () => new Response(source),
+    ).fetch!('https://example.com');
+    const reader = response.body!.getReader();
+    const pending = reader.read();
+    await reader.cancel('caller cancelled');
+    await expect(pending).resolves.toEqual({ done: true, value: undefined });
+    expect(cancel).toHaveBeenCalledWith('caller cancelled');
+    expect(source.locked).toBe(false);
+    reader.releaseLock();
+    expect(errors.error('Model', { stopReason: 'aborted' }).errorCategory).toBe('cancelled');
+  });
+
   it('captures network causes before flattening and clears recovered transport failures', async () => {
     const errors = createModelErrorCapture();
     const raw = new TypeError('fetch failed', {

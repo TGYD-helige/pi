@@ -446,14 +446,22 @@ describe('computerUseExtension', () => {
     expect(calls).not.toContain('browser_click');
   });
 
-  it('does not dispatch a browser action when dialog observation is refused', async () => {
+  it.each([
+    undefined,
+    true,
+  ])('cleans failed dialog observations and preserves the not-executed hint: %s', async (isError) => {
     const calls: string[] = [];
     await start();
     mockCallTool = (name) => {
       calls.push(name);
       return {
-        content: [{ type: 'text', text: 'dialog observation unavailable' }],
-        structuredContent: { code: 'browser_action_unavailable' },
+        ...(isError === undefined ? {} : { isError }),
+        content: [{ type: 'text', text: 'test-token dialog observation unavailable' }],
+        structuredContent: {
+          status: 'failed',
+          code: 'browser_action_unavailable',
+          secret: 'test-token',
+        },
       };
     };
     const result = await tools.get('computer_use_browser_click')!.execute(
@@ -468,6 +476,9 @@ describe('computerUseExtension', () => {
     );
     expect(result).toMatchObject({ isError: true });
     expect(calls).not.toContain('browser_click');
+    expect(JSON.stringify(result)).not.toContain('test-token');
+    expect(JSON.stringify(result)).toContain('was not executed');
+    expect(JSON.stringify(result)).not.toContain('execution outcome is unknown');
   });
 
   it('requests macOS permissions once on the first computer-use call', async () => {
