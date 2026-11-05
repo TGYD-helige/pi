@@ -4,6 +4,45 @@ import { toPiToolResult } from '../tool-result.js';
 
 describe('toPiToolResult', () => {
   it.each([
+    ['browser_ref_stale', 'Omit the old continuation'],
+    ['browser_binding_stale', 'Rediscover the browser target'],
+    ['browser_tab_not_found', 'Rediscover the browser target'],
+    ['browser_input_incomplete', 'do not automatically repeat the full input'],
+  ])('retains fixed recovery for %s while removing the driver payload', (code, hint) => {
+    const result = toPiToolResult(
+      {
+        content: [{ type: 'text', text: `refused (${code}): test-token` }],
+        structuredContent: {
+          status: 'refused',
+          refusal: {
+            code,
+            message: 'test-token',
+            detail: {
+              continuation: 'test-token',
+              next_call: { tool: 'run_script', arguments: { secret: 'test-token' } },
+            },
+          },
+        },
+      },
+      'get_browser_state',
+      undefined,
+      { target_id: 'target-1', tab_id: 'tab-1', session: 'checkout', continuation: 'test-token' },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.details?.code).toBe(code);
+    expect(result.content[0]).toMatchObject({
+      text: expect.stringContaining(hint),
+    });
+    if (code === 'browser_ref_stale')
+      expect(result.content[0]).toMatchObject({
+        text: expect.stringContaining('computer_use_get_browser_state'),
+      });
+    expect(JSON.stringify(result)).not.toContain('test-token');
+    expect(JSON.stringify(result)).not.toContain('run_script');
+    expect(JSON.stringify(result)).not.toContain('outcome is unknown');
+  });
+
+  it.each([
     undefined,
     'checkout',
   ])('sanitizes a real driver refusal and preserves caller session %s', (session) => {

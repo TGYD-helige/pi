@@ -338,6 +338,18 @@ async function scanPiSessionTurns(
             window = Math.min(metadata.size, MAX_RECOVERY_BYTES, window * 4);
             continue;
           }
+          if (
+            start > 0 &&
+            window >= MAX_RECOVERY_BYTES &&
+            first &&
+            typeof first.id === 'string' &&
+            first.id.length > 0 &&
+            first.type !== 'session' &&
+            !Object.hasOwn(first, 'parentId')
+          ) {
+            // A continued fork's legacy ancestor can lie outside the retained window.
+            first.parentId = null;
+          }
           let legacyEnd = 1;
           while (
             legacyEnd < entries.length &&

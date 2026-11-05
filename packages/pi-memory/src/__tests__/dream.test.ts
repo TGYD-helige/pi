@@ -250,6 +250,7 @@ describe('runDream', () => {
     'fresh',
     'continued',
     'large',
+    'outside-window',
   ])('scans the actual runtime fork of a legacy session (%s)', async (kind) => {
     const continued = kind !== 'fresh';
     const source = SessionManager.create(home, sessionDir, { id: 'legacy-source' });
@@ -262,6 +263,8 @@ describe('runDream', () => {
     entries[0].version = 1;
     if (kind === 'large')
       entries.at(-1)!.message.content = [{ type: 'text', text: 'legacy'.repeat(60_000) }];
+    if (kind === 'outside-window')
+      entries.at(-1)!.message.content = [{ type: 'text', text: 'legacy'.repeat(1_500_000) }];
     for (const entry of entries.slice(1)) {
       delete entry.id;
       delete entry.parentId;
@@ -285,7 +288,9 @@ describe('runDream', () => {
         dreaming: { minTurnsSinceLastRun: 1 },
       }),
     ).resolves.toBe(true);
-    expect(runConsolidationMock.mock.calls[0]![0].turns).toHaveLength(continued ? 4 : 3);
+    expect(runConsolidationMock.mock.calls[0]![0].turns).toHaveLength(
+      kind === 'outside-window' ? 2 : continued ? 4 : 3,
+    );
     expect(await readFile(forkFile, 'utf8')).toBe(before);
   });
 

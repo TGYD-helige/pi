@@ -113,13 +113,20 @@ export function toPiToolResult(
       result,
       'The execution outcome is unknown. Read the current target state before retrying any action.',
     );
-    const setup = browserSetupRecovery(result.structuredContent, message, toolName, originalArgs);
-    if (setup) failure.error = setup.message;
-    if (safeErrorText) failure.error = safeErrorText + (setup ? `\n${setup.message}` : '');
+    const recovery = browserFailureRecovery(
+      result.structuredContent,
+      message,
+      toolName,
+      originalArgs,
+    );
+    if (recovery) failure.error = recovery.message;
+    if (safeErrorText) failure.error = safeErrorText + (recovery ? `\n${recovery.message}` : '');
     console.error(`[pi-computer-use] upstream tool failed (category=${failure.errorCategory})`);
     const metadata = {
       ...safeFailureMetadata(result.structuredContent),
-      ...(setup ? { code: setup.code, next_call: setup.nextCall } : {}),
+      ...(recovery
+        ? { code: recovery.code, ...(recovery.nextCall ? { next_call: recovery.nextCall } : {}) }
+        : {}),
     };
     const extra = buildEnrichment(toolName ?? '', { structuredContent: metadata, isError: true });
     return {
@@ -543,7 +550,18 @@ function safeFailureMetadata(value: Record<string, unknown> = {}): Record<string
   return metadata;
 }
 
-function browserSetupRecovery(
+const BROWSER_RECOVERY_HINTS: Record<string, string> = {
+  browser_ref_stale:
+    'Refresh the page snapshot with computer_use_get_browser_state, keeping the same target, tab, and session. Omit the old continuation and scope_ref. Use newly returned refs before retrying the action.',
+  browser_binding_stale:
+    'Rediscover the browser target and tab with computer_use_get_browser_state using the intended native pid/window_id. Do not reuse the stale target or tab identifiers.',
+  browser_tab_not_found:
+    'Rediscover the browser target and tab with computer_use_get_browser_state using the intended native pid/window_id. Do not reuse the stale target or tab identifiers.',
+  browser_input_incomplete:
+    'Some text may already have been entered. Inspect the current field value before sending more text; do not automatically repeat the full input.',
+};
+
+function browserFailureRecovery(
   value: unknown,
   text: string,
   toolName?: string,
@@ -566,9 +584,17 @@ function browserSetupRecovery(
   const code = [
     root?.code,
     error?.code,
-    text.match(/^(?:Error:\s*)?(browser_requires_setup|browser_consent_required)\b/)?.[1],
-  ].find((item) => item === 'browser_requires_setup' || item === 'browser_consent_required');
+    text.match(/^(?:Error:\s*)?(browser_[a-z_]+)\b/)?.[1],
+  ].find(
+    (item): item is string =>
+      typeof item === 'string' &&
+      (item === 'browser_requires_setup' ||
+        item === 'browser_consent_required' ||
+        Object.hasOwn(BROWSER_RECOVERY_HINTS, item)),
+  );
   if (!code) return undefined;
+  if (Object.hasOwn(BROWSER_RECOVERY_HINTS, code))
+    return { code, message: `${code}: ${BROWSER_RECOVERY_HINTS[code]}` };
   const detail = object(root?.detail) ?? object(error?.detail);
   const next = object(detail?.next_call) ?? object(root?.next_call);
   const args = object(next?.arguments);
