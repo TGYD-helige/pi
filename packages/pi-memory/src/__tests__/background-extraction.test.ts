@@ -319,7 +319,7 @@ describe('createExtractionRunner gating', () => {
     expect(onNotify).not.toHaveBeenCalled();
   });
 
-  it('skips when auth fails', async () => {
+  it('reports safe configuration failure when auth is unavailable', async () => {
     const store = makeStore(freshDir());
     await store.loadFromDisk();
 
@@ -338,8 +338,7 @@ describe('createExtractionRunner gating', () => {
     runner.onTurnEnd(makeTurnEndEvent(0, 'user', 'hello'));
     await new Promise((r) => setTimeout(r, 50));
 
-    // No notification on auth failure — silent skip
-    expect(onNotify).not.toHaveBeenCalled();
+    expect(onNotify).toHaveBeenCalledWith(expect.stringContaining('credentials'), 'warning');
   });
 
   it('respects shutdown flag', async () => {
@@ -359,5 +358,95 @@ describe('createExtractionRunner gating', () => {
 
     await new Promise((r) => setTimeout(r, 50));
     expect(findFn).not.toHaveBeenCalled();
+  });
+});
+
+describe('background extraction failures', () => {
+  it('detects a model error recorded in the Agent result instead of reporting zero actions', async () => {
+    const store = makeStore(freshDir());
+    await store.loadFromDisk();
+    const onNotify = vi.fn();
+    prompt.mockImplementationOnce(async function (this: { state: { messages: object[] } }) {
+      this.state.messages = [
+        { role: 'assistant', stopReason: 'error', errorMessage: 'HTTP 401: secret-token' },
+      ];
+    });
+    const runner = createExtractionRunner({
+      store,
+      interval: 1,
+      modelConfig: { provider: 'fixture', model: 'fixture' },
+      modelRegistry: { find: () => ({}), getApiKeyAndHeaders: async () => ({ ok: true }) },
+      onNotify,
+    });
+    try {
+      runner.onTurnEnd(makeTurnEndEvent(0, 'user', 'Remember this preference'));
+      await vi.waitFor(() =>
+        expect(onNotify).toHaveBeenCalledWith(expect.stringContaining('HTTP 401'), 'warning'),
+      );
+      expect(JSON.stringify(onNotify.mock.calls)).not.toContain('secret-token');
+    } finally {
+      runner.shutdown();
+    }
+  });
+
+  it('reports failed memory tools even when the assistant finishes normally', async () => {
+    const store = makeStore(freshDir());
+    await store.loadFromDisk();
+    const onNotify = vi.fn();
+    prompt.mockImplementationOnce(async function (this: { state: { messages: object[] } }) {
+      this.state.messages = [
+        {
+          role: 'toolResult',
+          toolName: 'memory_add',
+          isError: true,
+          content: [{ type: 'text', text: 'secret response' }],
+        },
+        { role: 'assistant', stopReason: 'stop', content: [] },
+      ];
+    });
+    const runner = createExtractionRunner({
+      store,
+      interval: 1,
+      modelConfig: { provider: 'fixture', model: 'fixture' },
+      modelRegistry: { find: () => ({}), getApiKeyAndHeaders: async () => ({ ok: true }) },
+      onNotify,
+    });
+    try {
+      runner.onTurnEnd(makeTurnEndEvent(0, 'user', 'Remember this preference'));
+      await vi.waitFor(() =>
+        expect(onNotify).toHaveBeenCalledWith(
+          expect.stringContaining('memory tool failed'),
+          'warning',
+        ),
+      );
+      expect(JSON.stringify(onNotify.mock.calls)).not.toContain('secret-token');
+    } finally {
+      runner.shutdown();
+    }
+  });
+
+  it('reports a request failure without stopping the main agent or leaking raw errors', async () => {
+    const store = makeStore(freshDir());
+    await store.loadFromDisk();
+    const onNotify = vi.fn();
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    prompt.mockRejectedValueOnce(new DOMException('secret-token', 'TimeoutError'));
+    const runner = createExtractionRunner({
+      store,
+      interval: 1,
+      modelConfig: { provider: 'fixture', model: 'fixture' },
+      modelRegistry: { find: () => ({}), getApiKeyAndHeaders: async () => ({ ok: true }) },
+      onNotify,
+    });
+    try {
+      runner.onTurnEnd(makeTurnEndEvent(0, 'user', 'Remember this preference'));
+      await vi.waitFor(() =>
+        expect(onNotify).toHaveBeenCalledWith(expect.stringContaining('timed out'), 'warning'),
+      );
+      expect(JSON.stringify([onNotify.mock.calls, log.mock.calls])).not.toContain('secret-token');
+    } finally {
+      runner.shutdown();
+      log.mockRestore();
+    }
   });
 });

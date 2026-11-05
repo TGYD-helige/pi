@@ -108,8 +108,36 @@ describe('Cloudflare search', () => {
     );
     const result = search({ query: 'test' }, settings, controller.signal);
     controller.abort();
-    await expect(result).rejects.toThrow('cancelled');
+    await expect(result).rejects.toBe(controller.signal.reason);
     expect(mockFetch.mock.calls[0]![1].signal.aborted).toBe(true);
+  });
+
+  it.each(['request', 'body'])('preserves the timeout reason during %s', async (phase) => {
+    const reason = new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    vi.spyOn(AbortSignal, 'timeout').mockReturnValue(AbortSignal.abort(reason));
+    mockFetch.mockImplementation(async (_url, options) => {
+      if (phase === 'request') options.signal.throwIfAborted();
+      return {
+        ok: true,
+        json: async () => {
+          options.signal.throwIfAborted();
+        },
+      };
+    });
+    await expect(search({ query: 'test' }, settings)).rejects.toBe(reason);
+  });
+
+  it('preserves body transport failures without exposing provider text', async () => {
+    mockFetch.mockResolvedValueOnce(
+      Object.assign(new Response('{}'), {
+        json: async () => {
+          throw Object.assign(new Error('secret response'), { code: 'ECONNRESET' });
+        },
+      }),
+    );
+    await expect(search({ query: 'test' }, settings)).rejects.toMatchObject({
+      errorCategory: 'network_error',
+    });
   });
 
   it('sanitizes HTTP and network errors', async () => {
@@ -121,7 +149,7 @@ describe('Cloudflare search', () => {
     expect(log).toHaveBeenCalledWith('[pi-web-access] Cloudflare Web Search API error (HTTP 403)');
     mockFetch.mockRejectedValueOnce(new Error('secret-token network details'));
     await expect(search({ query: 'test' }, settings)).rejects.toThrow(
-      'Cloudflare search request failed or was cancelled.',
+      'Cloudflare search request failed.',
     );
   });
 

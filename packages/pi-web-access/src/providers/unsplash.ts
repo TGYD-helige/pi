@@ -1,3 +1,4 @@
+import { ValidationError } from '@amaster.ai/pi-shared';
 import type { ImageSearchParams, ResolvedProvider, SearchResponse, SearchResult } from './base.js';
 import { BaseProvider, timeoutSignal } from './base.js';
 
@@ -21,8 +22,9 @@ export class UnsplashProvider extends BaseProvider {
     signal?: AbortSignal,
   ): Promise<SearchResponse> {
     if (!provider.apiKey) {
-      throw new Error(
+      throw new ValidationError(
         'Unsplash API key not configured. Set UNSPLASH_ACCESS_KEY or configure settings.json.',
+        'configuration_error',
       );
     }
 

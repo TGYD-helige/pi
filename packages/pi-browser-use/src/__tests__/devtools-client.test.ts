@@ -402,11 +402,22 @@ describe('DevToolsClient', () => {
       });
 
       await expect(client.callTool('click', {})).rejects.toThrow(
-        'Browser connection lost; retry the tool',
+        'The browser connection was lost.',
       );
 
       expect(mockCallTool).toHaveBeenCalledTimes(1);
       expect(client.getState()).toBe('disconnected');
+    });
+
+    it('retains upstream MCP timeouts without exposing raw diagnostics', async () => {
+      const client = new DevToolsClient();
+      mockCallTool.mockRejectedValueOnce(
+        Object.assign(new Error('secret-token'), { code: -32001 }),
+      );
+      await expect(client.callTool('click', {})).rejects.toMatchObject({
+        errorCategory: 'timeout',
+        message: expect.stringContaining('timed out'),
+      });
     });
 
     it('sanitizes unexpected upstream request failures', async () => {
@@ -418,7 +429,7 @@ describe('DevToolsClient', () => {
         await expect(client.callTool('click', {})).rejects.toThrow('Browser tool call failed.');
 
         expect(consoleError).toHaveBeenCalledWith(
-          '[pi-browser-use] upstream tool call failed (Error)',
+          '[pi-browser-use] upstream tool call failed (category=request_failed)',
         );
       } finally {
         consoleError.mockRestore();

@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { ValidationError } from '@amaster.ai/pi-shared';
 import { loadPiSettings, resolveConfigDir } from '@amaster.ai/pi-shared/settings';
 import type { ChannelConfig } from './types.js';
 
@@ -17,9 +18,13 @@ function section(settings: Record<string, unknown>): ChannelConfig {
 function readSettingsFile(path: string): Record<string, unknown> {
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf-8'));
-    return isRecord(parsed) ? parsed : {};
+    if (!isRecord(parsed)) throw new Error('Settings must be an object');
+    return parsed;
   } catch {
-    return {};
+    throw new ValidationError(
+      'settings.json is unreadable or malformed. Fix the existing file before updating channel configuration; it has not been replaced.',
+      'configuration_error',
+    );
   }
 }
 

@@ -1,3 +1,4 @@
+import { describeMcpError } from '@amaster.ai/pi-shared';
 import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
@@ -93,11 +94,47 @@ export function boundStructuredContent(
 export function toPiToolResult(
   result: McpToolResult,
   toolName?: string,
+  safeErrorText?: string,
+  originalArgs?: Record<string, unknown>,
 ): {
   content: PiToolContent[];
   details: Record<string, unknown> | undefined;
   isError?: boolean;
 } {
+  if (result.isError || result.structuredContent?.status === 'refused') {
+    const message = (result.content ?? [])
+      .slice(0, 4)
+      .filter((item) => item.type === 'text')
+      .map((item) => item.text?.slice(0, 4096) ?? '')
+      .join('\n')
+      .slice(0, 4096);
+    const failure = describeMcpError(
+      'Computer tool',
+      result,
+      'The execution outcome is unknown. Read the current target state before retrying any action.',
+    );
+    const recovery = browserFailureRecovery(
+      result.structuredContent,
+      message,
+      toolName,
+      originalArgs,
+    );
+    if (recovery) failure.error = recovery.message;
+    if (safeErrorText) failure.error = safeErrorText + (recovery ? `\n${recovery.message}` : '');
+    console.error(`[pi-computer-use] upstream tool failed (category=${failure.errorCategory})`);
+    const metadata = {
+      ...safeFailureMetadata(result.structuredContent),
+      ...(recovery
+        ? { code: recovery.code, ...(recovery.nextCall ? { next_call: recovery.nextCall } : {}) }
+        : {}),
+    };
+    const extra = buildEnrichment(toolName ?? '', { structuredContent: metadata, isError: true });
+    return {
+      content: [{ type: 'text', text: failure.error + (extra ? `\n${extra}` : '') }],
+      details: { ...failure, ...metadata },
+      isError: true,
+    };
+  }
   const content: PiToolContent[] = [];
   const details = boundStructuredContent(result.structuredContent);
   const elementTokens = new Map<number, string>();
@@ -467,4 +504,127 @@ function buildEnrichment(toolName: string, result: McpToolResult): string | unde
   }
 
   return parts.length > 0 ? `[pi-computer-use model-visible]\n${parts.join('\n')}` : undefined;
+}
+
+function safeFailureMetadata(value: Record<string, unknown> = {}): Record<string, unknown> {
+  const pick = (item: unknown, allowed: string[]) =>
+    typeof item === 'string' && allowed.includes(item) ? item : undefined;
+  const delivery = value.delivery as { mode?: unknown; delivered_count?: unknown } | undefined;
+  const escalation = value.escalation as { target?: unknown; reason?: unknown } | undefined;
+  const metadata: Record<string, unknown> = {
+    effect: pick(value.effect, [
+      'confirmed',
+      'partial',
+      'unverifiable',
+      'suspected_noop',
+      'refused',
+    ]),
+    delivery: {
+      mode: pick(delivery?.mode, ['background', 'foreground', 'not_applicable', 'unknown']),
+      ...(typeof delivery?.delivered_count === 'number' &&
+      Number.isSafeInteger(delivery.delivered_count) &&
+      delivery.delivered_count >= 0
+        ? { delivered_count: delivery.delivered_count }
+        : {}),
+    },
+    escalation: {
+      target: pick(escalation?.target, ['pixel', 'foreground', 'page', 'session']),
+      reason: pick(escalation?.reason, [
+        'route_unavailable',
+        'delivery_failed',
+        'effect_unconfirmed',
+        'suspected_noop',
+        'permission_required',
+      ]),
+    },
+  };
+  for (const [key, item] of Object.entries(metadata)) {
+    if (
+      item === undefined ||
+      (item &&
+        typeof item === 'object' &&
+        Object.values(item).every((field) => field === undefined))
+    )
+      delete metadata[key];
+  }
+  return metadata;
+}
+
+const BROWSER_RECOVERY_HINTS: Record<string, string> = {
+  browser_ref_stale:
+    'Refresh the page snapshot with computer_use_get_browser_state, keeping the same target, tab, and session. Omit the old continuation and scope_ref. Use newly returned refs before retrying the action.',
+  browser_binding_stale:
+    'Rediscover the browser target and tab with computer_use_get_browser_state using the intended native pid/window_id. Do not reuse the stale target or tab identifiers.',
+  browser_tab_not_found:
+    'Rediscover the browser target and tab with computer_use_get_browser_state using the intended native pid/window_id. Do not reuse the stale target or tab identifiers.',
+  browser_input_incomplete:
+    'Some text may already have been entered. Inspect the current field value before sending more text; do not automatically repeat the full input.',
+};
+
+function browserFailureRecovery(
+  value: unknown,
+  text: string,
+  toolName?: string,
+  originalArgs?: Record<string, unknown>,
+) {
+  if (toolName !== 'get_browser_state' && !toolName?.startsWith('browser_')) return undefined;
+  const object = (item: unknown): Record<string, unknown> | undefined =>
+    item && typeof item === 'object' && !Array.isArray(item)
+      ? (item as Record<string, unknown>)
+      : undefined;
+  let root = object(value);
+  if (!root) {
+    try {
+      root = object(JSON.parse(text));
+    } catch {
+      /* Raw errors need not be JSON. */
+    }
+  }
+  const error = object(root?.refusal) ?? object(root?.error);
+  const code = [
+    root?.code,
+    error?.code,
+    text.match(/^(?:Error:\s*)?(browser_[a-z_]+)\b/)?.[1],
+  ].find(
+    (item): item is string =>
+      typeof item === 'string' &&
+      (item === 'browser_requires_setup' ||
+        item === 'browser_consent_required' ||
+        Object.hasOwn(BROWSER_RECOVERY_HINTS, item)),
+  );
+  if (!code) return undefined;
+  if (Object.hasOwn(BROWSER_RECOVERY_HINTS, code))
+    return { code, message: `${code}: ${BROWSER_RECOVERY_HINTS[code]}` };
+  const detail = object(root?.detail) ?? object(error?.detail);
+  const next = object(detail?.next_call) ?? object(root?.next_call);
+  const args = object(next?.arguments);
+  const pid = args?.pid;
+  const windowId = args?.window_id;
+  const existing = object(args?.strategy)?.kind === 'existing_profile';
+  const session = originalArgs?.session;
+  const validSession =
+    session === undefined || (typeof session === 'string' && session.length <= 1024);
+  const validId = (id: unknown): id is number =>
+    typeof id === 'number' && Number.isSafeInteger(id) && id > 0;
+  const nextCall =
+    next?.tool === 'browser_prepare' &&
+    existing &&
+    validId(pid) &&
+    validId(windowId) &&
+    validSession
+      ? {
+          tool: 'browser_prepare',
+          arguments: {
+            pid,
+            window_id: windowId,
+            strategy: { kind: 'existing_profile' },
+            ...(session !== undefined ? { session } : {}),
+          },
+        }
+      : { tool: 'get_guide', arguments: { topic: 'browser' } };
+  return {
+    code,
+    nextCall,
+    message: `${code}: Browser inspection needs setup. With the required authorization, call computer_use_browser_prepare for the intended pid/window_id, keeping the same session and strategy {"kind":"existing_profile"}, then retry inspection. Use computer_use_get_guide with topic=browser if authorization or target IDs are unavailable.`,
+  };
 }

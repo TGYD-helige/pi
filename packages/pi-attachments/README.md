@@ -62,3 +62,7 @@ Image attachments share a 20 MiB raw-byte budget per input, including drag uploa
 - **Directory listing**: capped at 200 entries per directory; remainder is summarized as `[Listing truncated: showing 200 of N entries]`.
 - **Ignored directory entries**: `.git`, `node_modules`, `.DS_Store`, `.next`, `.turbo`, `dist`, `build`, `.cache`.
 - **Mention ordering**: skills are matched before files, so the resolved `mentions[]` array groups by kind rather than preserving textual order. Downstream consumers must not rely on textual order.
+
+### Failure diagnostics
+
+Missing or unreadable referenced files are included as explicit per-attachment failure notices. Other readable attachments remain available, and the model is told which sources were not inspected.

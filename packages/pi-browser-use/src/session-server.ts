@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import { isDeepStrictEqual } from 'node:util';
+import { classifyError, describeToolError } from '@amaster.ai/pi-shared';
 import { createBrowserAdapter } from './adapter.js';
 import { type BrowserUseConfig, resolveConfig } from './config.js';
 import { DevToolsClient } from './index.js';
@@ -24,7 +25,13 @@ async function bounded<T>(operation: Promise<T>, milliseconds: number): Promise<
       operation,
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(
-          () => reject(new BrowserSessionError('Browser session cleanup timed out.')),
+          () =>
+            reject(
+              new BrowserSessionError(
+                'Browser session cleanup timed out.',
+                new DOMException('Cleanup deadline exceeded', 'TimeoutError'),
+              ),
+            ),
           milliseconds,
         );
       }),
@@ -499,14 +506,19 @@ export async function serveBrowserSession(
       res.end(body);
     } catch (error) {
       if (!(error instanceof BrowserSessionError))
-        console.error('[pi-browser-use] browser session operation failed');
+        console.error(
+          `[pi-browser-use] browser session operation failed (category=${classifyError(error).errorCategory})`,
+        );
       res.statusCode = 409;
       res.end(
         JSON.stringify({
-          error:
-            error instanceof BrowserSessionError
-              ? error.message
-              : 'Browser session operation failed.',
+          ...(error instanceof BrowserSessionError
+            ? { error: error.message, ...classifyError(error) }
+            : describeToolError(
+                'Browser session operation',
+                error,
+                'The action may have completed. Inspect the original page before retrying.',
+              )),
         }),
       );
     }

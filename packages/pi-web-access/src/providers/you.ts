@@ -1,3 +1,4 @@
+import { ValidationError } from '@amaster.ai/pi-shared';
 import type {
   FetchResponse,
   ResolvedProvider,
@@ -18,8 +19,9 @@ export class YouProvider extends BaseProvider {
     signal?: AbortSignal,
   ): Promise<SearchResponse> {
     if (!provider.apiKey) {
-      throw new Error(
+      throw new ValidationError(
         'You.com API key not configured. Set YDC_API_KEY env var or configure in settings.json.',
+        'configuration_error',
       );
     }
 
@@ -75,8 +77,9 @@ export class YouProvider extends BaseProvider {
     signal?: AbortSignal,
   ): Promise<FetchResponse> {
     if (!provider.apiKey) {
-      throw new Error(
+      throw new ValidationError(
         'You.com API key not configured. Set YDC_API_KEY env var or configure in settings.json.',
+        'configuration_error',
       );
     }
 

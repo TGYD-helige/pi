@@ -1,5 +1,6 @@
 import { mkdir, open, opendir, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { SafeToolError, ValidationError } from '@amaster.ai/pi-shared';
 import { resolveConfigDir } from '@amaster.ai/pi-shared/settings';
 import {
   migrateSessionEntries,
@@ -99,20 +100,13 @@ export async function runDream(options: RunDreamOptions): Promise<boolean> {
     if (turnCount < (state.scanCursor || inputs.hasMore ? 1 : minTurns)) return false;
 
     // Consolidation
-    let succeeded = false;
-    try {
-      succeeded = await runConsolidation({
-        memoryDir: options.memoryDir,
-        turns,
-        modelConfig,
-        modelRegistry: { find: () => model, getApiKeyAndHeaders: async () => credentials },
-        ...(options.signal ? { signal: options.signal } : {}),
-      });
-    } catch (error) {
-      console.error(
-        `[pi-memory] consolidation failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+    const succeeded = await runConsolidation({
+      memoryDir: options.memoryDir,
+      turns,
+      modelConfig,
+      modelRegistry: { find: () => model, getApiKeyAndHeaders: async () => credentials },
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
 
     if (!succeeded || options.signal?.aborted) return false;
 
@@ -136,6 +130,56 @@ export async function runDream(options: RunDreamOptions): Promise<boolean> {
 const MAX_SESSION_FILES = 32;
 const MAX_SESSION_BYTES = 256 * 1024;
 const MAX_RECOVERY_BYTES = 8 * 1024 * 1024;
+const SESSION_ENTRY_TYPES: Record<SessionEntry['type'], true> = {
+  message: true,
+  thinking_level_change: true,
+  model_change: true,
+  usage: true,
+  compaction: true,
+  branch_summary: true,
+  custom: true,
+  custom_message: true,
+  context_edit: true,
+  label: true,
+  session_info: true,
+};
+
+function isBranchEntry(value: unknown): value is SessionEntry {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const entry = value as Record<string, unknown>;
+  const basic =
+    typeof entry.type === 'string' &&
+    Object.hasOwn(SESSION_ENTRY_TYPES, entry.type) &&
+    typeof entry.id === 'string' &&
+    entry.id.length > 0 &&
+    (entry.parentId === null ||
+      (typeof entry.parentId === 'string' && entry.parentId.length > 0)) &&
+    typeof entry.timestamp === 'string' &&
+    Number.isFinite(Date.parse(entry.timestamp));
+  if (!basic) return false;
+  if (entry.type !== 'message') return true;
+  if (!entry.message || typeof entry.message !== 'object' || Array.isArray(entry.message))
+    return false;
+  const message = entry.message as { role?: unknown; content?: unknown };
+  if (typeof message.role !== 'string' || !message.role) return false;
+  if (message.role !== 'user' && message.role !== 'assistant') return true;
+  const content = message.content;
+  // Pi normalizes missing legacy content to an empty collection.
+  if (content == null || typeof content === 'string') return true;
+  if (!Array.isArray(content)) return false;
+  return content.every((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
+    const part = item as Record<string, unknown>;
+    return (
+      typeof part.type === 'string' &&
+      part.type.length > 0 &&
+      (part.type !== 'text' || typeof part.text === 'string')
+    );
+  });
+}
+
+const INVALID_HISTORY =
+  'Memory session history is malformed or its header exceeds the scan limit. Repair the session file before retrying; the checkpoint was not advanced.';
 
 async function readDreamInputs(
   options: RunDreamOptions,
@@ -158,7 +202,13 @@ async function readDreamInputs(
       options.includeGlobalSessions ?? false,
       signal,
       cursor,
-    );
+    ).catch((error) => {
+      throw new SafeToolError(
+        'Read memory session history',
+        error,
+        'Some history could not be read. The checkpoint was not advanced; restore access before retrying consolidation.',
+      );
+    });
     return signal.aborted ? undefined : { ...history, credentials };
   })();
   discovery.active = operation;
@@ -184,8 +234,7 @@ async function readDreamInputs(
 
 async function* directoryEntries(path: string) {
   const dir = await opendir(path).catch((error: NodeJS.ErrnoException) => {
-    if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR')
-      console.error('[pi-memory] unable to read session directory');
+    if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error;
     return undefined;
   });
   if (dir) yield* dir;
@@ -217,8 +266,7 @@ async function scanPiSessionTurns(
       if (!name.endsWith('.jsonl')) continue;
       const path = join(dir, name);
       const metadata = await stat(path).catch((error: NodeJS.ErrnoException) => {
-        if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR')
-          console.error('[pi-memory] unable to inspect session file');
+        if (error.code !== 'ENOENT') throw error;
         return undefined;
       });
       if (signal?.aborted) return { turns: [], turnCount: 0, hasMore: false, cursor: undefined };
@@ -237,7 +285,7 @@ async function scanPiSessionTurns(
   for (const file of files) {
     if (signal?.aborted) return { turns: [], turnCount: 0, hasMore: false, cursor: undefined };
     const handle = await open(file.path, 'r').catch((error: NodeJS.ErrnoException) => {
-      if (error.code !== 'ENOENT') console.error('[pi-memory] unable to open session file');
+      if (error.code !== 'ENOENT') throw error;
       return undefined;
     });
     if (!handle) continue;
@@ -257,25 +305,97 @@ async function scanPiSessionTurns(
           const first = await handle.read(header, 0, header.length, 0);
           const headerText = header.subarray(0, first.bytesRead).toString('utf8');
           const headerEnd = headerText.indexOf('\n');
-          if (headerEnd < 0) break;
-          content = `${headerText.slice(0, headerEnd)}\n${content.slice(content.indexOf('\n') + 1)}`;
+          if (headerEnd < 0) throw new ValidationError(INVALID_HISTORY, 'configuration_error');
+          const firstCompleteLine = content.indexOf('\n');
+          content = `${headerText.slice(0, headerEnd)}\n${firstCompleteLine >= 0 ? content.slice(firstCompleteLine + 1) : ''}`;
         }
         if (signal?.aborted) return { turns: [], turnCount: 0, hasMore: false, cursor: undefined };
         const entries = parseSessionEntries(content);
-        migrateSessionEntries(entries);
         const header = entries[0];
-        if (header?.type !== 'session') break;
+        if (
+          entries.length !== content.split('\n').filter((line) => line.trim()).length ||
+          entries.some((entry) => !entry || typeof entry !== 'object' || Array.isArray(entry)) ||
+          header?.type !== 'session' ||
+          typeof header.id !== 'string' ||
+          !header.id
+        ) {
+          throw new ValidationError(INVALID_HISTORY, 'configuration_error');
+        }
+        if (
+          header.version === 3 &&
+          typeof header.parentSession === 'string' &&
+          header.parentSession.length > 0
+        ) {
+          const first = entries[1];
+          if (
+            start > 0 &&
+            first &&
+            Object.hasOwn(first, 'id') &&
+            !Object.hasOwn(first, 'parentId') &&
+            window < MAX_RECOVERY_BYTES
+          ) {
+            // Recover the legacy boundary before attaching a continued fork's first modern entry.
+            window = Math.min(metadata.size, MAX_RECOVERY_BYTES, window * 4);
+            continue;
+          }
+          if (
+            start > 0 &&
+            window >= MAX_RECOVERY_BYTES &&
+            first &&
+            typeof first.id === 'string' &&
+            first.id.length > 0 &&
+            first.type !== 'session' &&
+            !Object.hasOwn(first, 'parentId')
+          ) {
+            // A continued fork's legacy ancestor can lie outside the retained window.
+            first.parentId = null;
+          }
+          let legacyEnd = 1;
+          while (
+            legacyEnd < entries.length &&
+            !Object.hasOwn(entries[legacyEnd]!, 'id') &&
+            !Object.hasOwn(entries[legacyEnd]!, 'parentId')
+          )
+            legacyEnd++;
+          if (legacyEnd > 1) {
+            // forkFrom copies v1 bodies under v3 headers; continued forks append modern entries.
+            migrateSessionEntries([{ ...header, version: 1 }, ...entries.slice(1, legacyEnd)]);
+            const next = entries[legacyEnd];
+            if (
+              next &&
+              next.type !== 'session' &&
+              Object.hasOwn(next, 'id') &&
+              !Object.hasOwn(next, 'parentId')
+            ) {
+              next.parentId = (entries[legacyEnd - 1] as SessionEntry).id;
+            }
+          }
+        }
+        migrateSessionEntries(entries);
         const byId = new Map<string, SessionEntry>();
         let leaf: SessionEntry | undefined;
         for (const entry of entries) {
-          if (entry.type === 'session') continue;
+          if (entry === header) continue;
+          if (!isBranchEntry(entry) || byId.has(entry.id)) {
+            throw new ValidationError(INVALID_HISTORY, 'configuration_error');
+          }
           byId.set(entry.id, entry);
           leaf = entry;
         }
+        const seenIds = new Set<string>();
+        for (const entry of byId.values()) {
+          // A missing parent may precede the window; retained parents must precede their children.
+          if (
+            entry.parentId !== null &&
+            !seenIds.has(entry.parentId) &&
+            (start === 0 || byId.has(entry.parentId))
+          ) {
+            throw new ValidationError(INVALID_HISTORY, 'configuration_error');
+          }
+          seenIds.add(entry.id);
+        }
         const branch: SessionEntry[] = [];
-        const visited = new Set<string>();
-        while (leaf && !visited.has(leaf.id)) {
-          visited.add(leaf.id);
+        while (leaf) {
           branch.push(leaf);
           leaf = leaf.parentId ? byId.get(leaf.parentId) : undefined;
         }

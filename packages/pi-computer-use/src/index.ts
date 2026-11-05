@@ -1,8 +1,13 @@
 import { lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
+import { classifyError, describeToolError } from '@amaster.ai/pi-shared';
 import { isProjectTrusted } from '@amaster.ai/pi-shared/settings';
 import { StringEnum } from '@earendil-works/pi-ai';
-import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  ToolDefinition,
+} from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
 import { type ComputerUseConfig, loadConfigFromFile, resolveConfig } from './config.js';
 import toolManifest from './generated/cua-driver-tools.js';
@@ -117,6 +122,32 @@ function screenRecordingHint(): string {
 }
 
 export default function computerUseExtension(pi: ExtensionAPI): void {
+  const registerTool = (tool: ToolDefinition) =>
+    pi.registerTool({
+      ...tool,
+      async execute(...args) {
+        try {
+          return await tool.execute(...args);
+        } catch (error) {
+          if (args[2]?.aborted) throw error;
+          const failure = describeToolError(
+            tool.name,
+            error,
+            'The execution outcome is unknown. Read the current target state before retrying any action.',
+          );
+          console.error(
+            `[pi-computer-use] ${tool.name} failed (category=${failure.errorCategory})`,
+          );
+          return {
+            content: [{ type: 'text' as const, text: failure.error }],
+            structuredContent: failure,
+            details: undefined,
+            isError: true,
+          };
+        }
+      },
+    });
+
   let config: ComputerUseConfig | undefined;
   let client: CuaDriverClient | undefined;
   let sessionAbortController: AbortController | undefined;
@@ -276,7 +307,7 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
     const groupSummary = Object.entries(TOOL_GROUPS)
       .map(([name, group]) => `${name} (${group.summary})`)
       .join(', ');
-    pi.registerTool({
+    registerTool({
       name: TOOLS_META_TOOL,
       exposure: 'model-only',
       label: TOOLS_META_TOOL,
@@ -395,7 +426,7 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
         exposure = CORE_TOOLS.includes(originalName) ? 'direct' : 'deferred';
       }
 
-      pi.registerTool({
+      registerTool({
         name: prefixedName,
         label: prefixedName,
         ...(nativeDiscovery
@@ -452,21 +483,21 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
                 },
                 signal,
               );
-              if (
-                dialog.isError ||
-                dialog.structuredContent?.status !== 'ok' ||
-                dialog.structuredContent.present !== false
-              ) {
+              const state = dialog.structuredContent;
+              const blockedMessage = `${originalName} was not executed. Resolve any current dialog with browser_dialog before retrying; dialog observation must be available.`;
+              if (dialog.isError || state?.status !== 'ok' || typeof state.present !== 'boolean') {
+                return toPiToolResult(
+                  { ...dialog, isError: true },
+                  'browser_dialog',
+                  blockedMessage,
+                  params,
+                );
+              }
+              if (state.present) {
                 const blocked = toPiToolResult(
                   {
                     ...dialog,
-                    content: [
-                      {
-                        type: 'text',
-                        text: `${originalName} was not executed. Resolve any current dialog with browser_dialog before retrying; dialog observation must be available.`,
-                      },
-                      ...(dialog.content ?? []),
-                    ],
+                    content: [{ type: 'text', text: blockedMessage }, ...(dialog.content ?? [])],
                   },
                   'browser_dialog',
                 );
@@ -476,31 +507,24 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
             const result = await client!.callTool(originalName, params, signal);
 
             if (result.isError) {
-              const errorText = result.content?.map((c) => c.text ?? '').join('') ?? '';
-              const friendlyError = formatToolError(originalName, errorText, params);
-              if (friendlyError) {
-                return toPiToolResult(
-                  { ...result, content: [{ type: 'text', text: friendlyError }] },
-                  originalName,
-                );
-              }
+              const errorText = (result.content ?? [])
+                .slice(0, 4)
+                .map((c) => c.text?.slice(0, 1024) ?? '')
+                .join('');
+              return toPiToolResult(
+                result,
+                originalName,
+                formatToolError(originalName, errorText, params),
+                params,
+              );
             }
 
-            return toPiToolResult(result, originalName);
+            return toPiToolResult(result, originalName, undefined, params);
           } catch (connErr) {
             if (signal?.aborted) throw connErr;
-            const msg = connErr instanceof Error ? connErr.message : String(connErr);
-            ctx.ui.notify(`pi-computer-use: request failed — ${msg}`, 'warning');
-            return {
-              content: [
-                {
-                  type: 'text' as const,
-                  text: `Computer-use request failed: ${msg} ${permissionHint()}`,
-                },
-              ],
-              details: undefined,
-              isError: true,
-            };
+            const failure = toolFailure(originalName, connErr);
+            ctx.ui.notify(failure.content[0]!.text, 'warning');
+            return failure;
           }
         },
       });
@@ -516,7 +540,7 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
   }
 
   function registerRecoverySurface(): void {
-    pi.registerTool({
+    registerTool({
       name: `${TOOL_PREFIX}connect`,
       label: `${TOOL_PREFIX}connect`,
       description:
@@ -542,9 +566,7 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
         } catch (error) {
           if (signal?.aborted) throw error;
           return {
-            content: [{ type: 'text' as const, text: 'Cua Driver is still unavailable.' }],
-            details: undefined,
-            isError: true,
+            ...toolFailure('Cua Driver connection', error),
           };
         }
       },
@@ -557,8 +579,9 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
           const count = await discoverAndRegisterTools(ctx.signal);
           applyToolProfile();
           ctx.ui.notify(`pi-computer-use: registered ${count} platform tools.`, 'info');
-        } catch {
-          ctx.ui.notify('pi-computer-use: Cua Driver is still unavailable.', 'warning');
+        } catch (error) {
+          if (ctx.signal?.aborted) throw error;
+          ctx.ui.notify(toolFailure('Cua Driver connection', error).content[0]!.text, 'warning');
         }
       },
     });
@@ -568,7 +591,7 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
     if (!config?.visionModel) return;
     const visionConfig = config.visionModel;
 
-    pi.registerTool({
+    registerTool({
       name: `${TOOL_PREFIX}analyze_screenshot`,
       label: `${TOOL_PREFIX}analyze_screenshot`,
       description:
@@ -596,18 +619,7 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
           await ensureConnected(signal);
         } catch (connErr) {
           if (signal?.aborted) throw connErr;
-          const msg = connErr instanceof Error ? connErr.message : String(connErr);
-          ctx.ui.notify(`pi-computer-use: cannot connect to cua-driver — ${msg}`, 'warning');
-          return {
-            content: [
-              {
-                type: 'text' as const,
-                text: `Failed to connect to cua-driver: ${msg}. ${permissionHint()}`,
-              },
-            ],
-            details: undefined,
-            isError: true,
-          };
+          return toolFailure('Cua Driver connection', connErr);
         }
 
         const screenshotArgs: Record<string, unknown> = {
@@ -622,14 +634,7 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
           screenshotResult = await client!.callTool('get_window_state', screenshotArgs, signal);
         } catch (error) {
           if (signal?.aborted) throw error;
-          const message = error instanceof Error ? error.message : String(error);
-          return {
-            content: [
-              { type: 'text' as const, text: `Failed to capture window state: ${message}` },
-            ],
-            details: undefined,
-            isError: true,
-          };
+          return toolFailure('Capture window state', error);
         }
         const imageContent = screenshotResult.content?.find((c) => c.type === 'image' && c.data);
 
@@ -650,18 +655,16 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
           );
         }
 
-        if (!imageContent?.data) {
-          const errorText =
-            screenshotResult.content
-              ?.filter((c) => c.type === 'text' && c.text)
-              .map((c) => c.text)
-              .join('\n') || 'Failed to capture screenshot.';
-          const formatted = formatToolError('get_window_state', errorText, params);
-          return {
-            content: [{ type: 'text' as const, text: formatted ?? errorText }],
-            details: undefined,
-            isError: true,
-          };
+        if (screenshotResult.isError || !imageContent?.data) {
+          const errorText = (screenshotResult.content ?? [])
+            .slice(0, 4)
+            .map((c) => c.text?.slice(0, 1024) ?? '')
+            .join('');
+          return toPiToolResult(
+            { ...screenshotResult, isError: true },
+            'get_window_state',
+            formatToolError('get_window_state', errorText, params),
+          );
         }
 
         const callVision = createPiVisionCaller(visionConfig, ctx);
@@ -688,10 +691,10 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
           );
         }
 
-        return {
-          content: [{ type: 'text' as const, text: analysis }],
-          details: undefined,
-        };
+        return toPiToolResult(
+          { content: [{ type: 'text', text: analysis }] },
+          'analyze_screenshot',
+        );
       },
     });
   }
@@ -724,8 +727,9 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
       connectedAtStartup = true;
     } catch (error) {
       registerRecoverySurface();
-      const errorName = error instanceof Error ? error.name : 'UnknownError';
-      console.error(`[pi-computer-use] startup discovery failed (${errorName})`);
+      console.error(
+        `[pi-computer-use] startup discovery failed (category=${classifyError(error).errorCategory})`,
+      );
       ctx.ui.notify(
         'pi-computer-use: driver unavailable; use computer_use_connect to retry discovery.',
         'warning',
@@ -743,8 +747,9 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
         ctx.ui.notify(`pi-computer-use: ${permissionHint()}`, 'warning');
       }
     } catch (error) {
-      const errorName = error instanceof Error ? error.name : 'UnknownError';
-      console.error(`[pi-computer-use] startup probe failed (${errorName})`);
+      console.error(
+        `[pi-computer-use] startup probe failed (category=${classifyError(error).errorCategory})`,
+      );
     }
   });
 
@@ -767,6 +772,9 @@ function formatToolError(
   errorText: string,
   params: Record<string, unknown>,
 ): string | undefined {
+  if (errorText.startsWith('permissions_pending')) {
+    return `permissions_pending: Computer automation permissions are pending. ${accessibilityHint()} ${screenRecordingHint()}`;
+  }
   if (errorText.includes('ax_not_granted')) {
     return accessibilityHint();
   }
@@ -797,4 +805,19 @@ function formatToolError(
   }
 
   return undefined;
+}
+
+function toolFailure(operation: string, error: unknown) {
+  const failure = describeToolError(
+    operation,
+    error,
+    'The execution outcome is unknown. Read the current target state before retrying any action.',
+  );
+  console.error(`[pi-computer-use] request failed (category=${failure.errorCategory})`);
+  return {
+    content: [{ type: 'text' as const, text: failure.error }],
+    structuredContent: failure,
+    details: undefined,
+    isError: true,
+  };
 }

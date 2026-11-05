@@ -16,7 +16,11 @@ export const imageOutputSchema = Type.Union([
     truncated: Type.Boolean(),
     totalImages: Type.Integer(),
   }),
-  Type.Object({ error: Type.String() }),
+  Type.Object({
+    error: Type.String(),
+    errorCategory: Type.Optional(Type.String()),
+    httpStatus: Type.Optional(Type.Integer()),
+  }),
 ]);
 
 function clipText(text: string, maxBytes: number, maxLines: number) {

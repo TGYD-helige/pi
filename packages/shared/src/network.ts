@@ -3,6 +3,7 @@ import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { BlockList, isIP } from 'node:net';
 import { Readable } from 'node:stream';
+import { SafeToolError, ValidationError } from './tool-errors.js';
 
 export type DnsLookup = (hostname: string) => Promise<Array<{ address: string; family: number }>>;
 
@@ -180,7 +181,7 @@ async function resolvePublicHttpUrl(
   try {
     url = value instanceof URL ? new URL(value) : new URL(value);
   } catch {
-    throw new Error(PUBLIC_DESTINATION);
+    throw new ValidationError(PUBLIC_DESTINATION);
   }
   if (
     (url.protocol !== 'http:' && url.protocol !== 'https:') ||
@@ -190,27 +191,37 @@ async function resolvePublicHttpUrl(
     url.hostname === 'localhost' ||
     url.hostname.endsWith('.localhost')
   ) {
-    throw new Error(PUBLIC_DESTINATION);
+    throw new ValidationError(PUBLIC_DESTINATION);
   }
 
   const hostname = url.hostname.replace(/^\[|\]$/g, '');
   const literalFamily = isIP(hostname);
   const addresses = literalFamily
     ? [{ address: hostname, family: literalFamily }]
-    : await lookupWithSignal(lookup, hostname, options.signal).catch(() => {
+    : await lookupWithSignal(lookup, hostname, options.signal).catch((error) => {
         options.signal?.throwIfAborted();
-        return [];
+        throw new SafeToolError(
+          'Resolve outbound host',
+          error,
+          'DNS resolution failed. Check DNS/connectivity before retrying; this is not a public-destination policy rejection.',
+        );
       });
   if (addresses.length === 0) {
-    throw new Error(`${PUBLIC_DESTINATION} Host "${hostname}" could not be resolved.`);
+    throw new SafeToolError(
+      'Resolve outbound host',
+      Object.assign(new Error(), { code: 'ENOTFOUND' }),
+      'The host could not be resolved. Check DNS/connectivity before retrying.',
+    );
   }
   if (!isTrustedHost(hostname, options.trustedHosts ?? [])) {
     const nonPublic = addresses.filter(({ address }) => !isPublicIp(address));
     if (nonPublic.length > 0) {
-      const list = nonPublic.map(({ address }) => address).join(', ');
-      throw new Error(
-        `${PUBLIC_DESTINATION} Host "${hostname}" resolved to non-public address ${list}. ` +
-          'If this host is reached via a trusted proxy (e.g. fake-ip DNS), pass it via trustedHosts.',
+      const list = nonPublic
+        .slice(0, 4)
+        .map(({ address }) => (isIP(address) ? address : '<invalid address>'))
+        .join(', ');
+      throw new ValidationError(
+        `${PUBLIC_DESTINATION} Host "${hostname.slice(0, 253)}" resolved to non-public address ${list}. If this host is reached via a trusted proxy (e.g. fake-ip DNS), pass it via trustedHosts.`,
       );
     }
   }

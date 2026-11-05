@@ -124,3 +124,7 @@ text(result.issues.map(issue => ({ id: issue.id, title: issue.title, status: iss
 Structured output is limited to 12 KiB and top-level lists to 100 complete records. `truncated: true` indicates omitted records; `total` retains the original count where available. Oversized records with an `id` retain that complete ID and small scalar metadata, omit large fields, and carry `truncated: true` both on the record and envelope; callers must check that flag before reusing content for an update. Oversized results without a record ID return a typed output-limit error instead of clipped paths or content. A write may already have completed when that happens: inspect saved state before retrying. Readable text and renderer details are independently bounded.
 
 Multica initialization runs in the background with one 10-second budget across CLI checks, setup, daemon startup, and login. Ordinary prompts do not wait for it; teamwork tools wait for initialization. Each later tool or status-command invocation has one 30-second deadline covering initialization waits and all CLI steps. Caller cancellation reaches the running CLI and prevents subsequent commands (including the remaining update/get steps); session shutdown cancels outstanding CLI work.
+
+### Failure diagnostics
+
+Configuration and login failures stop initialization and remain visible to waiting tools with a safe error category. A failed daemon start is accepted only after a status check confirms that the daemon is running. A version-probe timeout is not treated as evidence that the CLI needs installation.

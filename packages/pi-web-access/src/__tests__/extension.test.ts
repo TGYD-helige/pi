@@ -129,6 +129,186 @@ describe('piWebToolExtension - tool registration', () => {
     }
   });
 
+  it.each([
+    'web_search',
+    'web_fetch',
+    'x_search',
+    'image_search',
+  ])('preserves a safe timeout classification for %s', async (name) => {
+    mockLoadSettings.mockReturnValue({
+      search: { provider: 'tavily' },
+      fetch: { provider: 'tavily' },
+      imageSearch: { provider: 'unsplash' },
+      providers: {
+        tavily: { apiKey: 'fixture' },
+        xai: { apiKey: 'fixture' },
+        unsplash: { apiKey: 'fixture' },
+      },
+    });
+    const error = new DOMException('private-token https://private.invalid', 'TimeoutError');
+    mockSearch.mockRejectedValue(error);
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(error));
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const pi = createMockPi();
+      piWebToolExtension(pi as any);
+      await pi.triggerSessionStart();
+      const tool = pi.tools.find((item) => item.name === name) as any;
+      const result = await tool.execute(
+        'id',
+        { query: 'Pi', url: 'https://1.1.1.1/fixture', prompt: 'full' },
+        undefined,
+        undefined,
+        {},
+      );
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent.errorCategory).toBe('timeout');
+      expect(result.content[0].text).toContain('timed out');
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('category=timeout'));
+      expect(JSON.stringify([result, log.mock.calls])).not.toMatch(
+        /private-token|private\.invalid/,
+      );
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it.each([
+    [new Error('Tavily API error 429: private-token'), 'http_error', 429],
+    [new Error('HTTP 401: private-token'), 'http_error', 401],
+    [new Error('Tavily API error 503: private-token'), 'http_error', 503],
+    [new Error('private-token'), 'request_failed', undefined],
+    [new Error('private-token timeout in a response body'), 'request_failed', undefined],
+    ['private-token', 'request_failed', undefined],
+    [Object.assign(new Error('private-token'), { code: 'ETIMEDOUT' }), 'timeout', undefined],
+    [
+      new TypeError('private-token', {
+        cause: Object.assign(new Error('private-token'), { code: 'UND_ERR_HEADERS_TIMEOUT' }),
+      }),
+      'timeout',
+      undefined,
+    ],
+  ])('classifies search failures without exposing raw data (%s)', async (error, category, status) => {
+    mockLoadSettings.mockReturnValue({
+      search: { provider: 'tavily' },
+      providers: { tavily: { apiKey: 'fixture' } },
+    });
+    mockSearch.mockRejectedValue(error);
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const pi = createMockPi();
+      piWebToolExtension(pi as any);
+      await pi.triggerSessionStart();
+      const result = await (pi.tools.find((tool) => tool.name === 'web_search') as any).execute(
+        'id',
+        { query: 'Pi' },
+        undefined,
+        undefined,
+        {},
+      );
+      expect(result.structuredContent.errorCategory).toBe(category);
+      expect(result.structuredContent.httpStatus).toBe(status);
+      expect(JSON.stringify([result, log.mock.calls])).not.toContain('private-token');
+      if (category !== 'timeout') expect(result.content[0].text).not.toContain('timed out');
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it.each([
+    'tavily',
+    'cloudflare',
+  ])('classifies the actual %s request deadline at the tool boundary', async (provider) => {
+    mockLoadSettings.mockReturnValue({
+      search: { provider },
+      timeoutMs: 1,
+      providers: { [provider]: { apiKey: 'fixture', accountId: 'fixture' } },
+    } as any);
+    const actual = await vi.importActual<typeof import('../search.js')>('../search.js');
+    mockSearch.mockImplementationOnce(actual.search);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        (_url, options) =>
+          new Promise((_resolve, reject) => {
+            options.signal.addEventListener('abort', () => reject(options.signal.reason), {
+              once: true,
+            });
+          }),
+      ),
+    );
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const pi = createMockPi();
+      piWebToolExtension(pi as any);
+      await pi.triggerSessionStart();
+      const result = await (pi.tools.find((tool) => tool.name === 'web_search') as any).execute(
+        'id',
+        { query: 'Pi' },
+        undefined,
+        undefined,
+        {},
+      );
+      expect(result.structuredContent.errorCategory).toBe('timeout');
+      expect(result.content[0].text).toContain('timed out');
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it.each([
+    'web-search',
+    'web-fetch',
+    'image-search',
+  ])('reports request timeouts through /%s', async (name) => {
+    mockLoadSettings.mockReturnValue({
+      search: { provider: 'tavily' },
+      fetch: { provider: 'tavily' },
+      imageSearch: { provider: 'unsplash' },
+      providers: { tavily: { apiKey: 'fixture' }, unsplash: { apiKey: 'fixture' } },
+    });
+    const reason = new DOMException('private-token', 'TimeoutError');
+    mockSearch.mockRejectedValue(reason);
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(reason));
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const pi = createMockPi();
+      piWebToolExtension(pi as any);
+      await pi.triggerSessionStart();
+      const notify = vi.fn();
+      await (pi.commands.get(name) as any).handler(
+        name === 'web-fetch' ? 'https://1.1.1.1/fixture' : 'Pi',
+        { ui: { notify } },
+      );
+      expect(notify).toHaveBeenCalledWith(expect.stringContaining('timed out'), 'error');
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('category=timeout'));
+      expect(JSON.stringify([notify.mock.calls, log.mock.calls])).not.toContain('private-token');
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('keeps the exact safe remediation for missing provider configuration', async () => {
+    mockLoadSettings.mockReturnValue({
+      search: { provider: 'cloudflare' },
+      providers: { cloudflare: { apiKey: 'fixture' } },
+    });
+    const actual = await vi.importActual<typeof import('../search.js')>('../search.js');
+    mockSearch.mockImplementationOnce(actual.search);
+    const pi = createMockPi();
+    piWebToolExtension(pi as any);
+    await pi.triggerSessionStart();
+    const result = await (pi.tools.find((tool) => tool.name === 'web_search') as any).execute(
+      'id',
+      { query: 'Pi' },
+      undefined,
+      undefined,
+      {},
+    );
+    expect(result.structuredContent.errorCategory).toBe('configuration_error');
+    expect(result.content[0].text).toContain('CLOUDFLARE_ACCOUNT_ID');
+  });
+
   it('returns search objects alongside readable source links', async () => {
     mockLoadSettings.mockReturnValue({
       search: { provider: 'cloudflare' },
@@ -350,7 +530,7 @@ describe('piWebToolExtension - tool registration', () => {
       request.mockRejectedValueOnce(new Error('private-token'));
       await command.handler('https://93.184.216.34', { ui: { notify } });
       expect(notify).toHaveBeenLastCalledWith(
-        'Web fetch failed. Check the URL and provider configuration.',
+        expect.stringContaining('DeepSeek fetch request failed.'),
         'error',
       );
       expect(JSON.stringify(log.mock.calls)).not.toContain('private-token');

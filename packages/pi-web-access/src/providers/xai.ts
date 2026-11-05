@@ -1,3 +1,4 @@
+import { ValidationError } from '@amaster.ai/pi-shared';
 import type { ResolvedProvider, SearchParams, SearchResponse, SearchResult } from './base.js';
 import {
   BaseProvider,
@@ -25,8 +26,9 @@ export class XaiProvider extends BaseProvider {
     signal?: AbortSignal,
   ): Promise<SearchResponse> {
     if (!provider.apiKey) {
-      throw new Error(
+      throw new ValidationError(
         'xAI API key not configured. Set XAI_API_KEY env var or configure in settings.json.',
+        'configuration_error',
       );
     }
 
@@ -70,8 +72,9 @@ export class XaiProvider extends BaseProvider {
     signal?: AbortSignal,
   ): Promise<SearchResponse> {
     if (!provider.apiKey) {
-      throw new Error(
+      throw new ValidationError(
         'xAI API key not configured. Set XAI_API_KEY env var or configure in settings.json.',
+        'configuration_error',
       );
     }
 

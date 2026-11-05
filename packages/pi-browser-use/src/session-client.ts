@@ -14,6 +14,7 @@ import {
 import { dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { SafeToolError } from '@amaster.ai/pi-shared';
 import { resolveHome } from '@amaster.ai/pi-shared/settings';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { createCloudBrowserAdapter } from './adapter.js';
@@ -112,7 +113,7 @@ export class BrowserSessionClient {
       return value;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-      if (error instanceof BrowserSessionError) throw error;
+      if (error instanceof BrowserSessionError || error instanceof SafeToolError) throw error;
       throw new BrowserSessionError('Could not read the browser session record.');
     }
   }
@@ -220,6 +221,7 @@ export class BrowserSessionClient {
                 done(
                   new BrowserSessionError(
                     'Browser session startup timed out; inspect the provider before retrying.',
+                    new DOMException('Startup deadline exceeded', 'TimeoutError'),
                   ),
                 ),
               60_000,
@@ -307,19 +309,30 @@ export class BrowserSessionClient {
           : AbortSignal.timeout(65_000),
         redirect: 'error',
       });
-      const result = (await response.json()) as { error?: string; result?: unknown };
+      const result = (await response.json()) as {
+        error?: string;
+        errorCategory?: string;
+        httpStatus?: number;
+        result?: unknown;
+      };
       if (!response.ok)
         throw new BrowserSessionError(
           typeof result.error === 'string'
             ? result.error.slice(0, 512)
             : 'Browser session operation failed.',
+          Object.assign(new Error(), {
+            errorCategory: result.errorCategory,
+            httpStatus: result.httpStatus,
+          }),
         );
       return result.result as T;
     } catch (error) {
       if (signal?.aborted) throw signal.reason;
-      if (error instanceof BrowserSessionError) throw error;
-      throw new BrowserSessionError(
-        'The original browser session connection was lost. It has not been replaced.',
+      if (error instanceof BrowserSessionError || error instanceof SafeToolError) throw error;
+      throw new SafeToolError(
+        'Browser session request',
+        error,
+        'The original browser session has not been replaced. The action may have completed; inspect the current page before retrying.',
       );
     }
   }

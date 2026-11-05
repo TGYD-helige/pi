@@ -56,14 +56,18 @@ describe('dreaming-state', () => {
     expect(parsed.lastConsolidatedAt).toBe('2026-06-20T10:00:00.000Z');
   });
 
-  it('readDreamingState handles malformed JSON gracefully', async () => {
+  it.each([
+    'not json',
+    '{}',
+    'null',
+    '{"lastConsolidatedAt":null,"lastSessionCount":0,"scanCursor":{}}',
+  ])('readDreamingState refuses to reset a malformed checkpoint: %s', async (raw) => {
     const { readDreamingState } = await import('../dreaming-state.js');
     const memoriesDir = join(tempDir, 'memories');
     mkdirSync(memoriesDir, { recursive: true });
     const { writeFileSync } = await import('node:fs');
-    writeFileSync(join(memoriesDir, 'dreaming-state.json'), 'not json', 'utf-8');
+    writeFileSync(join(memoriesDir, 'dreaming-state.json'), raw, 'utf-8');
 
-    const state = await readDreamingState();
-    expect(state).toEqual({ lastConsolidatedAt: null, lastSessionCount: 0 });
+    await expect(readDreamingState()).rejects.toThrow(/checkpoint/i);
   });
 });

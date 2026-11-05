@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { open, readFile, rename } from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
-import { boundStructuredContent } from '@amaster.ai/pi-shared';
+import { boundStructuredContent, classifyError } from '@amaster.ai/pi-shared';
 import { isProjectTrusted } from '@amaster.ai/pi-shared/settings';
 import { StringEnum } from '@earendil-works/pi-ai';
 import {
@@ -407,7 +407,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
     try {
       referenceAssets = normalizeReferenceAssets(toolParams.referenceAssets);
     } catch (error) {
-      return errResult(errorMessageForUser(error));
+      return errResult(errorMessageForUser(error), { ...classifyError(error) });
     }
     // Structured prompt validation happens only on fresh submits — the resume
     // path (jobId) re-polls a frozen request and never re-reads the prompt.
@@ -770,7 +770,9 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
   };
 
   const handleGenerateError = (error: unknown, outputDir: string, jobId: string): TextResult => {
-    console.error(`[pi-video-gen] generate failed: ${toLogSummary(error)}`);
+    console.error(
+      `[pi-video-gen] generate failed: ${toLogSummary(error)} (category=${classifyError(error).errorCategory})`,
+    );
     const existing = loadSingleJob(outputDir, jobId);
     if (existing && existing.state !== 'done') {
       const terminal = error instanceof RemoteTaskFailedError;
@@ -792,7 +794,12 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
       error instanceof RemoteTaskNotFoundError
         ? `Job ${jobId} is no longer visible to the provider, but the paid task may still exist. Its handle was preserved and this job will not resubmit automatically; check the provider console before starting another generation.`
         : errorMessageForUser(error),
-      { jobId, state: loadSingleJob(outputDir, jobId)?.state, taskId: existing?.handle?.taskId },
+      {
+        ...classifyError(error),
+        jobId,
+        state: loadSingleJob(outputDir, jobId)?.state,
+        taskId: existing?.handle?.taskId,
+      },
     );
   };
 
@@ -901,8 +908,13 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
         result as unknown as Record<string, unknown>,
       );
     } catch (error) {
-      console.error(`[pi-video-gen] video_compose failed: ${toLogSummary(error)}`);
-      return errResult(errorMessageForUser(error), savedJobDetails(p.composeSpecPath, ctx));
+      console.error(
+        `[pi-video-gen] video_compose failed: ${toLogSummary(error)} (category=${classifyError(error).errorCategory})`,
+      );
+      return errResult(errorMessageForUser(error), {
+        ...classifyError(error),
+        ...savedJobDetails(p.composeSpecPath, ctx),
+      });
     }
   };
 
@@ -978,8 +990,13 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
         },
       );
     } catch (error) {
-      console.error(`[pi-video-gen] video_render failed: ${toLogSummary(error)}`);
-      return errResult(errorMessageForUser(error), savedJobDetails(p.renderSpecPath, ctx));
+      console.error(
+        `[pi-video-gen] video_render failed: ${toLogSummary(error)} (category=${classifyError(error).errorCategory})`,
+      );
+      return errResult(errorMessageForUser(error), {
+        ...classifyError(error),
+        ...savedJobDetails(p.renderSpecPath, ctx),
+      });
     }
   };
 
@@ -1038,8 +1055,10 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
         try {
           return await runGenerate(params as GenerateToolParams, ctx, signal, onUpdate);
         } catch (error) {
-          console.error(`[pi-video-gen] video_generate failed: ${toLogSummary(error)}`);
-          return errResult(errorMessageForUser(error));
+          console.error(
+            `[pi-video-gen] video_generate failed: ${toLogSummary(error)} (category=${classifyError(error).errorCategory})`,
+          );
+          return errResult(errorMessageForUser(error), { ...classifyError(error) });
         }
       },
     });

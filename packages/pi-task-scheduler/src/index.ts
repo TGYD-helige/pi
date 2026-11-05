@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { describeToolError } from '@amaster.ai/pi-shared';
 import { Cron } from 'croner';
 
 export type ScheduledTaskType = 'cron' | 'once' | 'interval';
@@ -332,39 +333,49 @@ export class PersistentTaskScheduler implements TaskScheduler {
     if (!(await this.options.lock.acquire())) {
       return;
     }
-    this.active = true;
-    this.startLockHeartbeat();
-    const tasks = await this.options.store.list(this.scope);
-    for (const task of tasks) {
-      if (task.lastStatus === 'running') {
-        const fixedAt = new Date().toISOString();
-        const fixedTask = withNextRun({
-          ...task,
-          lastStatus: 'error' as const,
-          lastError: 'Process was interrupted while task was running',
-          runHistory: updateTaskHistoryEntry(
-            task.runHistory,
-            findLastRunningEntryId(task.runHistory),
-            {
-              status: 'error',
-              message: 'Process was interrupted while task was running',
-            },
-          ),
-          updatedAt: fixedAt,
-        });
-        await this.options.store.update(task.id, fixedTask, this.scope).catch(() => undefined);
-        this.schedule(fixedTask);
-      } else {
-        const refreshed = withNextRun(task);
-        if (refreshed.nextRunAt !== task.nextRunAt) {
-          await this.options.store.update(task.id, refreshed, this.scope).catch(() => undefined);
-          this.schedule(refreshed);
+    try {
+      this.active = true;
+      this.startLockHeartbeat();
+      const tasks = await this.options.store.list(this.scope);
+      for (const task of tasks) {
+        if (task.lastStatus === 'running') {
+          const fixedAt = new Date().toISOString();
+          const fixedTask = withNextRun({
+            ...task,
+            lastStatus: 'error' as const,
+            lastError: 'Process was interrupted while task was running',
+            runHistory: updateTaskHistoryEntry(
+              task.runHistory,
+              findLastRunningEntryId(task.runHistory),
+              {
+                status: 'error',
+                message: 'Process was interrupted while task was running',
+              },
+            ),
+            updatedAt: fixedAt,
+          });
+          await this.options.store.update(task.id, fixedTask, this.scope);
+          this.schedule(fixedTask);
         } else {
-          this.schedule(task);
+          const refreshed = withNextRun(task);
+          if (refreshed.nextRunAt !== task.nextRunAt) {
+            await this.options.store.update(task.id, refreshed, this.scope);
+            this.schedule(refreshed);
+          } else {
+            this.schedule(task);
+          }
         }
       }
+      await this.emitSchedulerStarted();
+    } catch (error) {
+      try {
+        await this.stop();
+      } catch (cleanupError) {
+        const failure = describeToolError('Clean up scheduler startup', cleanupError);
+        console.error(`[pi-task-scheduler] ${failure.errorCategory}: ${failure.error}`);
+      }
+      throw error;
     }
-    await this.emitSchedulerStarted();
   }
 
   async stop(): Promise<void> {
@@ -509,7 +520,15 @@ export class PersistentTaskScheduler implements TaskScheduler {
     } catch (error) {
       const latest = (await this.options.store.get(taskId, this.scope)) ?? runningTask;
       const failedAt = new Date().toISOString();
-      const message = error instanceof Error ? error.message : String(error);
+      const failure = describeToolError(
+        'Scheduled task execution',
+        error,
+        'The run may have performed actions. Inspect its state before triggering another run.',
+      );
+      const message = failure.error;
+      console.error(
+        `[pi-task-scheduler] task execution failed (category=${failure.errorCategory})`,
+      );
       const updated = withNextRun({
         ...latest,
         lastStatus: 'error',

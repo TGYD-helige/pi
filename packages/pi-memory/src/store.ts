@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { promises as fs, mkdirSync } from 'node:fs';
 import path from 'node:path';
+import { SafeToolError } from '@amaster.ai/pi-shared';
 import lockfile from 'proper-lockfile';
 import { firstThreatMessage, scanForThreats } from './threat-patterns.js';
 
@@ -357,7 +358,11 @@ export class MemoryStore {
       raw = await fs.readFile(p, 'utf-8');
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-      return null;
+      throw new SafeToolError(
+        'Memory read',
+        err,
+        'The existing memory file was not replaced. Check file access before retrying.',
+      );
     }
     if (!raw.trim()) return null;
 
@@ -426,7 +431,11 @@ async function readEntriesFile(p: string): Promise<string[]> {
     raw = await fs.readFile(p, 'utf-8');
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
-    return [];
+    throw new SafeToolError(
+      'Memory read',
+      err,
+      'The existing memory file was not replaced. Check file access before retrying.',
+    );
   }
   if (!raw.trim()) return [];
   return raw

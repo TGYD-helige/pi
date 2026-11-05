@@ -8,7 +8,7 @@ import {
   getCurrentTools,
   registerFauxProvider,
 } from '@earendil-works/pi-ai/compat';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildConsolidationUserPrompt,
   CONSOLIDATION_SYSTEM_PROMPT,
@@ -26,6 +26,127 @@ describe('consolidation', () => {
 
     afterEach(async () => {
       await rm(memoryDir, { recursive: true, force: true });
+    });
+
+    it.each([
+      ['TimeoutError', 'request timed out: test-token', 'timeout'],
+      ['AbortError', 'The operation was aborted: test-token', 'cancelled'],
+      ['AbortError', 'This operation was aborted', 'cancelled'],
+      ['NetworkError', 'fetch failed', 'network_error'],
+    ])('retains %s after the real Agent converts the error', async (name, message, category) => {
+      const provider = registerFauxProvider({ provider: 'pi-memory-consolidation-errors' });
+      const model = provider.getModel();
+      if (name === 'NetworkError')
+        vi.stubGlobal(
+          'fetch',
+          vi.fn().mockRejectedValue(
+            new TypeError('fetch failed', {
+              cause: Object.assign(new Error('test-token'), { code: 'ECONNRESET' }),
+            }),
+          ),
+        );
+      provider.setResponses([
+        async (_context, options) => {
+          if (name === 'NetworkError')
+            await (options?.fetch ?? globalThis.fetch)('https://example.com');
+          throw new DOMException(message, name);
+        },
+      ]);
+      try {
+        await expect(
+          runConsolidation({
+            memoryDir,
+            turns: [],
+            modelConfig: { provider: model.provider, model: model.id },
+            modelRegistry: {
+              find: () => model,
+              getApiKeyAndHeaders: async () => ({ ok: true, apiKey: 'test-key' }),
+            },
+          }),
+        ).rejects.toMatchObject({ errorCategory: category });
+      } finally {
+        vi.unstubAllGlobals();
+        provider.unregister();
+      }
+    });
+
+    it('cancels an in-flight Agent before a delayed response can write memory', async () => {
+      const provider = registerFauxProvider({ provider: 'pi-memory-cancel-consolidation' });
+      const model = provider.getModel();
+      const controller = new AbortController();
+      let release!: () => void;
+      let entered!: () => void;
+      let providerSignal: AbortSignal | undefined;
+      const blocked = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      provider.setResponses([
+        async (_context, options) => {
+          providerSignal = options?.signal;
+          entered();
+          await blocked;
+          return fauxAssistantMessage(
+            fauxToolCall('memory_add', { target: 'memory', content: 'late mutation' }),
+            { stopReason: 'toolUse' },
+          );
+        },
+        () => fauxAssistantMessage('Saved.'),
+      ]);
+      try {
+        const pending = runConsolidation({
+          memoryDir,
+          turns: [],
+          signal: controller.signal,
+          modelConfig: { provider: model.provider, model: model.id },
+          modelRegistry: {
+            find: () => model,
+            getApiKeyAndHeaders: async () => ({ ok: true, apiKey: 'test-key' }),
+          },
+        });
+        await started;
+        controller.abort();
+        const cancelled = providerSignal?.aborted;
+        release();
+        await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+        await expect(readFile(path.join(memoryDir, 'MEMORY.md'), 'utf8')).rejects.toMatchObject({
+          code: 'ENOENT',
+        });
+        expect(cancelled).toBe(true);
+      } finally {
+        release();
+        provider.unregister();
+      }
+    });
+
+    it('rejects a failed memory tool even when the model finishes normally', async () => {
+      const provider = registerFauxProvider({ provider: 'pi-memory-failed-consolidation' });
+      const model = provider.getModel();
+      provider.setResponses([
+        () =>
+          fauxAssistantMessage(
+            fauxToolCall('memory_remove', { target: 'memory', oldText: 'missing entry' }),
+            { stopReason: 'toolUse' },
+          ),
+        () => fauxAssistantMessage('Finished.'),
+      ]);
+      try {
+        await expect(
+          runConsolidation({
+            memoryDir,
+            turns: [],
+            modelConfig: { provider: model.provider, model: model.id },
+            modelRegistry: {
+              find: () => model,
+              getApiKeyAndHeaders: async () => ({ ok: true, apiKey: 'test-key' }),
+            },
+          }),
+        ).rejects.toThrow(/memory tool failed/);
+      } finally {
+        provider.unregister();
+      }
     });
 
     it('executes memory tools and preserves their results through the real Agent loop', async () => {

@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { classifyError, SafeToolError } from '@amaster.ai/pi-shared';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import {
   getDefaultEnvironment,
@@ -382,7 +383,9 @@ export class CuaDriverClient {
 
       transport.onerror = (error: Error) => {
         if (generation !== this.generation) return;
-        console.error(`[pi-computer-use] cua-driver transport error (${error.name})`);
+        console.error(
+          `[pi-computer-use] cua-driver transport error (category=${classifyError(error).errorCategory})`,
+        );
         void this.disconnectUnhealthyClient(generation);
       };
       transport.onclose = () => void this.disconnectUnhealthyClient(generation);
@@ -404,13 +407,9 @@ export class CuaDriverClient {
       }
       await this.stopDaemon();
       if (signal?.aborted) throw abortError(signal);
-      const errorName = error instanceof Error ? error.name : 'UnknownError';
-      console.error(`[pi-computer-use] cua-driver connection failed (${errorName})`);
-      if (process.env.DEBUG?.includes('pi-computer-use')) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.error(`[pi-computer-use] connection detail: ${message}`);
-      }
-      throw new Error('Cua Driver connection failed.');
+      const failure = new SafeToolError('Cua Driver connection', error);
+      console.error(`[pi-computer-use] connection failed (category=${failure.errorCategory})`);
+      throw failure;
     }
   }
 
@@ -512,7 +511,8 @@ export class CuaDriverClient {
   private waitForLauncher(child: ChildProcess, signal?: AbortSignal): Promise<void> {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(
-        () => reject(new Error('Cua Driver LaunchServices startup timed out.')),
+        () =>
+          reject(new DOMException('Cua Driver LaunchServices startup timed out.', 'TimeoutError')),
         DAEMON_START_TIMEOUT_MS,
       );
       const finish = (error?: Error) => {
@@ -549,7 +549,7 @@ export class CuaDriverClient {
     return new Promise((resolve, reject) => {
       let stderr = '';
       const timeout = setTimeout(
-        () => finish(new Error('Cua Driver daemon startup timed out.')),
+        () => finish(new DOMException('Cua Driver daemon startup timed out.', 'TimeoutError')),
         DAEMON_START_TIMEOUT_MS,
       );
       const finish = (error?: Error) => {
@@ -664,11 +664,13 @@ export class CuaDriverClient {
           name === 'run_script' ? 125_000 : name === 'run_steps' ? 65_000 : MCP_TIMEOUT_MS,
         ),
       )) as McpToolResult;
-    } catch {
+    } catch (error) {
       if (signal?.aborted) throw abortError(signal);
       await this.disconnectUnhealthyClient(this.generation);
-      throw new Error(
-        'Cua Driver response unavailable; execution outcome is unknown. Read the current target state before retrying any action.',
+      throw new SafeToolError(
+        'Cua Driver request',
+        error,
+        'Execution outcome is unknown. Read the current target state before retrying any action.',
       );
     }
   }

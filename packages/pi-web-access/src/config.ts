@@ -61,14 +61,10 @@ const DEFAULT_MODEL: Partial<Record<BuiltInProviderId, string>> = {
 // ─── Settings loading ────────────────────────────────────────────────────────
 
 export function loadWebToolSettings(cwd: string, projectTrusted = false): WebToolSettings {
-  try {
-    return loadPiSettings<WebToolSettings>(SETTINGS_KEY, {
-      cwd,
-      projectTrusted,
-    });
-  } catch {
-    return {};
-  }
+  return loadPiSettings<WebToolSettings>(SETTINGS_KEY, {
+    cwd,
+    projectTrusted,
+  });
 }
 
 // ─── Provider resolution ─────────────────────────────────────────────────────

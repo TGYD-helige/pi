@@ -1,3 +1,4 @@
+import { SafeToolError } from '@amaster.ai/pi-shared';
 import type {
   Comment,
   ExecFn,
@@ -30,9 +31,21 @@ export async function initMulticaProvider(
   const binary = config.binary?.trim() || 'multica';
   let available = false;
   try {
-    available = (await exec(binary, ['--version'])).code === 0;
-  } catch {
-    available = false;
+    const probe = await exec(binary, ['--version']);
+    available = probe.code === 0;
+    if (!available && probe.code !== 127)
+      throw new SafeToolError(
+        'Multica version check',
+        undefined,
+        'The CLI returned an unsuccessful status. Inspect the existing installation before retrying.',
+      );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT')
+      throw new SafeToolError(
+        'Multica version check',
+        error,
+        'The CLI availability check failed. Check its status before deciding to install it.',
+      );
   }
   const installResult: InstallResult = available
     ? { installed: true, alreadyPresent: true }
@@ -45,34 +58,36 @@ export async function initMulticaProvider(
     return { adapter: new MulticaAdapter(config, exec), installResult };
   }
 
+  const run = async (stage: string, args: string[]) => {
+    try {
+      const result = await exec(binary, args);
+      if (result.code !== 0) throw new Error('CLI exited unsuccessfully');
+      return result;
+    } catch (error) {
+      throw new SafeToolError(
+        `Multica ${stage}`,
+        error,
+        'Initialization did not complete. Check the CLI and provider status before retrying.',
+      );
+    }
+  };
   if (config.serverUrl) {
-    try {
-      await exec(binary, ['config', 'set', 'server_url', config.serverUrl]);
-    } catch {
-      // Config may already be set
-    }
-    if (config.appUrl) {
-      try {
-        await exec(binary, ['config', 'set', 'app_url', config.appUrl]);
-      } catch {
-        // Config may already be set
-      }
-    }
+    await run('server configuration', ['config', 'set', 'server_url', config.serverUrl]);
+    if (config.appUrl) await run('app configuration', ['config', 'set', 'app_url', config.appUrl]);
   }
-
   try {
-    await exec(binary, ['daemon', 'start']);
-  } catch {
-    // Daemon may already be running
-  }
-
-  if (config.token) {
+    await run('daemon startup', ['daemon', 'start']);
+  } catch (error) {
+    let running = false;
     try {
-      await exec(binary, ['login', '--token', config.token]);
+      const status = await run('daemon status', ['daemon', 'status', '--output', 'json']);
+      running = (JSON.parse(status.stdout) as { running?: unknown }).running === true;
     } catch {
-      // Login may already be done
+      /* Preserve the original startup failure when status cannot confirm recovery. */
     }
+    if (!running) throw error;
   }
+  if (config.token) await run('login', ['login', '--token', config.token]);
 
   return { adapter: new MulticaAdapter(config, exec), installResult };
 }
@@ -248,13 +263,13 @@ export class MulticaAdapter implements TeamworkProvider {
   private async run(args: string[]): Promise<string> {
     this.execution?.signal?.throwIfAborted();
     if (this.execution && Date.now() >= this.execution.deadline)
-      throw new Error('Teamwork operation timed out.');
+      throw new DOMException('Teamwork operation timed out.', 'TimeoutError');
     const { stdout, stderr, code } = await (this.execution
       ? this.exec(this.binary, args, this.execution)
       : this.exec(this.binary, args));
     this.execution?.signal?.throwIfAborted();
     if (this.execution && Date.now() >= this.execution.deadline)
-      throw new Error('Teamwork operation timed out.');
+      throw new DOMException('Teamwork operation timed out.', 'TimeoutError');
     if (code !== 0) {
       const message = stderr.trim() || stdout.trim() || `Exit code ${code}`;
       throw new Error(`multica ${args[0]} failed: ${message}`);

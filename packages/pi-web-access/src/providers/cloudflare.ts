@@ -1,3 +1,4 @@
+import { SafeToolError, ValidationError } from '@amaster.ai/pi-shared';
 import { truncateHead, truncateLine } from '@earendil-works/pi-coding-agent';
 import type { ResolvedProvider, SearchParams, SearchResponse } from './base.js';
 import { BaseProvider, timeoutSignal } from './base.js';
@@ -11,13 +12,15 @@ export class CloudflareProvider extends BaseProvider {
     signal?: AbortSignal,
   ): Promise<SearchResponse> {
     if (typeof provider.apiKey !== 'string' || !provider.apiKey.trim()) {
-      throw new Error(
+      throw new ValidationError(
         'Cloudflare API token not configured. Set CLOUDFLARE_API_TOKEN or providers.cloudflare.apiKey.',
+        'configuration_error',
       );
     }
     if (typeof provider.accountId !== 'string' || !/^[A-Za-z0-9_-]+$/.test(provider.accountId)) {
-      throw new Error(
+      throw new ValidationError(
         'Cloudflare account ID missing or invalid. Set CLOUDFLARE_ACCOUNT_ID or providers.cloudflare.accountId.',
+        'configuration_error',
       );
     }
     if (
@@ -25,29 +28,40 @@ export class CloudflareProvider extends BaseProvider {
       !params.query.trim() ||
       [...params.query].length > 1024
     ) {
-      throw new Error('Cloudflare search query must contain 1–1024 characters.');
+      throw new ValidationError(
+        'Cloudflare search query must contain 1–1024 characters.',
+        'invalid_request',
+      );
     }
     const maxResults = params.maxResults ?? 5;
     if (!Number.isInteger(maxResults) || maxResults < 1) {
-      throw new Error('Cloudflare maxResults must be a positive integer.');
+      throw new ValidationError(
+        'Cloudflare maxResults must be a positive integer.',
+        'invalid_request',
+      );
     }
     const limit = Math.min(maxResults, 10);
     const searchProvider = provider.searchProvider ?? 'ceramic';
     if (!['ceramic', 'exa', 'linkup'].includes(searchProvider)) {
-      throw new Error('Cloudflare searchProvider must be ceramic, exa, or linkup.');
+      throw new ValidationError(
+        'Cloudflare searchProvider must be ceramic, exa, or linkup.',
+        'configuration_error',
+      );
     }
     const gatewayId = provider.gatewayId ?? 'default';
     if (typeof gatewayId !== 'string' || !gatewayId.trim())
-      throw new Error('Cloudflare gatewayId must not be empty.');
+      throw new ValidationError('Cloudflare gatewayId must not be empty.', 'configuration_error');
     if (
       provider.byokAlias !== undefined &&
       (typeof provider.byokAlias !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(provider.byokAlias))
     ) {
-      throw new Error(
+      throw new ValidationError(
         'Cloudflare byokAlias must contain 1–64 letters, digits, underscores, or hyphens.',
+        'configuration_error',
       );
     }
 
+    const requestSignal = timeoutSignal(provider.timeoutMs ?? 30_000, signal);
     let response: Response;
     try {
       response = await fetch(
@@ -66,12 +80,13 @@ export class CloudflareProvider extends BaseProvider {
             options: { gateway: { id: gatewayId } },
             ...(provider.byokAlias === undefined ? {} : { byokAlias: provider.byokAlias }),
           }),
-          signal: timeoutSignal(provider.timeoutMs ?? 30_000, signal),
+          signal: requestSignal,
         },
       );
-    } catch {
+    } catch (error) {
+      requestSignal.throwIfAborted();
       console.error('[pi-web-access] Cloudflare search request failed or was cancelled');
-      throw new Error('Cloudflare search request failed or was cancelled.');
+      throw new SafeToolError('Cloudflare search request', error);
     }
     if (!response.ok) {
       console.error(`[pi-web-access] Cloudflare Web Search API error (HTTP ${response.status})`);
@@ -85,9 +100,15 @@ export class CloudflareProvider extends BaseProvider {
     };
     try {
       data = (await response.json()) as typeof data;
-    } catch {
+    } catch (error) {
+      requestSignal.throwIfAborted();
+      if (!(error instanceof SyntaxError))
+        throw new SafeToolError('Read Cloudflare search response', error);
       console.error('[pi-web-access] Cloudflare returned invalid JSON');
-      throw new Error('Cloudflare returned an invalid search response.');
+      throw new ValidationError(
+        'Cloudflare returned an invalid search response.',
+        'invalid_response',
+      );
     }
     if (
       !data ||

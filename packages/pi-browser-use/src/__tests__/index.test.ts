@@ -1,3 +1,5 @@
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+
 const { piVersion } = vi.hoisted(() => ({ piVersion: { value: '1.2.0' } }));
 
 import { afterEach, beforeEach, describe, expect, it, test, vi } from 'vitest';
@@ -42,10 +44,11 @@ const mockListAllTools = vi.fn(() =>
   ]),
 );
 
-const mockCallTool = vi.fn((_name: string, _args: Record<string, unknown>, _signal?: AbortSignal) =>
-  Promise.resolve({
-    content: [{ type: 'text', text: 'Tool result' }],
-  }),
+const mockCallTool = vi.fn(
+  (_name: string, _args: Record<string, unknown>, _signal?: AbortSignal): Promise<CallToolResult> =>
+    Promise.resolve({
+      content: [{ type: 'text', text: 'Tool result' }],
+    }),
 );
 
 const mockConnect = vi.fn(() => Promise.resolve());
@@ -83,7 +86,7 @@ vi.mock('node:fs', async (importOriginal) => {
   return {
     ...actual,
     readFileSync: vi.fn(() => {
-      throw new Error('ENOENT');
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     }),
   };
 });
@@ -179,7 +182,7 @@ describe('browserUseExtension', () => {
     vi.mocked(fs.readFileSync)
       .mockReset()
       .mockImplementation(() => {
-        throw new Error('ENOENT');
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
       });
     piVersion.value = '1.2.0';
     registeredTools.clear();
@@ -528,6 +531,40 @@ describe('browserUseExtension', () => {
       expect(tool!.promptSnippet).toContain('browser_list_pages');
     });
 
+    it.each([
+      ['error', 'http_error'],
+      ['aborted', 'cancelled'],
+      ['empty', 'invalid_response'],
+    ])('marks %s vision results as failed analysis', async (kind, category) => {
+      await startExtension({ visionModel: { provider: 'fixture', model: 'fixture' } });
+      mockCallTool.mockResolvedValueOnce({
+        content: [{ type: 'image', data: 'aW1hZ2U=', mimeType: 'image/png' }],
+      });
+      mockComplete.mockResolvedValueOnce(
+        Object.assign(
+          { content: [{ type: 'text', text: kind === 'empty' ? '  ' : 'partial test-token' }] },
+          {
+            stopReason: kind === 'empty' ? 'stop' : kind,
+            errorMessage: kind === 'error' ? 'HTTP 403: test-token' : 'test-token',
+          },
+        ),
+      );
+      const result = await registeredTools
+        .get('browser_analyze_screenshot')!
+        .execute('id', {}, undefined, undefined, {
+          modelRegistry: {
+            find: () => ({ id: 'fixture', provider: 'fixture' }),
+            getApiKeyAndHeaders: async () => ({ ok: true, apiKey: 'test-key' }),
+          },
+        });
+      expect(result).toMatchObject({
+        isError: true,
+        structuredContent: { errorCategory: category },
+      });
+      expect(JSON.stringify(result)).not.toContain('test-token');
+      expect(JSON.stringify(result)).not.toContain('Fields:');
+    });
+
     it('omits temperature when the configured vision model uses reasoning', async () => {
       await startExtension({
         visionModel: { provider: 'deepseek-integration', model: 'kimi-k2.6' },
@@ -571,6 +608,30 @@ describe('browserUseExtension', () => {
       };
 
       expect(result.isError).toBe(true);
+    });
+
+    it.each([
+      ['HTTP 403: test-token', 'http_error'],
+      ['Timed out after 5000 ms: test-token', 'timeout'],
+      ['test-token', 'request_failed'],
+    ])('sanitizes explicit upstream failures before converting content: %s', async (message, category) => {
+      await startExtension();
+      mockCallTool.mockResolvedValueOnce({
+        isError: true,
+        content: [
+          { type: 'text', text: message },
+          { type: 'image', data: 'test-token', mimeType: 'image/png' },
+        ],
+        structuredContent: { error: 'test-token', body: 'private body' },
+      });
+      const result = await registeredTools
+        .get('browser_click')!
+        .execute('call-1', {}, undefined, undefined, {});
+      expect(result).toMatchObject({
+        isError: true,
+        structuredContent: { errorCategory: category },
+      });
+      expect(JSON.stringify(result)).not.toMatch(/test-token|stack trace|private body/);
     });
 
     it('forwards the Pi abort signal during visual screenshot capture', async () => {
@@ -672,7 +733,8 @@ describe('browserUseExtension', () => {
         isError?: boolean;
       };
 
-      expect(result.content[0]!.text).toContain('element not found');
+      expect(result.content[0]!.text).toContain('Browser tool failed');
+      expect(result.content[0]!.text).not.toContain('element not found');
       expect(result.isError).toBe(true);
     });
 

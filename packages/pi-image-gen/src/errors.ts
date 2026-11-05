@@ -1,4 +1,9 @@
-import { readResponseBytes } from '@amaster.ai/pi-shared';
+import {
+  classifyError,
+  describeToolError,
+  readResponseBytes,
+  SafeToolError,
+} from '@amaster.ai/pi-shared';
 import type { ResolvedProvider } from './types.js';
 
 /**
@@ -11,10 +16,11 @@ import type { ResolvedProvider } from './types.js';
  * one-liner, e.g. `OpenAI HTTP 400 (bad-request)`). The sinks below surface
  * those views and redact anything else.
  */
-export class ImageGenError extends Error {
+export class ImageGenError extends SafeToolError {
   readonly logSummary: string;
-  constructor(message: string, logSummary: string) {
-    super(message);
+  constructor(message: string, logSummary: string, cause?: unknown) {
+    super('Media operation', cause ?? new Error(message));
+    this.message = message;
     this.name = 'ImageGenError';
     this.logSummary = logSummary.split(/[\r\n]/, 1)[0] || 'image generation failed';
   }
@@ -35,7 +41,13 @@ export function toLogSummary(error: unknown): string {
 /** user/LLM sink: an ImageGenError's vetted message, else a fixed sentence. */
 export function errorMessageForUser(error: unknown): string {
   if (error instanceof ImageGenError) return error.message;
-  return 'Image generation failed unexpectedly. Retry once; if it persists, report a pi-image-gen bug.';
+  if (classifyError(error).errorCategory !== 'request_failed')
+    return describeToolError(
+      'Image generation',
+      error,
+      'Check whether the provider completed the request before retrying.',
+    ).error;
+  return 'Image generation failed unexpectedly. Check whether the provider completed the request before retrying; report a pi-image-gen bug if it persists.';
 }
 
 /**
@@ -83,7 +95,8 @@ function httpCategory(status: number): string {
 export function classifyHttpError(res: Response, provider: ResolvedProvider): ImageGenError {
   const where = providerLocator(provider);
   const summary = `${providerLogLabel(provider)} HTTP ${res.status} (${httpCategory(res.status)})`;
-  const err = (message: string) => new ImageGenError(message, summary);
+  const err = (message: string) =>
+    new ImageGenError(message, summary, Object.assign(new Error(), { status: res.status }));
 
   if (res.status === 401 || res.status === 403) {
     return err(
@@ -135,8 +148,16 @@ export function isAbortError(error: unknown): boolean {
 
 /** Short, body-free category label for a non-HTTP (network/parse) error. */
 function networkCategory(error: unknown): string {
-  if (isAbortError(error)) return 'cancelled';
-  const msg = error instanceof Error ? error.message : String(error);
+  const category = classifyError(error).errorCategory;
+  if (category === 'timeout') return 'timeout';
+  if (category === 'cancelled') return 'cancelled';
+  if (category === 'network_error') return 'unreachable';
+  const msg =
+    error instanceof Error
+      ? error.message.slice(0, 1024)
+      : typeof error === 'string'
+        ? error.slice(0, 1024)
+        : '';
   if (/timeout|timed out|ETIMEDOUT/i.test(msg)) return 'timeout';
   if (/ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET/i.test(msg)) return 'unreachable';
   return 'network-error';
@@ -151,7 +172,15 @@ function networkCategory(error: unknown): string {
 export function describeNetworkError(error: unknown, provider: ResolvedProvider): ImageGenError {
   const category = networkCategory(error);
   const summary = `${providerLogLabel(provider)} request failed (${category})`;
-  const err = (message: string) => new ImageGenError(message, summary);
+  const err = (message: string) =>
+    new ImageGenError(
+      message,
+      summary,
+      Object.assign(new Error(), {
+        errorCategory:
+          category === 'unreachable' || category === 'network-error' ? 'network_error' : category,
+      }),
+    );
   if (category === 'cancelled') {
     return err(`Request to ${provider.name} was cancelled.`);
   }
@@ -205,10 +234,16 @@ export function describeDownloadError(
   }
   const category = networkCategory(cause.rejected);
   return new ImageGenError(
-    category === 'cancelled'
-      ? `Downloading ${what} from ${where} was cancelled.`
-      : `Could not reach ${where} to download ${what}. Tell the user to verify the URL is reachable.`,
+    category === 'timeout'
+      ? `Downloading ${what} from ${where} timed out. Retry the download when connectivity recovers.`
+      : category === 'cancelled'
+        ? `Downloading ${what} from ${where} was cancelled.`
+        : `Could not reach ${where} to download ${what}. Tell the user to verify the URL is reachable.`,
     `${what} download failed (${category})`,
+    Object.assign(new Error(), {
+      errorCategory:
+        category === 'unreachable' || category === 'network-error' ? 'network_error' : category,
+    }),
   );
 }
 
@@ -248,7 +283,11 @@ export function describeWriteError(what: string, error: unknown): ImageGenError 
 
 /** Body-free error for a cancelled operation (`what` is a fixed caller label). */
 export function cancelledError(what: string): ImageGenError {
-  return new ImageGenError(`${what} was cancelled.`, `${what} cancelled`);
+  return new ImageGenError(
+    `${what} was cancelled.`,
+    `${what} cancelled`,
+    new DOMException('Cancelled', 'AbortError'),
+  );
 }
 
 /**

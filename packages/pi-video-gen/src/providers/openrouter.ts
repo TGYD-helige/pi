@@ -64,10 +64,11 @@ async function imageFileToDataUri(path: string): Promise<string> {
   return `data:${mime};base64,${bytes.toString('base64')}`;
 }
 
-function ambiguousSubmitError(): AmbiguousSubmitError {
+function ambiguousSubmitError(error?: unknown): AmbiguousSubmitError {
   return new AmbiguousSubmitError(
     'Task creation failed with an ambiguous result (network error or server 5xx). The provider MAY have created a paid task — check OpenRouter activity before retrying to avoid double billing.',
     'openrouter submit: ambiguous outcome',
+    error,
   );
 }
 
@@ -120,11 +121,12 @@ export const openrouterAdapter: VideoProviderAdapter = {
         body: JSON.stringify(body),
         signal: signal ?? null,
       });
-    } catch {
-      throw ambiguousSubmitError();
+    } catch (error) {
+      throw ambiguousSubmitError(error);
     }
     if (!res.ok) {
-      if (res.status >= 500) throw ambiguousSubmitError();
+      if (res.status >= 500)
+        throw ambiguousSubmitError(Object.assign(new Error(), { status: res.status }));
       throw httpStatusError('openrouter', 'submit', res.status);
     }
 
@@ -132,8 +134,8 @@ export const openrouterAdapter: VideoProviderAdapter = {
     try {
       const json = (await res.json()) as { id?: string };
       taskId = json.id;
-    } catch {
-      throw ambiguousSubmitError();
+    } catch (error) {
+      throw ambiguousSubmitError(error);
     }
     if (!taskId) {
       // 2xx but no id: the task MAY exist server-side — this is ambiguous,
@@ -161,8 +163,8 @@ export const openrouterAdapter: VideoProviderAdapter = {
         headers: { authorization: `Bearer ${provider.apiKey}` },
         signal: signal ?? null,
       });
-    } catch {
-      throw networkError('openrouter', 'inspect');
+    } catch (error) {
+      throw networkError('openrouter', 'inspect', error);
     }
     if (!res.ok) throw httpStatusError('openrouter', 'inspect', res.status);
 

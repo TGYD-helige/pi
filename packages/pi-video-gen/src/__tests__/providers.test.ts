@@ -1,8 +1,15 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { classifyError } from '@amaster.ai/pi-shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { httpStatusError, networkError, safeBasename, VideoGenError } from '../errors.js';
+import {
+  AmbiguousSubmitError,
+  httpStatusError,
+  networkError,
+  safeBasename,
+  VideoGenError,
+} from '../errors.js';
 import { arkAdapter } from '../providers/ark.js';
 import { requestFingerprint } from '../providers/request.js';
 import { pollTask, sanitizeProviderMessage } from '../providers/task.js';
@@ -479,6 +486,18 @@ describe('pollTask', () => {
     ).rejects.toThrow(/Lost contact/);
   });
 
+  it('retains the transport category when polling exhausts retries', async () => {
+    await expect(
+      pollTask({
+        check: async () => {
+          throw networkError('ark', 'inspect', new DOMException('secret', 'TimeoutError'));
+        },
+        intervalMs: 1,
+        maxConsecutiveErrors: 1,
+      }),
+    ).rejects.toMatchObject({ errorCategory: 'timeout' });
+  });
+
   it('retries transient inspect HTTP errors', async () => {
     const statuses = [429, 503];
     const result = await pollTask({
@@ -516,5 +535,26 @@ describe('pollTask', () => {
         intervalMs: 50,
       }),
     ).rejects.toThrow(/cancelled/i);
+  });
+});
+
+describe('Ark submit body failures', () => {
+  it('keeps a body timeout and paid-task uncertainty together', async () => {
+    const response = Object.assign(new Response('{}'), {
+      json: async () => {
+        throw new DOMException('secret-token', 'TimeoutError');
+      },
+    });
+    const error = await arkAdapter
+      .submit(
+        { style: 'ark', apiKey: 'fixture', baseUrl: 'https://fixture.invalid' },
+        'fixture',
+        { prompt: 'fixture' },
+        mockFetch(async () => response),
+      )
+      .catch((error) => error);
+    expect(error).toBeInstanceOf(AmbiguousSubmitError);
+    expect(classifyError(error).errorCategory).toBe('timeout');
+    expect(JSON.stringify(error)).not.toContain('secret-token');
   });
 });

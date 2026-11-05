@@ -32,6 +32,13 @@ function makeTask(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
 }
 
 describe('JsonScheduledTaskStore', () => {
+  it('does not replace corrupt task data with a fresh task', async () => {
+    const file = path.join(TEST_DIR, 'corrupt.json');
+    writeFileSync(file, '{broken');
+    const store = new JsonScheduledTaskStore(file);
+    await expect(store.create(makeTask())).rejects.toThrow(/backup/i);
+  });
+
   it('scopes reads and mutations to the owning session', async () => {
     const store = new JsonScheduledTaskStore(path.join(TEST_DIR, 'scoped.json'));
     const first = await store.create(makeTask({ id: 'first', sessionId: 'session-a' }));
