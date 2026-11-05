@@ -11,7 +11,7 @@ import {
   validateBrowserBinding,
   validateBrowserExpiry,
 } from './session-backend.js';
-import { createBrowserConnection } from './session-connection.js';
+import { createBrowserConnection, listenOnReachablePort } from './session-connection.js';
 import { BrowserSessionError, scriptValue } from './session-control.js';
 
 const MAX_BYTES = 32 * 1024 * 1024;
@@ -543,16 +543,10 @@ export async function serveBrowserSession(
   }, 1000);
   try {
     await client.connect(startupSignal);
-    await new Promise<void>((resolve, reject) => {
-      server.once('error', reject);
-      server.listen(0, '127.0.0.1', resolve);
-    });
+    const port = await listenOnReachablePort(server, startupSignal);
+    return { port, stop };
   } catch (error) {
     await stop('lost');
     throw error;
   }
-  const address = server.address();
-  if (!address || typeof address === 'string')
-    throw new BrowserSessionError('Could not start browser session transport.');
-  return { port: address.port, stop };
 }
