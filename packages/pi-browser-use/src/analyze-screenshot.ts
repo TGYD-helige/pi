@@ -223,16 +223,21 @@ export async function handleAnalyzeScreenshot(
 
     const { truncateHead } = await import('@earendil-works/pi-coding-agent');
     signal?.throwIfAborted();
-    const bounded = truncateHead(`Visual Analysis Result:\n${analysis}`, {
+    const bounded = truncateHead(analysis, {
       maxBytes: 50 * 1024 - 128,
       maxLines: 1998,
     });
+    if (!bounded.content.trim())
+      throw new ValidationError(
+        'Visual analysis exceeds the output limit. Request a shorter analysis.',
+        'invalid_response',
+      );
     return {
       content: [
         {
           type: 'text',
           text:
-            bounded.content +
+            `Visual Analysis Result:\n${bounded.content}` +
             (bounded.truncated ? '\n[Visual analysis truncated; request a smaller result.]' : ''),
         },
       ],

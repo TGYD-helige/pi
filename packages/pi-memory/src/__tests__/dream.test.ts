@@ -125,6 +125,7 @@ describe('runDream', () => {
     'missing message role',
     'invalid message content',
     'invalid text block',
+    'mixed fork entries',
   ])('preserves the checkpoint for corrupted %s and rescans repaired history', async (kind) => {
     const memoryDir = path.join(home, 'memories');
     const previous = { lastConsolidatedAt: null, lastSessionCount: 0 };
@@ -161,6 +162,11 @@ describe('runDream', () => {
           bad.type = 'message';
           bad.parentId = null;
           bad.message = { role: 'user', content: [{ type: 'text', text: 42 }] };
+        }
+        if (kind === 'mixed fork entries') {
+          lines[0] = JSON.stringify({ ...JSON.parse(lines[0]!), parentSession: 'legacy-source' });
+          delete bad.id;
+          delete bad.parentId;
         }
         lines.push(JSON.stringify(bad));
       }
@@ -238,6 +244,49 @@ describe('runDream', () => {
       }),
     ).resolves.toBe(true);
     expect(runConsolidationMock.mock.calls[0]![0].turns).toHaveLength(1);
+  });
+
+  it.each([
+    'fresh',
+    'continued',
+    'large',
+  ])('scans the actual runtime fork of a legacy session (%s)', async (kind) => {
+    const continued = kind !== 'fresh';
+    const source = SessionManager.create(home, sessionDir, { id: 'legacy-source' });
+    appendTurn(source, 2);
+    const sourceFile = source.getSessionFile()!;
+    const entries = (await readFile(sourceFile, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    entries[0].version = 1;
+    if (kind === 'large')
+      entries.at(-1)!.message.content = [{ type: 'text', text: 'legacy'.repeat(60_000) }];
+    for (const entry of entries.slice(1)) {
+      delete entry.id;
+      delete entry.parentId;
+    }
+    await writeFile(sourceFile, entries.map((entry) => JSON.stringify(entry)).join('\n'));
+    const fork = SessionManager.forkFrom(sourceFile, home, sessionDir);
+    const forkFile = fork.getSessionFile()!;
+    const forkEntries = (await readFile(forkFile, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    expect(forkEntries[0]).toMatchObject({ version: 3, parentSession: sourceFile });
+    expect(forkEntries[1]).not.toHaveProperty('id');
+    if (continued) appendTurn(fork, 3);
+    const before = await readFile(forkFile, 'utf8');
+    await expect(
+      runDream({
+        memoryDir: path.join(home, 'memories'),
+        modelRegistry: modelRegistry(),
+        sessionDir,
+        dreaming: { minTurnsSinceLastRun: 1 },
+      }),
+    ).resolves.toBe(true);
+    expect(runConsolidationMock.mock.calls[0]![0].turns).toHaveLength(continued ? 4 : 3);
+    expect(await readFile(forkFile, 'utf8')).toBe(before);
   });
 
   it('preserves the checkpoint and surfaces failed consolidation', async () => {

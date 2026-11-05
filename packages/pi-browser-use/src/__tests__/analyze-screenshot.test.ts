@@ -315,14 +315,29 @@ describe('handleAnalyzeScreenshot', () => {
     ).rejects.toBe(reason);
   });
 
-  it('bounds visual model output before returning it to the agent', async () => {
+  it('rejects an oversized single-line analysis when truncation would remove all analysis', async () => {
     const result = await handleAnalyzeScreenshot(
       createMockClient(),
       mockVisionCaller('x'.repeat(100_000)),
       {},
     );
     expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(50 * 1024);
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent?.errorCategory).toBe('invalid_response');
+    expect(result.content[0]!.text).toContain('shorter analysis');
+  });
+
+  it('keeps useful analysis when a multiline response is truncated', async () => {
+    const result = await handleAnalyzeScreenshot(
+      createMockClient(),
+      mockVisionCaller('Button at (100, 200)\n'.repeat(3000)),
+      {},
+    );
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0]!.text).toContain('Button at (100, 200)');
     expect(result.content[0]!.text).toContain('truncated');
+    expect(result.content[0]!.text.split('\n').length).toBeLessThanOrEqual(2000);
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(50 * 1024);
   });
 
   test('prefixes success result with Visual Analysis Result', async () => {

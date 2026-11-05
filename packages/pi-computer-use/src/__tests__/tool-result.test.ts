@@ -3,6 +3,51 @@ import { describe, expect, it } from 'vitest';
 import { toPiToolResult } from '../tool-result.js';
 
 describe('toPiToolResult', () => {
+  it.each([
+    undefined,
+    'checkout',
+  ])('sanitizes a real driver refusal and preserves caller session %s', (session) => {
+    const result = toPiToolResult(
+      {
+        content: [{ type: 'text', text: 'refused (browser_requires_setup): test-token' }],
+        structuredContent: {
+          status: 'refused',
+          refusal: {
+            code: 'browser_requires_setup',
+            message: 'test-token',
+            detail: {
+              next_call: {
+                tool: 'browser_prepare',
+                arguments: {
+                  pid: 123,
+                  window_id: 456,
+                  session: 'test-token',
+                  strategy: { kind: 'existing_profile' },
+                  allow_launch: true,
+                },
+              },
+              private: 'test-token',
+            },
+          },
+        },
+      },
+      'get_browser_state',
+      undefined,
+      { session },
+    );
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).not.toContain('test-token');
+    expect(result.details?.next_call).toEqual({
+      tool: 'browser_prepare',
+      arguments: {
+        pid: 123,
+        window_id: 456,
+        strategy: { kind: 'existing_profile' },
+        ...(session ? { session } : {}),
+      },
+    });
+  });
+
   it('preserves text-only results when structured content is absent', () => {
     expect(
       toPiToolResult({ content: [{ type: 'text', text: 'Action executed with details.' }] })

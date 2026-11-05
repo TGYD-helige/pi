@@ -381,6 +381,58 @@ describe('computerUseExtension', () => {
     });
   });
 
+  it('sanitizes actual driver refusals and keeps the original recovery session', async () => {
+    await start();
+    mockCallTool = (name) =>
+      name === 'get_browser_state'
+        ? {
+            content: [{ type: 'text', text: 'refused (browser_requires_setup): test-token' }],
+            structuredContent: {
+              status: 'refused',
+              refusal: {
+                code: 'browser_requires_setup',
+                message: 'test-token',
+                detail: {
+                  next_call: {
+                    tool: 'browser_prepare',
+                    arguments: {
+                      pid: 123,
+                      window_id: 456,
+                      session: 'test-token',
+                      strategy: { kind: 'existing_profile' },
+                    },
+                  },
+                },
+              },
+            },
+          }
+        : { content: [{ type: 'text', text: 'ok' }] };
+    const result = await tools
+      .get('computer_use_get_browser_state')!
+      .execute(
+        'state',
+        { pid: 123, window_id: 456, session: 'checkout' },
+        undefined,
+        undefined,
+        mockCtx,
+      );
+    expect(result).toMatchObject({ isError: true });
+    expect(JSON.stringify(result)).not.toContain('test-token');
+    expect(result).toMatchObject({
+      details: {
+        next_call: {
+          tool: 'browser_prepare',
+          arguments: {
+            pid: 123,
+            window_id: 456,
+            session: 'checkout',
+            strategy: { kind: 'existing_profile' },
+          },
+        },
+      },
+    });
+  });
+
   it('returns the current dialog capability without dispatching a blocked browser action', async () => {
     const calls: string[] = [];
     await start();

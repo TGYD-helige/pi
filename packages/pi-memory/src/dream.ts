@@ -321,6 +321,44 @@ async function scanPiSessionTurns(
         ) {
           throw new ValidationError(INVALID_HISTORY, 'configuration_error');
         }
+        if (
+          header.version === 3 &&
+          typeof header.parentSession === 'string' &&
+          header.parentSession.length > 0
+        ) {
+          const first = entries[1];
+          if (
+            start > 0 &&
+            first &&
+            Object.hasOwn(first, 'id') &&
+            !Object.hasOwn(first, 'parentId') &&
+            window < MAX_RECOVERY_BYTES
+          ) {
+            // Recover the legacy boundary before attaching a continued fork's first modern entry.
+            window = Math.min(metadata.size, MAX_RECOVERY_BYTES, window * 4);
+            continue;
+          }
+          let legacyEnd = 1;
+          while (
+            legacyEnd < entries.length &&
+            !Object.hasOwn(entries[legacyEnd]!, 'id') &&
+            !Object.hasOwn(entries[legacyEnd]!, 'parentId')
+          )
+            legacyEnd++;
+          if (legacyEnd > 1) {
+            // forkFrom copies v1 bodies under v3 headers; continued forks append modern entries.
+            migrateSessionEntries([{ ...header, version: 1 }, ...entries.slice(1, legacyEnd)]);
+            const next = entries[legacyEnd];
+            if (
+              next &&
+              next.type !== 'session' &&
+              Object.hasOwn(next, 'id') &&
+              !Object.hasOwn(next, 'parentId')
+            ) {
+              next.parentId = (entries[legacyEnd - 1] as SessionEntry).id;
+            }
+          }
+        }
         migrateSessionEntries(entries);
         const byId = new Map<string, SessionEntry>();
         let leaf: SessionEntry | undefined;

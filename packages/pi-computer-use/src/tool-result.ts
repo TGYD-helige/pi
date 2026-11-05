@@ -95,12 +95,13 @@ export function toPiToolResult(
   result: McpToolResult,
   toolName?: string,
   safeErrorText?: string,
+  originalArgs?: Record<string, unknown>,
 ): {
   content: PiToolContent[];
   details: Record<string, unknown> | undefined;
   isError?: boolean;
 } {
-  if (result.isError) {
+  if (result.isError || result.structuredContent?.status === 'refused') {
     const message = (result.content ?? [])
       .slice(0, 4)
       .filter((item) => item.type === 'text')
@@ -112,7 +113,7 @@ export function toPiToolResult(
       result,
       'The execution outcome is unknown. Read the current target state before retrying any action.',
     );
-    const setup = browserSetupRecovery(result.structuredContent, message, toolName);
+    const setup = browserSetupRecovery(result.structuredContent, message, toolName, originalArgs);
     if (setup) failure.error = setup.message;
     if (safeErrorText) failure.error = safeErrorText + (setup ? `\n${setup.message}` : '');
     console.error(`[pi-computer-use] upstream tool failed (category=${failure.errorCategory})`);
@@ -542,7 +543,12 @@ function safeFailureMetadata(value: Record<string, unknown> = {}): Record<string
   return metadata;
 }
 
-function browserSetupRecovery(value: unknown, text: string, toolName?: string) {
+function browserSetupRecovery(
+  value: unknown,
+  text: string,
+  toolName?: string,
+  originalArgs?: Record<string, unknown>,
+) {
   if (toolName !== 'get_browser_state' && !toolName?.startsWith('browser_')) return undefined;
   const object = (item: unknown): Record<string, unknown> | undefined =>
     item && typeof item === 'object' && !Array.isArray(item)
@@ -556,7 +562,7 @@ function browserSetupRecovery(value: unknown, text: string, toolName?: string) {
       /* Raw errors need not be JSON. */
     }
   }
-  const error = object(root?.error);
+  const error = object(root?.refusal) ?? object(root?.error);
   const code = [
     root?.code,
     error?.code,
@@ -569,13 +575,25 @@ function browserSetupRecovery(value: unknown, text: string, toolName?: string) {
   const pid = args?.pid;
   const windowId = args?.window_id;
   const existing = object(args?.strategy)?.kind === 'existing_profile';
+  const session = originalArgs?.session;
+  const validSession =
+    session === undefined || (typeof session === 'string' && session.length <= 1024);
   const validId = (id: unknown): id is number =>
     typeof id === 'number' && Number.isSafeInteger(id) && id > 0;
   const nextCall =
-    next?.tool === 'browser_prepare' && existing && validId(pid) && validId(windowId)
+    next?.tool === 'browser_prepare' &&
+    existing &&
+    validId(pid) &&
+    validId(windowId) &&
+    validSession
       ? {
           tool: 'browser_prepare',
-          arguments: { pid, window_id: windowId, strategy: { kind: 'existing_profile' } },
+          arguments: {
+            pid,
+            window_id: windowId,
+            strategy: { kind: 'existing_profile' },
+            ...(session !== undefined ? { session } : {}),
+          },
         }
       : { tool: 'get_guide', arguments: { topic: 'browser' } };
   return {

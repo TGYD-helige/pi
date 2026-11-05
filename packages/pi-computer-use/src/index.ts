@@ -490,6 +490,7 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
                   { ...dialog, isError: true },
                   'browser_dialog',
                   blockedMessage,
+                  params,
                 );
               }
               if (state.present) {
@@ -514,10 +515,11 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
                 result,
                 originalName,
                 formatToolError(originalName, errorText, params),
+                params,
               );
             }
 
-            return toPiToolResult(result, originalName);
+            return toPiToolResult(result, originalName, undefined, params);
           } catch (connErr) {
             if (signal?.aborted) throw connErr;
             const failure = toolFailure(originalName, connErr);
