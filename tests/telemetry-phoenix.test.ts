@@ -79,6 +79,7 @@ describe('Phoenix live integration', () => {
           phoenix: {
             enabled: true,
             endpoint: endpoint!,
+            ...(process.env.PHOENIX_TEST_PROJECT ? { projectName: PROJECT_NAME } : {}),
             ...(apiKey ? { apiKey } : {}),
             flushAt: 100,
           },

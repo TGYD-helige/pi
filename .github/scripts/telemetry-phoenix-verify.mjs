@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 
 // Verifies the same Stage C prompt as telemetry-langfuse-verify.mjs, through
-// Phoenix's spans API. The existing github-pi project is read-only; the
-// codeword selects the shared trace without creating per-run projects.
+// Phoenix's spans API. PHOENIX_PROJECT_NAME selects an existing project;
+// the codeword selects its trace without creating per-run projects.
 // Required env: PHOENIX_API_KEY, PHOENIX_COLLECTOR_ENDPOINT.
-// Optional env: TELEMETRY_CODEWORD, TELEMETRY_SCENARIO (basic/hierarchy/redacted).
+// Optional env: PHOENIX_PROJECT_NAME (default github-pi), TELEMETRY_CODEWORD,
+//               TELEMETRY_SCENARIO (basic/hierarchy/redacted).
 
 import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
@@ -173,11 +174,13 @@ async function main() {
     console.error('::error::PHOENIX_API_KEY and PHOENIX_COLLECTOR_ENDPOINT are required.');
     process.exit(1);
   }
+  const projectName = envOr(process.env.PHOENIX_PROJECT_NAME, DEFAULT_PROJECT_NAME);
   const codeword = envOr(process.env.TELEMETRY_CODEWORD, 'ci-langfuse-probe');
   const scenario = envOr(process.env.TELEMETRY_SCENARIO, 'basic');
   const result = await runVerification({
     endpoint,
     apiKey,
+    projectName,
     codeword,
     scenario,
     log: (message) => console.error(message),
@@ -188,7 +191,7 @@ async function main() {
   }
   console.error(
     `::error::pi-telemetry Phoenix trace did not reach the expected shape before the deadline ` +
-      `(codeword "${codeword}", project "${DEFAULT_PROJECT_NAME}"). Last state: ${result.state}`,
+      `(codeword "${codeword}", project "${projectName}"). Last state: ${result.state}`,
   );
   process.exit(1);
 }
