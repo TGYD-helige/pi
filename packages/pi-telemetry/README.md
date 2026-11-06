@@ -27,7 +27,7 @@ The extension hooks into the following Pi lifecycle events:
 | `message_update` | Record provider stream events beneath the active LLM generation |
 | `agent_end` | Store the latest result; complete immediately on legacy Pi |
 | `agent_before_settle` | Record the final run outcome when available |
-| `agent_settled` | Complete the root or subagent span and flush after retries and queued continuations finish; record cancellation from `aborted` when available |
+| `agent_settled` | Complete the root or subagent span and schedule one background flush after retries and queued continuations finish; record cancellation from `aborted` when available |
 | `tool_execution_start` | Begin tool span |
 | `tool_execution_end` | End tool span with result and native execution `durationMs` when available (Pi 1.1+) |
 | `message_end` | Complete an LLM generation span with output and usage |
@@ -40,6 +40,8 @@ The extension hooks into the following Pi lifecycle events:
 ### Trace lifecycle
 
 Traces are scoped to new user prompt boundaries. Steering and follow-ups queued during streaming remain in the running trace as input observations until settlement. A single user message may trigger multiple model requests, retries and tool calls, grouped under one trace. Pi 0.84.2 and later finish the trace on `agent_settled`; earlier peers retain `agent_end`. Errors, cancellation and superseded requests are recorded explicitly.
+
+Settlement schedules at most one background flush and returns without waiting for a slow or unreachable backend. Later spans are covered by the next settlement or final close. `session_shutdown` waits for the pending flush before closing the exporter, so delivery is not abandoned, while `/telemetry flush` remains the explicit way to wait for and inspect a flush.
 
 Root session IDs come from Pi session storage, so resumed sessions retain their identity and new/forked sessions use their own IDs. Prompt numbering resumes from persisted user messages. Child processes retain the inherited root session and trace while using their local Pi session ID for observations. Correlation environment variables are restored at settlement and shutdown.
 

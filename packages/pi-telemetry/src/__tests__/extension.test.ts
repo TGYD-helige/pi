@@ -1,3 +1,4 @@
+import { setTimeout as delay } from 'node:timers/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RuntimeTelemetryEvent } from '../index.js';
 
@@ -1220,6 +1221,42 @@ describe('telemetryExtension', () => {
     const llmEvents = events.filter((e) => 'llmGenerationId' in e && 'status' in e);
     expect(llmEvents[0]).toMatchObject({ llmGenerationId: 'gen-1' });
     expect(llmEvents[1]).toMatchObject({ llmGenerationId: 'gen-1' });
+  });
+
+  it('does not block settlement on backend flush but waits for it before close', async () => {
+    let finishFlush!: () => void;
+    const flush = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishFlush = resolve;
+        }),
+    );
+    const close = vi.fn(() => Promise.resolve());
+    vi.mocked(createTelemetryExporter).mockReturnValue({
+      publish: vi.fn(() => Promise.resolve()),
+      flush,
+      close,
+    });
+    telemetryExtension(mockPi as any);
+    await fireEvent('session_start', {});
+    await fireEvent('turn_start', { timestamp: Date.now() });
+
+    const settled = fireEvent('agent_settled', {});
+    const outcome = await Promise.race([settled.then(() => 'settled'), delay(50, 'blocked')]);
+    expect(outcome).toBe('settled');
+    expect(flush).toHaveBeenCalledOnce();
+
+    await fireEvent('turn_start', { timestamp: Date.now() });
+    const nextSettled = fireEvent('agent_settled', {});
+    await nextSettled;
+    expect(flush).toHaveBeenCalledOnce();
+
+    const shutdown = fireEvent('session_shutdown', {});
+    await Promise.resolve();
+    expect(close).not.toHaveBeenCalled();
+    finishFlush();
+    await Promise.all([settled, nextSettled, shutdown]);
+    expect(close).toHaveBeenCalledOnce();
   });
 
   it('closes exporter on session_shutdown', async () => {
