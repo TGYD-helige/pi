@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { describe, expect, it } from 'vitest';
-import { readBodyCapped } from '../.github/scripts/telemetry-langfuse-verify.mjs';
+import { readBodyCapped, traceIdForCodeword } from '../.github/scripts/telemetry-langfuse-verify.mjs';
 import { createTelemetryExporter } from '../packages/pi-telemetry/src/otel.js';
 import {
   phoenixTestContext,
@@ -11,6 +11,7 @@ import {
 const endpoint = process.env.PHOENIX_TEST_ENDPOINT;
 const apiKey = process.env.PHOENIX_TEST_API_KEY;
 const liveIt = endpoint ? it : it.skip;
+const PROJECT_NAME = process.env.PHOENIX_TEST_PROJECT ?? 'default';
 const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
 const MAX_SPANS = 100;
 
@@ -25,9 +26,14 @@ type StoredSpan = {
   events: Array<{ name: string; timestamp?: string }>;
 };
 
-async function fetchSpans(projectName: string): Promise<StoredSpan[]> {
+async function fetchSpans(projectName: string, traceId: string): Promise<StoredSpan[]> {
+  const query = new URLSearchParams({
+    limit: String(MAX_SPANS),
+    order: 'asc',
+    trace_id: traceIdForCodeword(traceId),
+  });
   const response = await fetch(
-    `${endpoint!.replace(/\/+$/, '')}/v1/projects/${encodeURIComponent(projectName)}/spans?limit=100&order=asc`,
+    `${endpoint!.replace(/\/+$/, '')}/v1/projects/${encodeURIComponent(projectName)}/spans?${query}`,
     {
       ...(apiKey ? { headers: { Authorization: `Bearer ${apiKey}` } } : {}),
       signal: AbortSignal.timeout(5000),
@@ -48,11 +54,15 @@ async function fetchSpans(projectName: string): Promise<StoredSpan[]> {
   return body.data;
 }
 
-async function waitForSpans(projectName: string, expected: number): Promise<StoredSpan[]> {
+async function waitForSpans(
+  projectName: string,
+  expected: number,
+  traceId: string,
+): Promise<StoredSpan[]> {
   const deadline = Date.now() + 10_000;
   let spans: StoredSpan[] = [];
   while (Date.now() < deadline) {
-    spans = await fetchSpans(projectName);
+    spans = await fetchSpans(projectName, traceId);
     if (spans.length === expected) return spans;
     await delay(250);
   }
@@ -63,26 +73,25 @@ describe('Phoenix live integration', () => {
   liveIt('ingests prompt to LLM to tool to LLM traces with and without payloads', async () => {
     try {
       for (const includePayloads of [true, false]) {
-        const projectName = `pi-telemetry-test-${randomUUID()}`;
+        const traceId = `pi-telemetry-test-${randomUUID()}`;
         const exporter = createTelemetryExporter({
           includePayloads,
           phoenix: {
             enabled: true,
             endpoint: endpoint!,
-            projectName,
             ...(apiKey ? { apiKey } : {}),
             flushAt: 100,
           },
         });
         try {
-          await publishPromptTrace(exporter, 'hello', 'command failed', projectName);
+          await publishPromptTrace(exporter, 'hello', 'command failed', traceId);
           await exporter.flush?.();
           expect(exporter.getStatus?.()?.state).not.toBe('error');
         } finally {
           await exporter.close?.();
         }
 
-        const spans = await waitForSpans(projectName, includePayloads ? 5 : 4);
+        const spans = await waitForSpans(PROJECT_NAME, includePayloads ? 5 : 4, traceId);
         expect(spans).toHaveLength(includePayloads ? 5 : 4);
         const root = spans.find((span) => span.name === 'chat-turn');
         expect(root).toBeDefined();

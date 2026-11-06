@@ -309,8 +309,7 @@ jobs:
               "phoenix": {
                 "enabled": true,
                 "endpoint": "\${PHOENIX_COLLECTOR_ENDPOINT}",
-                "apiKey": "\${PHOENIX_API_KEY}",
-                "projectName": "ci-phoenix-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+                "apiKey": "\${PHOENIX_API_KEY}"
               }
             }
           }
@@ -602,9 +601,7 @@ jobs:
             INCLUDE_PAYLOADS_JSON=false
           fi
           # Every leg that loads pi-telemetry exports the same run to both backends.
-          # A per-job Phoenix project prevents cross-job trace/project collisions.
-          PHOENIX_PROJECT="ci-phoenix-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${{ strategy.job-index }}"
-          echo "PHOENIX_PROJECT=$PHOENIX_PROJECT" >> "$GITHUB_ENV"
+          # Unique codeworded trace IDs isolate verification within the existing project.
           cat > "$PI_CODING_AGENT_DIR/settings.json" <<EOF
           {
             "pi-teamwork": {
@@ -697,8 +694,7 @@ jobs:
               "phoenix": {
                 "enabled": true,
                 "endpoint": "\${PHOENIX_COLLECTOR_ENDPOINT}",
-                "apiKey": "\${PHOENIX_API_KEY}",
-                "projectName": "${PHOENIX_PROJECT}"
+                "apiKey": "\${PHOENIX_API_KEY}"
               }
             }
           }
@@ -1260,7 +1256,7 @@ jobs:
           env.PI_INTEGRATION_BASE_URL != '' &&
           env.PI_INTEGRATION_API_KEY != ''
         # Queries the same codeworded trace as the Langfuse assertion, through
-        # the unique Phoenix project selected before the prompt started.
+        # the existing github-pi project; no per-run project is created.
         timeout-minutes: 2
         env:
           PHOENIX_API_KEY: ${{ secrets.PHOENIX_API_KEY }}

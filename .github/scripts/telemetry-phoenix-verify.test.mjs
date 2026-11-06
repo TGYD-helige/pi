@@ -85,7 +85,6 @@ function args(scenario = 'basic') {
   return {
     endpoint: 'http://phoenix.test/v1/traces/',
     apiKey: 'phoenix-secret',
-    projectName: 'project space',
     codeword: CODEWORD,
     scenario,
     deadlineMs: 250,
@@ -117,7 +116,9 @@ it('maps Phoenix OpenInference spans and verifies the basic hierarchy with Beare
     },
   });
   assert.equal(result.ok, true, result.state);
-  assert.ok(calls[0].url.startsWith('http://phoenix.test/v1/projects/project%20space/spans?'));
+  const url = new URL(calls[0].url);
+  assert.equal(url.pathname, '/v1/projects/github-pi/spans');
+  assert.equal(url.searchParams.get('trace_id'), TRACE_ID);
   assert.equal(calls[0].init.headers.authorization, 'Bearer phoenix-secret');
 });
 

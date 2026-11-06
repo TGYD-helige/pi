@@ -156,9 +156,9 @@ Then run the integration test in another terminal:
 PHOENIX_TEST_ENDPOINT=http://localhost:6006 pnpm vitest run tests/telemetry-phoenix.test.ts
 ```
 
-For an authenticated server, also set `PHOENIX_TEST_API_KEY` in the test environment. The test creates uniquely named projects and checks stored hierarchy, project/session grouping, model, token/cost attributes, errors, TTFT events, and payload suppression through Phoenix's spans API.
+For an authenticated server, also set `PHOENIX_TEST_API_KEY` in the test environment. The test uses unique trace IDs and checks stored hierarchy, project/session grouping, model, token/cost attributes, errors, TTFT events, and payload suppression through Phoenix's spans API. It does not set `projectName` on the exporter. Unauthenticated local Phoenix uses its `default` project; set `PHOENIX_TEST_PROJECT` only when the verifier needs to read a different existing project.
 
-The GitHub Actions `Integration` workflow also exports every Stage B/Stage C run that loads `pi-telemetry` to both Langfuse and Phoenix. The dedicated browser-session model harness is an explicit exception because it disables other extensions and telemetry to isolate browser state. The `pi-telemetry` basic, hierarchy, and redacted scenarios verify the same real prompt against both backends without a second model call. Phoenix verification uses the `PHOENIX_API_KEY` and `PHOENIX_COLLECTOR_ENDPOINT` Actions secrets and a unique `PHOENIX_PROJECT` per run/attempt/job; missing credentials fail the affected E2E step instead of silently skipping export.
+The GitHub Actions `Integration` workflow also exports every Stage B/Stage C run that loads `pi-telemetry` to both Langfuse and Phoenix. The dedicated browser-session model harness is an explicit exception because it disables other extensions and telemetry to isolate browser state. The `pi-telemetry` basic, hierarchy, and redacted scenarios verify the same real prompt against both backends without a second model call. Phoenix verification uses the `PHOENIX_API_KEY` and `PHOENIX_COLLECTOR_ENDPOINT` Actions secrets with the existing `github-pi` project, filtering its spans by each run's unique codeworded trace ID; it does not create per-run or per-job projects. Missing credentials fail the affected E2E step instead of silently skipping export.
 
 ## Programmatic Usage
 

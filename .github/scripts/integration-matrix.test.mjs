@@ -160,12 +160,13 @@ test('loads pi-telemetry for every model-backed integration run', async () => {
   assert.match(smoke, /PHOENIX_API_KEY: \${{ secrets\.PHOENIX_API_KEY }}/);
   assert.match(smoke, /PHOENIX_COLLECTOR_ENDPOINT: \${{ secrets\.PHOENIX_COLLECTOR_ENDPOINT }}/);
   assert.match(smoke, /PHOENIX_API_KEY and PHOENIX_COLLECTOR_ENDPOINT are required for Stage B telemetry/);
+  assert.doesNotMatch(smoke, /"projectName"/);
   assert.match(matrix, /pi install "\.\/packages\/pi-telemetry"/);
   assert.match(matrix, /LANGFUSE_PUBLIC_KEY: \${{ secrets\.LANGFUSE_PUBLIC_KEY }}/);
   assert.match(matrix, /PHOENIX_API_KEY: \${{ secrets\.PHOENIX_API_KEY }}/);
   assert.match(matrix, /PHOENIX_COLLECTOR_ENDPOINT: \${{ secrets\.PHOENIX_COLLECTOR_ENDPOINT }}/);
   assert.match(matrix, /"phoenix": \{\s*"enabled": true,\s*"endpoint": "\\\$\{PHOENIX_COLLECTOR_ENDPOINT\}"/);
-  assert.match(matrix, /"projectName": "\$\{PHOENIX_PROJECT\}"/);
+  assert.doesNotMatch(matrix, /PHOENIX_PROJECT|"projectName"/);
   assert.match(matrix, /name: Verify Phoenix trace \(pi-telemetry only\)/);
   assert.match(matrix, /node \.github\/scripts\/telemetry-phoenix-verify\.mjs/);
   assert.match(matrix, /PHOENIX_API_KEY and PHOENIX_COLLECTOR_ENDPOINT are required for every model-backed E2E run/);
@@ -341,7 +342,7 @@ test('threads the integration model through generated configs and skill evaluati
   assert.equal(documents.length, 4);
   for (const model of ['deepseek-v4-flash', 'glm-5.3-flash', 'custom-model']) {
     const configs = documents.map(([, kind, body]) => [kind, JSON.parse(execFileSync('bash', ['-c', `cat <<EOF\n${body}\nEOF`], {
-      encoding: 'utf8', env: { PATH: process.env.PATH, PI_INTEGRATION_MODEL: model, WEB_ACCESS_SETTINGS: '{}', IMAGE_GEN_MODEL: 'image-model', INCLUDE_PAYLOADS_JSON: 'true', PHOENIX_PROJECT: 'ci-phoenix-test-project', RUNNER_TEMP: '/tmp/pi-integration-config-test' },
+      encoding: 'utf8', env: { PATH: process.env.PATH, PI_INTEGRATION_MODEL: model, WEB_ACCESS_SETTINGS: '{}', IMAGE_GEN_MODEL: 'image-model', INCLUDE_PAYLOADS_JSON: 'true', RUNNER_TEMP: '/tmp/pi-integration-config-test' },
     }))]);
     for (const [, config] of configs.filter(([kind]) => kind === 'models')) {
       assert.equal(config.providers['deepseek-integration'].models[0].id, model);
@@ -361,8 +362,8 @@ test('threads the integration model through generated configs and skill evaluati
       enabled: true,
       endpoint: '${PHOENIX_COLLECTOR_ENDPOINT}',
       apiKey: '${PHOENIX_API_KEY}',
-      projectName: 'ci-phoenix-test-project',
     });
+    assert.equal('projectName' in settings['pi-telemetry'].phoenix, false);
   }
 });
 
