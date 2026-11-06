@@ -11,7 +11,7 @@ import {
 const endpoint = process.env.PHOENIX_TEST_ENDPOINT;
 const apiKey = process.env.PHOENIX_TEST_API_KEY;
 const liveIt = endpoint ? it : it.skip;
-const PROJECT_NAME = process.env.PHOENIX_TEST_PROJECT ?? 'default';
+const PROJECT_NAME = process.env.PHOENIX_PROJECT_NAME ?? 'default';
 const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
 const MAX_SPANS = 100;
 
@@ -79,7 +79,7 @@ describe('Phoenix live integration', () => {
           phoenix: {
             enabled: true,
             endpoint: endpoint!,
-            ...(process.env.PHOENIX_TEST_PROJECT ? { projectName: PROJECT_NAME } : {}),
+            ...(process.env.PHOENIX_PROJECT_NAME ? { projectName: PROJECT_NAME } : {}),
             ...(apiKey ? { apiKey } : {}),
             flushAt: 100,
           },
