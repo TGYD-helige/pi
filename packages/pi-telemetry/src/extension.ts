@@ -1046,9 +1046,9 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   });
 
   pi.on('session_shutdown', async () => {
-    if (pendingFlush) await pendingFlush;
+    // SDK shutdown drains queued spans and awaits in-flight exports together.
+    await Promise.all([pendingFlush, exporter.close?.()]);
     pendingFlush = undefined;
-    await exporter.close?.();
     restoreCorrelation();
   });
 }

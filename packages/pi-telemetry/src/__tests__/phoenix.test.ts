@@ -1,5 +1,6 @@
 import { once } from 'node:events';
 import { createServer } from 'node:http';
+import { gunzipSync } from 'node:zlib';
 import { SpanStatusCode } from '@opentelemetry/api';
 import { OTLPTraceExporter as OtlpJsonExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { OTLPTraceExporter as OtlpProtoExporter } from '@opentelemetry/exporter-trace-otlp-proto';
@@ -49,6 +50,8 @@ describe('Phoenix telemetry export', () => {
       contentType: string;
       authorization: string;
       bytes: number;
+      encoding: string;
+      decodedBytes: number;
     }> = [];
     const server = createServer(async (request, response) => {
       const chunks: Buffer[] = [];
@@ -58,6 +61,11 @@ describe('Phoenix telemetry export', () => {
         contentType: String(request.headers['content-type']),
         authorization: String(request.headers.authorization),
         bytes: Buffer.concat(chunks).length,
+        encoding: String(request.headers['content-encoding']),
+        decodedBytes:
+          request.headers['content-encoding'] === 'gzip'
+            ? gunzipSync(Buffer.concat(chunks)).length
+            : Buffer.concat(chunks).length,
       });
       const protobuf = request.headers['content-type'] === 'application/x-protobuf';
       response.writeHead(200, {
@@ -102,6 +110,7 @@ describe('Phoenix telemetry export', () => {
       await exporter.flush?.();
 
       expect(phoenixSpans).toHaveLength(5);
+      expect(new Set(phoenixSpans.map((span) => span.resource)).size).toBe(1);
       expect(otherSpans).toHaveLength(10);
       const otherById = new Map(
         otherSpans.map((span) => [
@@ -175,6 +184,7 @@ describe('Phoenix telemetry export', () => {
         expect.arrayContaining([
           expect.objectContaining({
             url: '/phoenix/v1/traces',
+            encoding: 'gzip',
             contentType: 'application/x-protobuf',
             authorization: 'Bearer phoenix-secret',
           }),
@@ -192,8 +202,62 @@ describe('Phoenix telemetry export', () => {
       expect(
         requests.find((request) => request.url === '/phoenix/v1/traces')?.bytes,
       ).toBeGreaterThan(0);
+      const phoenixRequest = requests.find((request) => request.url === '/phoenix/v1/traces')!;
+      expect(phoenixRequest.bytes).toBeLessThan(phoenixRequest.decodedBytes);
     } finally {
       await exporter.close?.();
+      server.close();
+      await once(server, 'close');
+    }
+  });
+
+  it('drains queued spans during an in-flight flush and waits for both HTTP responses on close', async () => {
+    const responses: import('node:http').ServerResponse[] = [];
+    const server = createServer(async (request, response) => {
+      request.resume();
+      await once(request, 'end');
+      responses.push(response);
+      server.emit('export-request');
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('missing test server port');
+    const exporter = createTelemetryExporter({
+      phoenix: {
+        enabled: true,
+        endpoint: `http://127.0.0.1:${address.port}`,
+        projectName: 'pi-tests',
+        flushAt: 100,
+        flushIntervalMs: 60_000,
+      },
+    });
+    let closing: Promise<void> | undefined;
+    let closed = false;
+    try {
+      await publishPromptTrace(exporter);
+      const firstRequest = once(server, 'export-request');
+      const flushing = exporter.flush?.();
+      await firstRequest;
+      await publishPromptTrace(exporter);
+      const secondRequest = once(server, 'export-request');
+      closing = exporter.close?.().then(() => {
+        closed = true;
+      });
+      await secondRequest;
+      responses[1]!.writeHead(200, { 'content-type': 'application/x-protobuf' });
+      responses[1]!.end();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(closed).toBe(false);
+      responses[0]!.writeHead(200, { 'content-type': 'application/x-protobuf' });
+      responses[0]!.end();
+      await Promise.all([flushing, closing]);
+      expect(closed).toBe(true);
+      expect(responses).toHaveLength(2);
+      expect(exporter.getStatus?.().state).toBe('closed');
+    } finally {
+      for (const response of responses) response.end();
+      await (closing ?? exporter.close?.());
       server.close();
       await once(server, 'close');
     }
@@ -243,9 +307,10 @@ describe('Phoenix telemetry export', () => {
     'phoenix',
   ])('marks %s partial acceptance as an error without retrying', async (destination) => {
     const requests: string[] = [];
-    const server = createServer((request, response) => {
+    const server = createServer(async (request, response) => {
       requests.push(request.url ?? '');
       request.resume();
+      await once(request, 'end');
       const protobuf = destination === 'phoenix';
       response.writeHead(200, {
         'content-type': protobuf ? 'application/x-protobuf' : 'application/json',
@@ -297,9 +362,10 @@ describe('Phoenix telemetry export', () => {
 
   it('accepts decimal string rejectedSpans in OTLP JSON', async () => {
     const requests: string[] = [];
-    const server = createServer((request, response) => {
+    const server = createServer(async (request, response) => {
       requests.push(request.url ?? '');
       request.resume();
+      await once(request, 'end');
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(JSON.stringify({ partialSuccess: { rejectedSpans: '1' } }));
     });

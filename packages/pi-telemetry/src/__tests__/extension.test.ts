@@ -1223,7 +1223,7 @@ describe('telemetryExtension', () => {
     expect(llmEvents[1]).toMatchObject({ llmGenerationId: 'gen-1' });
   });
 
-  it('does not block settlement on backend flush but waits for it before close', async () => {
+  it('starts shutdown while a background flush is pending and awaits both', async () => {
     let finishFlush!: () => void;
     const flush = vi.fn(
       () =>
@@ -1253,7 +1253,7 @@ describe('telemetryExtension', () => {
 
     const shutdown = fireEvent('session_shutdown', {});
     await Promise.resolve();
-    expect(close).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledOnce();
     finishFlush();
     await Promise.all([settled, nextSettled, shutdown]);
     expect(close).toHaveBeenCalledOnce();
