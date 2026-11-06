@@ -261,6 +261,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   let presetRootTraceId = isSubagent ? undefined : inheritedTraceId;
 
   let exporter: RuntimeEventExporter = new NoopRuntimeEventExporter();
+  let pendingFlush: Promise<void> | undefined;
   let localSessionId: string = randomUUID();
   let sessionId = isSubagent && inheritedSessionId ? inheritedSessionId : localSessionId;
   const parentSessionId = isSubagent ? inheritedSessionId : undefined;
@@ -309,10 +310,42 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     };
   }
 
+  function flushInBackground(ctx: ExtensionContext): void {
+    if (pendingFlush) return;
+    // One in-flight flush drains the current queue. Later spans are covered by
+    // the next settlement or by close(), which always performs final delivery.
+    const targetExporter = exporter;
+    const targetSessionId = sessionId;
+    const tracked = Promise.resolve()
+      .then(() => targetExporter.flush?.())
+      .catch(() => {
+        console.error('[pi-telemetry] export flush failed');
+      })
+      .finally(() => {
+        if (pendingFlush === tracked) pendingFlush = undefined;
+        if (exporter === targetExporter && sessionId === targetSessionId) showStatus(ctx);
+      });
+    pendingFlush = tracked;
+  }
+
   function showStatus(ctx: ExtensionContext): void {
-    if (!ctx.hasUI) return;
-    const status = exporter.getStatus?.();
-    ctx.ui.setStatus?.('telemetry', `telemetry: ${status?.state ?? 'enabled'}`);
+    try {
+      if (!ctx.hasUI) return;
+      const status = exporter.getStatus?.();
+      ctx.ui.setStatus?.('telemetry', `telemetry: ${status?.state ?? 'enabled'}`);
+    } catch (error) {
+      // A background flush may finish after Pi has invalidated this exact ctx.
+      if (
+        !(
+          error instanceof Error &&
+          error.message.startsWith(
+            'This extension ctx is stale after session replacement or reload.',
+          )
+        )
+      ) {
+        throw error;
+      }
+    }
   }
 
   pi.registerCommand('telemetry', {
@@ -571,7 +604,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
       boundaryFailure = { error: 'Run cancelled', outcome: 'aborted' };
     }
     await completeTrace();
-    await exporter.flush?.();
+    flushInBackground(ctx);
     showStatus(ctx);
   });
 
@@ -1013,6 +1046,8 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   });
 
   pi.on('session_shutdown', async () => {
+    if (pendingFlush) await pendingFlush;
+    pendingFlush = undefined;
     await exporter.close?.();
     restoreCorrelation();
   });

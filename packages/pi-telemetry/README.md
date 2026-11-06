@@ -2,16 +2,16 @@
 
 ![pi-telemetry preview](https://raw.githubusercontent.com/TGYD-helige/pi/master/packages/pi-telemetry/preview-observability.png)
 
-Runtime traces, first-token latency, token and cost accounting, and diagnostics for Pi. Langfuse and generic OpenTelemetry export share one private provider.
+Runtime traces, first-token latency, token and cost accounting, and diagnostics for Pi. Langfuse, Arize Phoenix, and generic OpenTelemetry export share one private provider.
 
-Uses the official Langfuse JS v5 and OpenTelemetry SDKs. Langfuse export runs through `@langfuse/tracing` and `@langfuse/otel`; generic OTLP export uses `OTLPTraceExporter`. Requests time out after 15 seconds and lifecycle flushes are capped at 30 seconds.
+Uses the official Langfuse JS v5 and OpenTelemetry SDKs. Langfuse export runs through `@langfuse/tracing` and `@langfuse/otel`; generic OTLP export uses the JSON `OTLPTraceExporter`. Phoenix uses the matching protobuf exporter because its direct `/v1/traces` endpoint does not accept OTLP/JSON. Requests time out after 15 seconds and lifecycle flushes are capped at 30 seconds.
 
 ## Entry Points
 
 - `@amaster.ai/pi-telemetry`: stable contracts, `NoopRuntimeEventExporter`, and `CompositeRuntimeEventExporter`.
 - `@amaster.ai/pi-telemetry/config`: `TelemetryConfig` type, `resolveConfig`, and `loadConfigFromFile`.
 - `@amaster.ai/pi-telemetry/langfuse`: Langfuse JS v5 exporter using `@langfuse/tracing` and `@langfuse/otel`.
-- `@amaster.ai/pi-telemetry/otel`: generic OTLP/HTTP traces exporter.
+- `@amaster.ai/pi-telemetry/otel`: generic OTLP/HTTP and Phoenix exporters, plus the combined telemetry factory.
 
 ## Events
 
@@ -27,7 +27,7 @@ The extension hooks into the following Pi lifecycle events:
 | `message_update` | Record provider stream events beneath the active LLM generation |
 | `agent_end` | Store the latest result; complete immediately on legacy Pi |
 | `agent_before_settle` | Record the final run outcome when available |
-| `agent_settled` | Complete the root or subagent span and flush after retries and queued continuations finish; record cancellation from `aborted` when available |
+| `agent_settled` | Complete the root or subagent span and schedule one background flush after retries and queued continuations finish; record cancellation from `aborted` when available |
 | `tool_execution_start` | Begin tool span |
 | `tool_execution_end` | End tool span with result and native execution `durationMs` when available (Pi 1.1+) |
 | `message_end` | Complete an LLM generation span with output and usage |
@@ -40,6 +40,8 @@ The extension hooks into the following Pi lifecycle events:
 ### Trace lifecycle
 
 Traces are scoped to new user prompt boundaries. Steering and follow-ups queued during streaming remain in the running trace as input observations until settlement. A single user message may trigger multiple model requests, retries and tool calls, grouped under one trace. Pi 0.84.2 and later finish the trace on `agent_settled`; earlier peers retain `agent_end`. Errors, cancellation and superseded requests are recorded explicitly.
+
+Settlement schedules at most one background flush and returns without waiting for a slow or unreachable backend. Later spans are covered by the next settlement or final close. `session_shutdown` waits for the pending flush before closing the exporter, so delivery is not abandoned, while `/telemetry flush` remains the explicit way to wait for and inspect a flush. Status refreshes when a background flush completes, but only if the exporter and session are still current, so an older session cannot overwrite a newer session's status.
 
 Root session IDs come from Pi session storage, so resumed sessions retain their identity and new/forked sessions use their own IDs. Prompt numbering resumes from persisted user messages. Child processes retain the inherited root session and trace while using their local Pi session ID for observations. Correlation environment variables are restored at settlement and shutdown.
 
@@ -71,6 +73,14 @@ Configuration is read from the `"pi-telemetry"` section of, in increasing priori
       "enabled": true,
       "endpoint": "https://otel-collector.example.com",
       "headers": { "Authorization": "Bearer ..." },
+      "flushAt": 20,
+      "flushIntervalMs": 5000
+    },
+    "phoenix": {
+      "enabled": true,
+      "endpoint": "http://localhost:6006",
+      "apiKey": "${PHOENIX_API_KEY}",
+      "projectName": "pi-agent",
       "flushAt": 20,
       "flushIntervalMs": 5000
     }
@@ -115,14 +125,52 @@ Boolean settings also accept environment-interpolated `true`, `TRUE`, `1`, and `
 
 When the endpoint does not end with `/v1/traces`, the exporter appends `/v1/traces`.
 
+### Phoenix Config
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | `boolean` | `false` | Enable Phoenix/OpenInference export |
+| `endpoint` | `string` | `"http://localhost:6006"` | Self-hosted, Cloud, or full OTLP traces URL |
+| `apiKey` | `string` | — | Phoenix API key, sent as `Authorization: Bearer ...` |
+| `projectName` | `string` | Phoenix server default | Phoenix project, set only on Phoenix's `openinference.project.name` resource attribute |
+| `flushAt` | `number` | `20` | Phoenix batch size before flush |
+| `flushIntervalMs` | `number` | `5000` | Phoenix flush interval in ms |
+
+For unauthenticated self-hosted Phoenix, use `endpoint: "http://localhost:6006"` and omit `apiKey`. For Phoenix Cloud or an authenticated server, set `apiKey` in user or agent-directory settings with `"${PHOENIX_API_KEY}"` interpolation and use the supplied space URL, for example `https://app.phoenix.arize.com/s/<space>`. A base URL or a full `/v1/traces` URL is accepted; trailing slashes are normalized and path prefixes are preserved without appending the suffix twice. Do not put API keys in trusted project settings: project settings do not expand environment variables.
+
+The Phoenix adapter projects the same finished spans to OpenInference `AGENT`, `CHAIN`, `LLM`, and `TOOL` kinds. It preserves trace/span IDs and timing, maps the root session to `session.id`, bare model identity and provider, tool name/call ID, and reported token details. Prompt tokens include reported cache read/write tokens; reasoning remains a completion detail rather than being counted twice. Payloads and their MIME types appear only with `includePayloads: true`. Phoenix-specific resource and span attributes are cloned before export, so simultaneous Langfuse and generic OTLP projections remain unchanged and retain matching IDs.
+
+Known Pi cost components are exported as OpenInference cost attributes without inventing a reasoning-cost split. Phoenix normally calculates displayed cost during ingestion from its own model/provider price table, so unknown models require Phoenix custom pricing and displayed cost can differ from the reported amount. A reported first-content timestamp is preserved as a `first_token` span event; Phoenix has no standard OpenInference TTFT attribute or dedicated TTFT display, although normal span latency remains available.
+
+Use `phoenix`, not `otel`, for a direct Phoenix endpoint: Phoenix accepts protobuf on this path, while generic OTLP intentionally retains its existing JSON wire format. An external collector that translates OTLP/JSON can still receive generic OTLP and forward it to Phoenix.
+
+### Live Phoenix verification
+
+The opt-in integration test exports and queries real prompt → LLM → tool → LLM traces with payloads enabled and disabled. It is skipped during normal unit test runs. From the repository root, start Phoenix in one terminal:
+
+```sh
+docker run --rm -e PHOENIX_ENABLE_AUTH=false -p 6006:6006 -p 4317:4317 arizephoenix/phoenix:latest
+```
+
+Then run the integration test in another terminal:
+
+```sh
+PHOENIX_TEST_ENDPOINT=http://localhost:6006 pnpm vitest run tests/telemetry-phoenix.test.ts
+```
+
+For an authenticated server, also set `PHOENIX_TEST_API_KEY` in the test environment. The test uses unique trace IDs and checks stored hierarchy, project/session grouping, model, token/cost attributes, errors, TTFT events, and payload suppression through Phoenix's spans API. It does not set `projectName` on the exporter. Unauthenticated local Phoenix uses its `default` project; set `PHOENIX_TEST_PROJECT` only when the verifier needs to read a different existing project.
+
+The GitHub Actions `Integration` workflow also exports every Stage B/Stage C run that loads `pi-telemetry` to both Langfuse and Phoenix. The dedicated browser-session model harness is an explicit exception because it disables other extensions and telemetry to isolate browser state. The `pi-telemetry` basic, hierarchy, and redacted scenarios verify the same real prompt against both backends without a second model call. Phoenix verification uses the `PHOENIX_API_KEY` and `PHOENIX_COLLECTOR_ENDPOINT` Actions secrets with the existing `github-pi` project, filtering its spans by each run's unique codeworded trace ID; it does not create per-run or per-job projects. Missing credentials fail the affected E2E step instead of silently skipping export.
+
 ## Programmatic Usage
 
 ```ts
 import { loadConfigFromFile, resolveConfig } from "@amaster.ai/pi-telemetry/config";
-import { createTelemetryExporter } from "@amaster.ai/pi-telemetry/otel";
+import { createPhoenixExporter, createTelemetryExporter } from "@amaster.ai/pi-telemetry/otel";
 
 const config = resolveConfig(loadConfigFromFile());
-const telemetry = createTelemetryExporter(config); // one provider for both destinations
+const telemetry = createTelemetryExporter(config); // one provider for all configured destinations
+const phoenixOnly = createPhoenixExporter(config);
 ```
 
 ## Privacy
@@ -147,12 +195,12 @@ Compaction and branch summaries are generations in the active trace or standalon
 - `/telemetry status` (or `/telemetry`): show exporter state and session ID without exposing credentials.
 - `/telemetry flush`: flush pending finished spans and report export errors/timeouts. This does not end active spans or confirm backend ingestion.
 
-The TUI status indicates readiness, disabled export, missing credentials/endpoint, flush completion, or export failure. Configuration warnings remain visible when the other destination is active. Export callbacks track failures separately for Langfuse and generic OTLP; one destination succeeding does not hide the other's failure. Status refreshes at session startup, settlement and explicit commands.
+The TUI status indicates readiness, disabled export, missing credentials/endpoint, flush completion, or export failure. Configuration warnings remain visible when another destination is active. Export callbacks track failures separately for Langfuse, generic OTLP, and Phoenix; one destination succeeding does not hide another's failure. OTLP partial-success responses with `rejectedSpans > 0` also mark that destination as an error and are not retried as a whole batch, avoiding duplicate spans; decimal-string int64 values used by OTLP/JSON are recognized without numeric conversion. A later complete success clears the error. Status refreshes at session startup, settlement and explicit commands.
 
 ## Images and credential masking
 
 Images require both payload and media switches. Prompt and tool images use validated inline image data supported by the Langfuse SDK; conversation history uses image markers. Disabled, invalid or oversized image binaries are replaced with markers, including binaries embedded in provider requests. Inline media is capped at 600 KB of base64 per content value and 750 KB per event; larger inputs retain an explicit omitted-image marker. Oversized attribute truncation removes media before generating a preview to prevent partial image uploads. Generic OTLP may contain opted-in inline media; its collector does not perform Langfuse media uploads.
 
-All configured Langfuse credentials and sensitive OTLP header values, including those for disabled destinations, and Langfuse key patterns are masked before either destination, including error messages and raw stream inputs. This is credential masking, not general PII removal. The default remains no conversation/tool payload export, and `redactEvent` remains available for application-specific policies.
+All configured Langfuse credentials, Phoenix API keys, and sensitive OTLP header values, including those for disabled destinations, and Langfuse key patterns are masked before every destination, including error messages and raw stream inputs. This is credential masking, not general PII removal. The default remains no conversation/tool payload export, and `redactEvent` remains available for application-specific policies.
 
 When export is disabled, event handlers skip telemetry processing. Disabled startup also skips runtime loading and history scans. With `includePayloads: false`, each generation retains an empty `llm-stream` child for timing and hierarchy, while the extension skips context projection and model/tool payload capture while preserving usage, errors, model attribution, and first-token timing. Stream capture stops converting subsequent frames after the existing 1 MB capture ceiling is reached.

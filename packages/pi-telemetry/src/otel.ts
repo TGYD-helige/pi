@@ -7,25 +7,28 @@ import {
   resolveLangfuseExporterConfig,
 } from './langfuse.js';
 import { parseBoolean, parsePositiveInteger, trim } from './parse.js';
+import { resolvePhoenixExporterConfig, toPhoenixDestinationConfig } from './phoenix/config.js';
 
 const DEFAULT_OTEL_FLUSH_AT = 20;
 const DEFAULT_OTEL_FLUSH_INTERVAL_MS = 5000;
 
+export { createPhoenixExporter, resolvePhoenixExporterConfig } from './phoenix/config.js';
+export type { PhoenixExporterConfig } from './phoenix/types.js';
 export { type OtelExporterConfig, OtelRuntimeEventExporter };
 
-// Combined factory for the extension: when BOTH langfuse and a generic otel
-// endpoint are configured, both span processors must ride on ONE provider —
-// two providers would mint different span ids for the same logical span and
-// cross-wire the PI_TELEMETRY_TRACEPARENT written for child processes.
+// Combined factory for the extension: every configured destination rides on
+// ONE provider — separate providers would mint different span ids for the same
+// logical span and cross-wire the PI_TELEMETRY_TRACEPARENT for child processes.
 export function createTelemetryExporter(telemetryConfig: TelemetryConfig): RuntimeEventExporter {
   const langfuse = resolveLangfuseExporterConfig(telemetryConfig);
   const otel = resolveOtelExporterConfig(telemetryConfig);
-  if (!langfuse.enabled && !otel.enabled) {
+  const phoenix = resolvePhoenixExporterConfig(telemetryConfig);
+  if (!langfuse.enabled && !otel.enabled && !phoenix.enabled) {
     return new NoopRuntimeEventExporter(
       configurationWarnings(telemetryConfig).join('; ') || undefined,
     );
   }
-  const primary = langfuse.enabled ? langfuse : otel;
+  const primary = langfuse.enabled ? langfuse : otel.enabled ? otel : phoenix;
   return new OtelRuntimeEventExporter({
     enabled: true,
     configurationWarnings: configurationWarnings(telemetryConfig),
@@ -42,11 +45,12 @@ export function createTelemetryExporter(telemetryConfig: TelemetryConfig): Runti
           },
         }
       : {}),
+    ...(phoenix.enabled ? { phoenix: toPhoenixDestinationConfig(phoenix) } : {}),
     flushAt: otel.flushAt,
     flushIntervalMs: otel.flushIntervalMs,
     ...(primary.serviceName !== undefined ? { serviceName: primary.serviceName } : {}),
     ...(primary.serviceVersion !== undefined ? { serviceVersion: primary.serviceVersion } : {}),
-    // Both resolvers default this to false; a truthy spread here would drop the
+    // All resolvers default this to false; a truthy spread here would drop the
     // false and applyTelemetryRedaction's strict === false check would never strip.
     ...runtimeTelemetryOptions(telemetryConfig),
   });

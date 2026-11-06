@@ -1,8 +1,8 @@
 import { configurationWarnings, runtimeTelemetryOptions, type TelemetryConfig } from '../config.js';
 import { NoopRuntimeEventExporter } from '../exporters.js';
 import type { RuntimeEventExporter, TelemetryEnvironment } from '../index.js';
+import { OtelRuntimeEventExporter } from '../otel/exporters.js';
 import { parseBoolean, parsePositiveInteger, trim } from '../parse.js';
-import { OtelRuntimeEventExporter } from './exporters.js';
 import {
   DEFAULT_FLUSH_AT,
   DEFAULT_FLUSH_INTERVAL_MS,

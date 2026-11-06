@@ -1,7 +1,7 @@
 {
   "name": "@amaster.ai/pi-telemetry",
   "version": "0.1.2-beta.15",
-  "description": "Pi runtime observability: Langfuse and OpenTelemetry traces, TTFT, token and cost accounting, and diagnostics",
+  "description": "Pi runtime observability: Langfuse, Arize Phoenix and OpenTelemetry traces, TTFT, token and cost accounting, and diagnostics",
   "keywords": [
     "pi-package",
     "pi",
@@ -9,6 +9,8 @@
     "telemetry",
     "observability",
     "langfuse",
+    "phoenix",
+    "openinference",
     "opentelemetry",
     "tracing"
   ],
@@ -73,6 +75,7 @@
     "@langfuse/tracing": "^5.10.1",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/exporter-trace-otlp-http": "^0.221.0",
+    "@opentelemetry/exporter-trace-otlp-proto": "^0.221.0",
     "@opentelemetry/resources": "2.10.0",
     "@opentelemetry/sdk-trace-base": "^2.10.0"
   },

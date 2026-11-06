@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { credentialMaskValues, loadConfigFromFile, resolveConfig } from '../config.js';
 import { resolveLangfuseExporterConfig } from '../langfuse/config.js';
-import { resolveOtelExporterConfig } from '../otel.js';
+import { resolveOtelExporterConfig, resolvePhoenixExporterConfig } from '../otel.js';
 import { parseBoolean } from '../parse.js';
 
 describe('config', () => {
@@ -37,6 +37,41 @@ describe('config', () => {
     expect(resolveConfig()).toMatchObject({
       includePayloads: false,
     });
+  });
+
+  it('ignores whitespace-only Phoenix API keys when masking', () => {
+    expect(credentialMaskValues({ phoenix: { apiKey: ' \n\t ' } })).toEqual([]);
+  });
+
+  it('resolves Phoenix settings and masks its API key', () => {
+    const config = {
+      phoenix: {
+        enabled: true,
+        endpoint: ' https://phoenix.example.com/ ',
+        apiKey: ' phoenix-secret ',
+        projectName: ' agent-runs ',
+        flushAt: 0,
+        flushIntervalMs: 250,
+      },
+    };
+    expect(resolvePhoenixExporterConfig(config)).toMatchObject({
+      enabled: true,
+      endpoint: 'https://phoenix.example.com',
+      apiKey: 'phoenix-secret',
+      projectName: 'agent-runs',
+      flushAt: 20,
+      flushIntervalMs: 250,
+      includePayloads: false,
+    });
+    expect(credentialMaskValues(config)).toEqual(
+      expect.arrayContaining([' phoenix-secret ', 'phoenix-secret']),
+    );
+    expect(resolvePhoenixExporterConfig({ phoenix: { enabled: true } }).endpoint).toBe(
+      'http://localhost:6006',
+    );
+    expect(
+      resolvePhoenixExporterConfig({ phoenix: { enabled: true, endpoint: ' ' } }),
+    ).toMatchObject({ enabled: false, configurationWarnings: ['Phoenix endpoint is blank'] });
   });
 });
 
