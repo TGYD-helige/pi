@@ -12,18 +12,20 @@ export function langfuseObservationAttributes(input: {
   level?: 'DEFAULT' | 'WARNING' | 'ERROR';
   type?: 'span' | 'generation' | 'tool';
 }): JsonObject {
+  const serializedInput = input.input === undefined ? undefined : JSON.stringify(input.input);
+  const serializedOutput = input.output === undefined ? undefined : JSON.stringify(input.output);
   return {
     'langfuse.observation.type': input.type ?? 'span',
     ...(input.input !== undefined
       ? {
-          'langfuse.observation.input': JSON.stringify(input.input),
-          'input.value': JSON.stringify(input.input),
+          'langfuse.observation.input': serializedInput,
+          'input.value': serializedInput,
         }
       : {}),
     ...(input.output !== undefined
       ? {
-          'langfuse.observation.output': JSON.stringify(input.output),
-          'output.value': JSON.stringify(input.output),
+          'langfuse.observation.output': serializedOutput,
+          'output.value': serializedOutput,
         }
       : {}),
     ...(input.level ? { 'langfuse.observation.level': input.level } : {}),

@@ -203,32 +203,43 @@ it('sanitizes malformed JSON bodies without leaking content', async () => {
   assert.doesNotMatch(result.state, /SECRET_PAYLOAD/);
 });
 
-it('falls back to the v1 observations API when v2 is gated off', async () => {
+it('reads one legacy trace when v2 is gated off without querying the failing observations list', async () => {
   const urls = [];
   const fetchImpl = async (url) => {
     urls.push(String(url));
-    if (String(url).includes('/v2/observations')) {
-      return new Response('not found', { status: 404 });
-    }
+    if (String(url).includes('/v2/observations')) return new Response(null, { status: 404 });
     if (String(url).includes('/api/public/traces/t1')) {
-      return Response.json({ id: 't1', sessionId: 'session-1', tags: [SERVICE_NAME] });
+      return Response.json({
+        id: 't1', sessionId: 'session-1', tags: [SERVICE_NAME],
+        observations: fullTrace().map(({ sessionId: _sessionId, tags: _tags, providedModelName, ...row }) => ({
+          ...row,
+          ...(providedModelName ? { model: providedModelName } : {}),
+        })),
+      });
     }
-    // v1: page-based pagination, full rows, meta.totalPages.
-    return Response.json({
-      data: fullTrace().map(({ sessionId: _sessionId, tags: _tags, providedModelName, ...row }) => ({
-        ...row,
-        ...(providedModelName ? { model: providedModelName } : {}),
-      })),
-      meta: { totalPages: 1 },
-    });
+    return new Response('INTERNAL_SECRET', { status: 500 });
   };
   const result = await runVerification({ ...baseArgs, fetchImpl });
-  assert.equal(result.ok, true);
-  assert.ok(urls.some((u) => u.includes('/v2/observations')));
-  assert.ok(urls.some((u) => u.includes('/api/public/observations')));
-  assert.ok(urls.some((u) => u.includes('/api/public/traces/t1')));
-  const v1Url = new URL(urls.find((u) => u.includes('/api/public/observations')));
-  assert.equal(v1Url.searchParams.get('limit'), '100');
+  assert.equal(result.ok, true, result.state);
+  assert.equal(urls.length, 2);
+  assert.equal(new URL(urls[1]).pathname, '/api/public/traces/t1');
+  assert.equal(new URL(urls[1]).searchParams.get('fields'), 'observations');
+});
+
+it('polls a legacy trace that has not been ingested yet', async () => {
+  let reads = 0;
+  const result = await runVerification({
+    ...baseArgs,
+    fetchImpl: async (url) => {
+      if (String(url).includes('/v2/observations')) return new Response(null, { status: 404 });
+      reads += 1;
+      return reads === 1 ? new Response(null, { status: 404 }) : Response.json({
+        id: 't1', sessionId: 'session-1', tags: [SERVICE_NAME], observations: fullTrace(),
+      });
+    },
+  });
+  assert.equal(result.ok, true, result.state);
+  assert.equal(reads, 2);
 });
 
 it('evaluateTrace rejects wrong parentage', () => {

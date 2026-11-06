@@ -1,11 +1,10 @@
 import type { Attributes } from '@opentelemetry/api';
-import { resourceFromAttributes } from '@opentelemetry/resources';
 import type { ReadableSpan, TimedEvent } from '@opentelemetry/sdk-trace-base';
 
 export function projectPhoenixSpan(
   span: ReadableSpan,
   includePayloads: boolean,
-  projectName?: string,
+  resource = span.resource,
 ): ReadableSpan {
   const source = span.attributes;
   const attributes: Attributes = Object.fromEntries(
@@ -46,9 +45,6 @@ export function projectPhoenixSpan(
       } satisfies TimedEvent);
     }
   }
-  const resource = projectName
-    ? span.resource.merge(resourceFromAttributes({ 'openinference.project.name': projectName }))
-    : span.resource;
   return Object.assign(Object.create(Object.getPrototypeOf(span)), span, {
     attributes,
     events,

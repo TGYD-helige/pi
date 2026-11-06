@@ -400,3 +400,24 @@ test('omits the model scenario when pull_request_target still executes an older 
     }
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test('runs each telemetry backend assertion after a completed prompt even if another assertion fails', async () => {
+  const workflow = await readFile(new URL('../workflows/integration.yml', import.meta.url), 'utf8');
+  const prompt = workflow.slice(workflow.indexOf('      - name: Run extension prompt (Stage C)'));
+  assert.match(prompt, /id: extension_prompt/);
+  for (const backend of ['Langfuse', 'Phoenix']) {
+    const start = workflow.indexOf(`      - name: Verify ${backend} trace`);
+    const step = workflow.slice(start, workflow.indexOf('      - name:', start + 1));
+    assert.match(step, /!cancelled\(\)/);
+    assert.match(step, /steps\.extension_prompt\.outcome == 'success'/);
+    assert.match(step, /steps\.extension_prompt\.outcome == 'failure'/);
+  }
+});
+
+test('uses the same completion acknowledgement throughout the nested hierarchy probe', async () => {
+  const hierarchy = fullMatrix.find((entry) => entry.extension === 'pi-telemetry' && entry.scenario === 'hierarchy');
+  const script = await readFile(new URL('./telemetry-subagent.sh', import.meta.url), 'utf8');
+  assert.equal(hierarchy.assert_pattern, 'SUBAGENT-READY');
+  assert.ok(hierarchy.prompt.endsWith(`single word ${hierarchy.assert_pattern}.`));
+  assert.doesNotMatch(script, /HIERARCHY-CHILD-READY/);
+});

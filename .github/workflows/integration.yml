@@ -935,6 +935,7 @@ jobs:
           fi
 
       - name: Run extension prompt (Stage C)
+        id: extension_prompt
         if: >
           matrix.extension != 'pi-video-gen' &&
           env.PI_INTEGRATION_BASE_URL != '' &&
@@ -1234,6 +1235,8 @@ jobs:
 
       - name: Verify Langfuse trace (pi-telemetry only)
         if: >
+          !cancelled() &&
+          (steps.extension_prompt.outcome == 'success' || steps.extension_prompt.outcome == 'failure') &&
           matrix.extension == 'pi-telemetry' &&
           env.PI_INTEGRATION_BASE_URL != '' &&
           env.PI_INTEGRATION_API_KEY != ''
@@ -1255,6 +1258,8 @@ jobs:
 
       - name: Verify Phoenix trace (pi-telemetry only)
         if: >
+          !cancelled() &&
+          (steps.extension_prompt.outcome == 'success' || steps.extension_prompt.outcome == 'failure') &&
           matrix.extension == 'pi-telemetry' &&
           env.PI_INTEGRATION_BASE_URL != '' &&
           env.PI_INTEGRATION_API_KEY != ''

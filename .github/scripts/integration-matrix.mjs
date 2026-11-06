@@ -163,8 +163,8 @@ export const fullMatrix = [
     extension: 'pi-telemetry',
     scenario: 'hierarchy',
     tools: 'bash',
-    prompt: 'For hierarchy probe ci-langfuse-probe, use the bash tool exactly once to run: bash .github/scripts/telemetry-subagent.sh hierarchy. Then reply with the single word TELEMETRY-HIERARCHY-DONE.',
-    assert_pattern: 'TELEMETRY-HIERARCHY-DONE',
+    prompt: 'For hierarchy probe ci-langfuse-probe, use the bash tool exactly once to run: bash .github/scripts/telemetry-subagent.sh hierarchy. Then reply with the single word SUBAGENT-READY.',
+    assert_pattern: 'SUBAGENT-READY',
   },
   {
     extension: 'pi-telemetry',

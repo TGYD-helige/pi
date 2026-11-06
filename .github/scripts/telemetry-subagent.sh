@@ -3,7 +3,7 @@ set -euo pipefail
 
 if [ "${1:-}" = hierarchy ]; then
   export PI_SUBAGENT_CHILD_AGENT=ci-hierarchy
-  prompt='Use the bash tool exactly once to run: bash .github/scripts/telemetry-subagent.sh. Then reply with the single word HIERARCHY-CHILD-READY.'
+  prompt='Use the bash tool exactly once to run: bash .github/scripts/telemetry-subagent.sh. Then reply with the single word SUBAGENT-READY.'
 else
   export PI_SUBAGENT_CHILD_AGENT=ci-probe
   prompt="Use the bash tool exactly once to run: echo ${TELEMETRY_CODEWORD:-ci-langfuse-probe} child. Then reply with the single word SUBAGENT-READY."

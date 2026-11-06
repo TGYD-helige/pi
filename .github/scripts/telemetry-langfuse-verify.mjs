@@ -25,7 +25,7 @@
 //
 // Reads via the Observations API v2 (the v1 reads are deprecated on Cloud).
 // Self-hosted v3 gates v2 behind LANGFUSE_ENABLE_EVENTS_TABLE_V2_APIS
-// (default off), so a 404 on v2 falls back to the v1 observations endpoint for
+// (default off), so a 404 on v2 falls back to the single-trace v1 endpoint for
 // the rest of the run. Trace-level input/output no longer exists in v2, so
 // the codeword is matched on the root observation's input instead.
 //
@@ -388,13 +388,12 @@ export async function runVerification({
   const auth = `Basic ${Buffer.from(`${publicKey}:${secretKey}`).toString('base64')}`;
 
   // Self-hosted v3 gates /api/public/v2/* behind LANGFUSE_ENABLE_EVENTS_TABLE_V2_APIS
-  // (default off) — a 404 there means "use the legacy v1 observations API".
+  // (default off) — a 404 there selects the legacy single-trace API.
   let apiVersion = 'v2';
 
   async function fetchObservations(params) {
     const rows = [];
     let cursor;
-    let page = 1;
     for (let pageCount = 0; pageCount < MAX_PAGES; pageCount += 1) {
       let body;
       if (apiVersion === 'v2') {
@@ -410,48 +409,32 @@ export async function runVerification({
         if (response.status === 404) {
           // v2 gated off (self-hosted v3 default) — fall back for the whole run.
           apiVersion = 'v1';
-          log('Langfuse v2 observations API not available — falling back to v1');
+          log('Langfuse v2 observations API not available — falling back to the v1 trace API');
           pageCount -= 1; // retry this page on v1
           continue;
         }
         body = await readJson(response);
         rows.push(...(body.data ?? []));
         cursor = body.meta?.cursor;
-        if (!cursor) return normalizeLegacyRows(rows, params.traceId);
+        if (!cursor) return rows;
       } else {
-        // v1 has no `fields`/cursor: page-based pagination, full rows.
-        const query = new URLSearchParams({
-          fromStartTime,
-          toStartTime: new Date().toISOString(),
-          limit: '100',
-          page: String(page),
-          ...params,
-        });
-        const response = await fetchWithDeadline(`${origin}/api/public/observations?${query}`);
-        body = await readJson(response);
-        rows.push(...(body.data ?? []));
-        const totalPages = body.meta?.totalPages ?? 1;
-        if (page >= totalPages) return normalizeLegacyRows(rows, params.traceId);
-        page += 1;
+        // A known trace needs one bounded read, not an observations list plus a trace read.
+        const response = await fetchWithDeadline(
+          `${origin}/api/public/traces/${encodeURIComponent(params.traceId)}?fields=observations`,
+        );
+        if (response.status === 404) return [];
+        const trace = await readJson(response);
+        return (trace.observations ?? []).map((observation) => ({
+          ...observation,
+          sessionId: trace.sessionId,
+          tags: trace.tags,
+          ...(observation.model && !observation.providedModelName
+            ? { providedModelName: observation.model }
+            : {}),
+        }));
       }
     }
     throw new Error(`Langfuse observations query exceeded ${MAX_PAGES} pages`);
-  }
-
-  async function normalizeLegacyRows(rows, traceId) {
-    if (apiVersion !== 'v1' || !traceId || rows.length === 0) return rows;
-    const response = await fetchWithDeadline(
-      `${origin}/api/public/traces/${encodeURIComponent(traceId)}`,
-    );
-    const trace = await readJson(response);
-    return rows.map((observation) => ({
-      ...observation,
-      sessionId: trace.sessionId,
-      tags: trace.tags,
-      ...(observation.model && !observation.providedModelName
-        ? { providedModelName: observation.model }
-        : {}),
-    }));
   }
 
   async function fetchWithDeadline(url) {
