@@ -1,8 +1,11 @@
+import { once } from 'node:events';
+import { createServer, type ServerResponse } from 'node:http';
 import { setTimeout as delay } from 'node:timers/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RuntimeTelemetryEvent } from '../index.js';
 
-vi.mock('../config.js', () => ({
+vi.mock('../config.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../config.js')>()),
   loadConfigFromFile: vi.fn(() => ({})),
   resolveConfig: vi.fn((config: unknown) => config ?? {}),
 }));
@@ -1223,7 +1226,7 @@ describe('telemetryExtension', () => {
     expect(llmEvents[1]).toMatchObject({ llmGenerationId: 'gen-1' });
   });
 
-  it('starts shutdown while a background flush is pending and awaits both', async () => {
+  it('does not block settlement on backend flush but waits for it before close', async () => {
     let finishFlush!: () => void;
     const flush = vi.fn(
       () =>
@@ -1253,10 +1256,71 @@ describe('telemetryExtension', () => {
 
     const shutdown = fireEvent('session_shutdown', {});
     await Promise.resolve();
-    expect(close).toHaveBeenCalledOnce();
+    expect(close).not.toHaveBeenCalled();
     finishFlush();
     await Promise.all([settled, nextSettled, shutdown]);
     expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('delivers the final span when a background flush fills the SDK concurrency limit', async () => {
+    const responses: ServerResponse[] = [];
+    let allStarted!: () => void;
+    const full = new Promise<void>((resolve) => {
+      allStarted = resolve;
+    });
+    const server = createServer(async (request, response) => {
+      request.resume();
+      await once(request, 'end');
+      responses.push(response);
+      if (responses.length === 30) allStarted();
+      if (responses.length > 30) response.end();
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('missing test server port');
+    const { createTelemetryExporter: createRealExporter } =
+      await vi.importActual<typeof import('../otel.js')>('../otel.js');
+    const exporter = createRealExporter({
+      includePayloads: false,
+      phoenix: {
+        enabled: true,
+        endpoint: `http://127.0.0.1:${address.port}`,
+        flushAt: 20,
+        flushIntervalMs: 60_000,
+      },
+    });
+    vi.mocked(createTelemetryExporter).mockReturnValue(exporter);
+    vi.mocked(loadConfigFromFile).mockReturnValue({ includePayloads: false });
+    telemetryExtension(mockPi as any);
+    let shutdown: Promise<void> | undefined;
+    try {
+      await fireEvent('session_start', {});
+      await fireEvent('turn_start', { timestamp: Date.now() });
+      // 599 tools plus the settled root occupy exactly 30 batches, within the SDK queue limit.
+      for (let index = 0; index < 599; index++) {
+        await fireEvent('tool_execution_end', {
+          toolCallId: `call-${index}`,
+          toolName: 'bash',
+          result: {},
+          isError: false,
+        });
+      }
+      await fireEvent('agent_settled', {});
+      await full;
+      await fireEvent('turn_start', { timestamp: Date.now() });
+      shutdown = fireEvent('session_shutdown', {});
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      for (const response of responses) response.end();
+      await shutdown;
+      expect(responses).toHaveLength(31);
+      expect(exporter.getStatus?.().state).toBe('closed');
+    } finally {
+      for (const response of responses) response.end();
+      await (shutdown ?? exporter.close?.());
+      server.close();
+      await once(server, 'close');
+    }
   });
 
   it('refreshes status when a background flush completes', async () => {

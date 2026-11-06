@@ -211,58 +211,6 @@ describe('Phoenix telemetry export', () => {
     }
   });
 
-  it('drains queued spans during an in-flight flush and waits for both HTTP responses on close', async () => {
-    const responses: import('node:http').ServerResponse[] = [];
-    const server = createServer(async (request, response) => {
-      request.resume();
-      await once(request, 'end');
-      responses.push(response);
-      server.emit('export-request');
-    });
-    server.listen(0, '127.0.0.1');
-    await once(server, 'listening');
-    const address = server.address();
-    if (!address || typeof address === 'string') throw new Error('missing test server port');
-    const exporter = createTelemetryExporter({
-      phoenix: {
-        enabled: true,
-        endpoint: `http://127.0.0.1:${address.port}`,
-        projectName: 'pi-tests',
-        flushAt: 100,
-        flushIntervalMs: 60_000,
-      },
-    });
-    let closing: Promise<void> | undefined;
-    let closed = false;
-    try {
-      await publishPromptTrace(exporter);
-      const firstRequest = once(server, 'export-request');
-      const flushing = exporter.flush?.();
-      await firstRequest;
-      await publishPromptTrace(exporter);
-      const secondRequest = once(server, 'export-request');
-      closing = exporter.close?.().then(() => {
-        closed = true;
-      });
-      await secondRequest;
-      responses[1]!.writeHead(200, { 'content-type': 'application/x-protobuf' });
-      responses[1]!.end();
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      expect(closed).toBe(false);
-      responses[0]!.writeHead(200, { 'content-type': 'application/x-protobuf' });
-      responses[0]!.end();
-      await Promise.all([flushing, closing]);
-      expect(closed).toBe(true);
-      expect(responses).toHaveLength(2);
-      expect(exporter.getStatus?.().state).toBe('closed');
-    } finally {
-      for (const response of responses) response.end();
-      await (closing ?? exporter.close?.());
-      server.close();
-      await once(server, 'close');
-    }
-  });
-
   it('omits aggregates when their required usage components were not reported', async () => {
     const phoenixSpans: ReadableSpan[] = [];
     vi.spyOn(OtlpProtoExporter.prototype, 'export').mockImplementation((spans, callback) => {
