@@ -120,6 +120,7 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
   private readonly openSpans = new Map<string, LangfuseSpan>();
   private openSpanCapWarned = false;
   private exportFailures = new Set<string>();
+  private rejectedSpans = new Map<string, number>();
   private flushFailed = false;
   private state = 'ready';
 
@@ -127,13 +128,24 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
     this.config = normalizeExporterConfig(config);
     this.provider =
       opts?.provider ??
-      buildTracerProvider(this.config, this.idGenerator, (destination, succeeded) => {
-        if (succeeded) this.exportFailures.delete(destination);
-        else {
-          this.exportFailures.add(destination);
-          console.error(`[pi-telemetry] ${destination} export failed`);
-        }
-      });
+      buildTracerProvider(
+        this.config,
+        this.idGenerator,
+        (destination, succeeded, rejectedSpans) => {
+          if (rejectedSpans !== undefined) {
+            if (rejectedSpans > 0) this.rejectedSpans.set(destination, rejectedSpans);
+            else this.rejectedSpans.delete(destination);
+          }
+          if (rejectedSpans) {
+            console.error(`[pi-telemetry] ${destination} rejected ${rejectedSpans} span(s)`);
+          }
+          if (succeeded) this.exportFailures.delete(destination);
+          else {
+            this.exportFailures.add(destination);
+            console.error(`[pi-telemetry] ${destination} export failed`);
+          }
+        },
+      );
     this.tracer = this.provider.getTracer(
       '@amaster.ai/pi-telemetry',
       (createRequire(import.meta.url)('../../package.json') as { version: string }).version,
@@ -164,7 +176,7 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
   }
 
   getStatus() {
-    const failed = this.flushFailed || this.exportFailures.size > 0;
+    const failed = this.flushFailed || this.exportFailures.size > 0 || this.rejectedSpans.size > 0;
     return {
       enabled: this.config.enabled,
       state: failed
@@ -173,7 +185,7 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
           ? 'configuration-warning'
           : this.state,
       ...(failed
-        ? { error: 'Telemetry export failed or timed out' }
+        ? { error: 'Telemetry export failed, timed out, or was partially rejected' }
         : this.config.configurationWarnings?.length
           ? { error: this.config.configurationWarnings.join('; ') }
           : {}),
@@ -637,15 +649,39 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
   }
 }
 
+type OtlpExporterWithDelegate = SpanExporter & {
+  _delegate?: {
+    _responseHandler?: { handleResponse(response: unknown): void };
+  };
+};
+
+function rejectedSpanCount(response: unknown): number {
+  if (!response || typeof response !== 'object') return 0;
+  const partial = (response as { partialSuccess?: unknown }).partialSuccess;
+  if (!partial || typeof partial !== 'object') return 0;
+  const count = (partial as { rejectedSpans?: unknown }).rejectedSpans;
+  return typeof count === 'number' && Number.isFinite(count) && count > 0 ? count : 0;
+}
+
 // One span processor per destination inside a single provider; both are
 // present when a config carries Langfuse credentials and a generic endpoint.
 function buildTracerProvider(
   config: OtelExporterConfig,
   idGenerator: IdGenerator,
-  onExport: (destination: string, succeeded: boolean) => void,
+  onExport: (destination: string, succeeded: boolean, rejectedSpans?: number) => void,
 ): BasicTracerProvider {
   const spanProcessors: SpanProcessor[] = [];
   function trackExporter(destination: string, exporter: SpanExporter): SpanExporter {
+    const delegate = (exporter as OtlpExporterWithDelegate)._delegate;
+    const responseHandler = delegate?._responseHandler;
+    if (delegate && responseHandler) {
+      delegate._responseHandler = {
+        handleResponse(response) {
+          onExport(destination, true, rejectedSpanCount(response));
+          responseHandler.handleResponse(response);
+        },
+      };
+    }
     const originalExport = exporter.export.bind(exporter);
     exporter.export = (spans, callback) =>
       originalExport(spans, (result) => {

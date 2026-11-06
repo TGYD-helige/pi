@@ -195,7 +195,7 @@ Compaction and branch summaries are generations in the active trace or standalon
 - `/telemetry status` (or `/telemetry`): show exporter state and session ID without exposing credentials.
 - `/telemetry flush`: flush pending finished spans and report export errors/timeouts. This does not end active spans or confirm backend ingestion.
 
-The TUI status indicates readiness, disabled export, missing credentials/endpoint, flush completion, or export failure. Configuration warnings remain visible when another destination is active. Export callbacks track failures separately for Langfuse, generic OTLP, and Phoenix; one destination succeeding does not hide another's failure. Status refreshes at session startup, settlement and explicit commands.
+The TUI status indicates readiness, disabled export, missing credentials/endpoint, flush completion, or export failure. Configuration warnings remain visible when another destination is active. Export callbacks track failures separately for Langfuse, generic OTLP, and Phoenix; one destination succeeding does not hide another's failure. OTLP partial-success responses with `rejectedSpans > 0` also mark that destination as an error and are not retried as a whole batch, avoiding duplicate spans; a later complete success clears the error. Status refreshes at session startup, settlement and explicit commands.
 
 ## Images and credential masking
 

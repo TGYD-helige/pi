@@ -237,6 +237,64 @@ describe('Phoenix telemetry export', () => {
     }
   });
 
+  it.each([
+    'langfuse',
+    'otel',
+    'phoenix',
+  ])('marks %s partial acceptance as an error without retrying', async (destination) => {
+    const requests: string[] = [];
+    const server = createServer((request, response) => {
+      requests.push(request.url ?? '');
+      request.resume();
+      const protobuf = destination === 'phoenix';
+      response.writeHead(200, {
+        'content-type': protobuf ? 'application/x-protobuf' : 'application/json',
+      });
+      response.end(
+        protobuf
+          ? Buffer.from([0x0a, 0x02, 0x08, 0x01])
+          : JSON.stringify({ partialSuccess: { rejectedSpans: 1 } }),
+      );
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('missing test server port');
+    const endpoint = `http://127.0.0.1:${address.port}`;
+    const exporter = createTelemetryExporter({
+      ...(destination === 'langfuse'
+        ? {
+            langfuse: {
+              enabled: true,
+              publicKey: 'pk-test',
+              secretKey: 'sk-test',
+              baseUrl: endpoint,
+            },
+          }
+        : destination === 'otel'
+          ? { otel: { enabled: true, endpoint } }
+          : { phoenix: { enabled: true, endpoint } }),
+    });
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      await exporter.publish({
+        ...context,
+        id: 'partial-rejection',
+        type: 'chat_turn_completed',
+        createdAt: '2026-05-02T00:00:01.000Z',
+      });
+      await exporter.flush?.();
+      expect(exporter.getStatus?.()).toMatchObject({ state: 'error' });
+      expect(requests).toHaveLength(1);
+      expect(JSON.stringify(errors.mock.calls)).toContain(`${destination} rejected 1 span(s)`);
+    } finally {
+      await exporter.close?.();
+      server.close();
+      await once(server, 'close');
+    }
+  });
+
   it('reports a Phoenix failure even when generic OTLP succeeds', async () => {
     vi.spyOn(OtlpProtoExporter.prototype, 'export').mockImplementation((_spans, callback) => {
       callback({ code: 1 });
