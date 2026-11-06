@@ -149,9 +149,9 @@ export const fullMatrix = [
     extension: 'pi-telemetry',
     tools: 'bash',
     // pi-telemetry is passive — the tool calls are just the vehicle. The real
-    // assertion is the Langfuse verify step in integration.yml, which polls
-    // the Langfuse API for this run's trace and checks it holds a chat-turn
-    // root span, both bash tool spans, main+subagent llm-generations, and a
+    // assertions are the Langfuse and Phoenix verify steps in integration.yml,
+    // which poll the same run's trace and check it holds a chat-turn root span,
+    // both bash tool spans, main+subagent llm-generations, and a
     // 'subagent [ci-probe]' span. The second bash call spawns a nested pi
     // (.github/scripts/telemetry-subagent.sh) which inherits the
     // PI_TELEMETRY_* env the parent extension set on `input`, so its
@@ -171,8 +171,8 @@ export const fullMatrix = [
     scenario: 'redacted',
     tools: 'bash',
     // Runs with includePayloads: false (the settings write in integration.yml
-    // flips it for this scenario). The Langfuse verify step asserts the
-    // privacy contract from issue #197: the trace is complete, but no
+    // flips it for this scenario). The Langfuse and Phoenix verify steps assert
+    // the privacy contract from issue #197: the trace is complete, but no
     // observation carries the prompt, tool args/output, or model I/O — nothing
     // containing the codeword may leave the process.
     prompt: 'Step 1 — use the bash tool exactly once to run: echo ci-langfuse-probe redacted. Then reply with the single word TELEMETRY-REDACTED-DONE.',

@@ -233,6 +233,8 @@ jobs:
       LANGFUSE_BASE_URL: ${{ secrets.LANGFUSE_BASE_URL }}
       LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
       LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+      PHOENIX_API_KEY: ${{ secrets.PHOENIX_API_KEY }}
+      PHOENIX_COLLECTOR_ENDPOINT: ${{ secrets.PHOENIX_COLLECTOR_ENDPOINT }}
       PI_OFFLINE: '0'
 
     steps:
@@ -247,6 +249,12 @@ jobs:
         with:
           set-pi-agent-dir: 'true'
           install-pi-cli: 'true'
+
+      - name: Fail — Stage B Phoenix secrets unavailable
+        if: env.PHOENIX_API_KEY == '' || env.PHOENIX_COLLECTOR_ENDPOINT == ''
+        run: |
+          echo "::error::PHOENIX_API_KEY and PHOENIX_COLLECTOR_ENDPOINT are required for Stage B telemetry."
+          exit 1
 
       - name: Configure custom deepseek provider in ~/.pi/agent/models.json
         if: env.PI_INTEGRATION_BASE_URL != '' && env.PI_INTEGRATION_API_KEY != ''
@@ -297,6 +305,12 @@ jobs:
                 "publicKey": "\${LANGFUSE_PUBLIC_KEY}",
                 "secretKey": "\${LANGFUSE_SECRET_KEY}",
                 "baseUrl": "\${LANGFUSE_BASE_URL}"
+              },
+              "phoenix": {
+                "enabled": true,
+                "endpoint": "\${PHOENIX_COLLECTOR_ENDPOINT}",
+                "apiKey": "\${PHOENIX_API_KEY}",
+                "projectName": "ci-phoenix-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
               }
             }
           }
@@ -378,7 +392,7 @@ jobs:
       FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
       UNSPLASH_TOKEN: ${{ secrets.UNSPLASH_TOKEN }}
       BROWSERLESS_TOKEN: ${{ secrets.BROWSERLESS_TOKEN }}
-      # LANGFUSE_* remains step-scoped to commands that start pi.
+      # Backend credentials remain step-scoped to commands that start pi or query it.
       PI_OFFLINE: '0'
 
     steps:
@@ -578,8 +592,8 @@ jobs:
           #    concurrent better-sqlite3 writers on one shared file segfault
           #    the pi process (exit 139), so nothing may point at a default
           #    location like ~/.pi/agent/memories/.
-          # ${LANGFUSE_*} stays literal for pi's settings resolver. Every
-          # model-backed matrix leg installs pi-telemetry below.
+          # ${LANGFUSE_*} and ${PHOENIX_*} credentials stay literal for pi's
+          # settings resolver. Every model-backed matrix leg installs pi-telemetry below.
           # The pi-telemetry "redacted" scenario exercises the
           # includePayloads: false privacy path (issue #197); every other leg
           # keeps payloads on so trace-shape assertions can match on content.
@@ -587,6 +601,10 @@ jobs:
           if [ "${{ matrix.extension }}" = "pi-telemetry" ] && [ "${{ matrix.scenario }}" = "redacted" ]; then
             INCLUDE_PAYLOADS_JSON=false
           fi
+          # Every leg that loads pi-telemetry exports the same run to both backends.
+          # A per-job Phoenix project prevents cross-job trace/project collisions.
+          PHOENIX_PROJECT="ci-phoenix-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${{ strategy.job-index }}"
+          echo "PHOENIX_PROJECT=$PHOENIX_PROJECT" >> "$GITHUB_ENV"
           cat > "$PI_CODING_AGENT_DIR/settings.json" <<EOF
           {
             "pi-teamwork": {
@@ -675,6 +693,12 @@ jobs:
                 "publicKey": "\${LANGFUSE_PUBLIC_KEY}",
                 "secretKey": "\${LANGFUSE_SECRET_KEY}",
                 "baseUrl": "\${LANGFUSE_BASE_URL}"
+              },
+              "phoenix": {
+                "enabled": true,
+                "endpoint": "\${PHOENIX_COLLECTOR_ENDPOINT}",
+                "apiKey": "\${PHOENIX_API_KEY}",
+                "projectName": "${PHOENIX_PROJECT}"
               }
             }
           }
@@ -718,8 +742,14 @@ jobs:
           LANGFUSE_BASE_URL: ${{ secrets.LANGFUSE_BASE_URL }}
           LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
           LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          PHOENIX_API_KEY: ${{ secrets.PHOENIX_API_KEY }}
+          PHOENIX_COLLECTOR_ENDPOINT: ${{ secrets.PHOENIX_COLLECTOR_ENDPOINT }}
         run: |
           set -euo pipefail
+          if [ -z "${PHOENIX_API_KEY:-}" ] || [ -z "${PHOENIX_COLLECTOR_ENDPOINT:-}" ]; then
+            echo "::error::PHOENIX_API_KEY and PHOENIX_COLLECTOR_ENDPOINT are required for pi-video-gen telemetry."
+            exit 1
+          fi
           export PI_OFFLINE=1
           JOB_DIR="$RUNNER_TEMP/pi-video-gen/preview-promo"
           SPEC_PATH="$JOB_DIR/timeline-input.json"
@@ -920,13 +950,21 @@ jobs:
           LANGFUSE_BASE_URL: ${{ secrets.LANGFUSE_BASE_URL }}
           LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
           LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          PHOENIX_API_KEY: ${{ secrets.PHOENIX_API_KEY }}
+          PHOENIX_COLLECTOR_ENDPOINT: ${{ secrets.PHOENIX_COLLECTOR_ENDPOINT }}
         run: |
           set -euo pipefail
+          # The dedicated browser-session harness is the explicit exception:
+          # it uses --no-extensions and PI_TELEMETRY=0 to isolate browser state.
           # Run the two model-backed Pi clients directly; an outer model's bash
           # output is not evidence that the lifecycle test actually ran.
           if [ "${{ matrix.extension }}" = "pi-browser-use" ] && [ "${{ matrix.scenario }}" = "session" ]; then
             node .github/scripts/browser-session-model-e2e.mjs
             exit 0
+          fi
+          if [ -z "${PHOENIX_API_KEY:-}" ] || [ -z "${PHOENIX_COLLECTOR_ENDPOINT:-}" ]; then
+            echo "::error::PHOENIX_API_KEY and PHOENIX_COLLECTOR_ENDPOINT are required for every model-backed E2E run."
+            exit 1
           fi
           # Provider-backed scenarios are merge gates: missing credentials are
           # configuration failures, not successful skips.
@@ -938,9 +976,9 @@ jobs:
             echo "::error::UNSPLASH_TOKEN is required for Unsplash E2E."
             exit 1
           fi
-          # pi-telemetry's assertion happens against the Langfuse API, so this
-          # step needs the keys (step-scoped env above). The trace is found by
-          # a per-run codeword plus a start-timestamp lower bound.
+          # pi-telemetry asserts the same run against Langfuse and Phoenix in
+          # the following steps. Both backends use per-run identifiers; Langfuse
+          # also uses a start-timestamp lower bound.
           if [ "${{ matrix.extension }}" = "pi-telemetry" ]; then
             if [ -z "${LANGFUSE_PUBLIC_KEY:-}" ] || [ -z "${LANGFUSE_SECRET_KEY:-}" ]; then
               echo "::error::LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY are required for pi-telemetry E2E."
@@ -1215,6 +1253,26 @@ jobs:
             exit 1
           fi
           node .github/scripts/telemetry-langfuse-verify.mjs
+
+      - name: Verify Phoenix trace (pi-telemetry only)
+        if: >
+          matrix.extension == 'pi-telemetry' &&
+          env.PI_INTEGRATION_BASE_URL != '' &&
+          env.PI_INTEGRATION_API_KEY != ''
+        # Queries the same codeworded trace as the Langfuse assertion, through
+        # the unique Phoenix project selected before the prompt started.
+        timeout-minutes: 2
+        env:
+          PHOENIX_API_KEY: ${{ secrets.PHOENIX_API_KEY }}
+          PHOENIX_COLLECTOR_ENDPOINT: ${{ secrets.PHOENIX_COLLECTOR_ENDPOINT }}
+          TELEMETRY_SCENARIO: ${{ matrix.scenario || 'basic' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PHOENIX_API_KEY:-}" ] || [ -z "${PHOENIX_COLLECTOR_ENDPOINT:-}" ]; then
+            echo "::error::PHOENIX_API_KEY and PHOENIX_COLLECTOR_ENDPOINT are required for the Stage C Phoenix assertion."
+            exit 1
+          fi
+          node .github/scripts/telemetry-phoenix-verify.mjs
 
       - name: Verify pi-memory-mem0 captured turn (mem0 jobs only)
         if: (matrix.extension == 'pi-memory' || matrix.extension == 'pi-memory-mem0') && env.PI_INTEGRATION_BASE_URL != ''

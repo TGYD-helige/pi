@@ -113,6 +113,7 @@ export function applyTelemetryRedaction(
     'includePayloads' | 'redactEvent' | 'mediaUploadEnabled' | 'maskingSecrets'
   > & {
     langfuse?: { publicKey: string; secretKey: string };
+    phoenix?: { apiKey?: string };
     headers?: Record<string, string>;
   },
   event: RuntimeTelemetryEvent,

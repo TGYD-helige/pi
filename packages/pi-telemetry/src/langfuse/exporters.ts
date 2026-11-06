@@ -25,6 +25,7 @@ import {
   BasicTracerProvider,
   BatchSpanProcessor,
   type IdGenerator,
+  type SpanExporter,
   type SpanProcessor,
 } from '@opentelemetry/sdk-trace-base';
 import type {
@@ -33,6 +34,7 @@ import type {
   RuntimeTelemetryEvent,
 } from '../index.js';
 import { parsePositiveInteger } from '../parse.js';
+import { createPhoenixSpanExporter } from '../phoenix/exporter.js';
 import {
   chatInputLifecycleOutput,
   chatInputObservationName,
@@ -643,11 +645,7 @@ function buildTracerProvider(
   onExport: (destination: string, succeeded: boolean) => void,
 ): BasicTracerProvider {
   const spanProcessors: SpanProcessor[] = [];
-  function trackedExporter(
-    destination: string,
-    options: ConstructorParameters<typeof OTLPTraceExporter>[0],
-  ) {
-    const exporter = new OTLPTraceExporter(options);
+  function trackExporter(destination: string, exporter: SpanExporter): SpanExporter {
     const originalExport = exporter.export.bind(exporter);
     exporter.export = (spans, callback) =>
       originalExport(spans, (result) => {
@@ -655,6 +653,12 @@ function buildTracerProvider(
         callback(result);
       });
     return exporter;
+  }
+  function trackedExporter(
+    destination: string,
+    options: ConstructorParameters<typeof OTLPTraceExporter>[0],
+  ): SpanExporter {
+    return trackExporter(destination, new OTLPTraceExporter(options));
   }
   if (config.langfuse) {
     spanProcessors.push(
@@ -698,6 +702,24 @@ function buildTracerProvider(
       ),
     );
   }
+  if (config.phoenix) {
+    spanProcessors.push(
+      new BatchSpanProcessor(
+        trackExporter(
+          'phoenix',
+          createPhoenixSpanExporter(
+            { ...config.phoenix, includePayloads: config.includePayloads },
+            EXPORT_TIMEOUT_MS,
+          ),
+        ),
+        {
+          maxExportBatchSize: config.phoenix.flushAt,
+          scheduledDelayMillis: config.phoenix.flushIntervalMs,
+          exportTimeoutMillis: EXPORT_TIMEOUT_MS,
+        },
+      ),
+    );
+  }
   // Without a resource the collector sees service.name=unknown_service:node —
   // set it from config so the traces identify their runtime.
   const resource = defaultResource().merge(
@@ -723,6 +745,19 @@ function normalizeExporterConfig(config: OtelExporterConfig): OtelExporterConfig
             flushAt: parsePositiveInteger(config.langfuse.flushAt, DEFAULT_FLUSH_AT),
             flushIntervalMs: parsePositiveInteger(
               config.langfuse.flushIntervalMs,
+              DEFAULT_FLUSH_INTERVAL_MS,
+            ),
+          },
+        }
+      : {}),
+    ...(config.phoenix
+      ? {
+          phoenix: {
+            ...config.phoenix,
+            endpoint: config.phoenix.endpoint.replace(/\/+$/, ''),
+            flushAt: parsePositiveInteger(config.phoenix.flushAt, DEFAULT_FLUSH_AT),
+            flushIntervalMs: parsePositiveInteger(
+              config.phoenix.flushIntervalMs,
               DEFAULT_FLUSH_INTERVAL_MS,
             ),
           },

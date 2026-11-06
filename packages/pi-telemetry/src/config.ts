@@ -19,6 +19,15 @@ export interface OtelConfig {
   flushIntervalMs?: number;
 }
 
+export interface PhoenixConfig {
+  enabled?: boolean;
+  endpoint?: string;
+  apiKey?: string;
+  projectName?: string;
+  flushAt?: number;
+  flushIntervalMs?: number;
+}
+
 export interface TelemetryConfig {
   serviceName?: string;
   serviceVersion?: string;
@@ -30,6 +39,7 @@ export interface TelemetryConfig {
 
   langfuse?: LangfuseConfig;
   otel?: OtelConfig;
+  phoenix?: PhoenixConfig;
 }
 
 const DEFAULTS: TelemetryConfig = {
@@ -55,11 +65,14 @@ export function credentialMaskValues(config: {
   maskingSecrets?: readonly string[];
   langfuse?: Pick<LangfuseConfig, 'publicKey' | 'secretKey'>;
   otel?: OtelConfig;
+  phoenix?: Pick<PhoenixConfig, 'apiKey'>;
   headers?: Record<string, string>;
 }): string[] {
   const publicKey = trim(config.langfuse?.publicKey);
   const secretKey = trim(config.langfuse?.secretKey);
   const values = [
+    config.phoenix?.apiKey,
+    trim(config.phoenix?.apiKey),
     ...(config.maskingSecrets ?? []),
     config.langfuse?.publicKey,
     config.langfuse?.secretKey,
@@ -73,7 +86,7 @@ export function credentialMaskValues(config: {
       .flatMap(([, value]) => [value, value.replace(/^(?:Bearer|Basic)\s+/i, '')]),
   ];
   return [...new Set(values)].filter(
-    (value): value is string => typeof value === 'string' && value.length > 0,
+    (value): value is string => typeof value === 'string' && value.trim().length > 0,
   );
 }
 
@@ -81,7 +94,12 @@ export function runtimeTelemetryOptions(
   config: Pick<
     TelemetryConfig,
     'includePayloads' | 'mediaUploadEnabled' | 'userId' | 'environment' | 'release'
-  > & { maskingSecrets?: readonly string[]; langfuse?: LangfuseConfig; otel?: OtelConfig },
+  > & {
+    maskingSecrets?: readonly string[];
+    langfuse?: LangfuseConfig;
+    otel?: OtelConfig;
+    phoenix?: PhoenixConfig;
+  },
 ): RuntimeTelemetryOptions {
   return {
     maskingSecrets: credentialMaskValues(config),
@@ -109,5 +127,11 @@ export function configurationWarnings(config: TelemetryConfig): string[] {
     warnings.push('Langfuse base URL is blank');
   if (parseBoolean(config.otel?.enabled) && !config.otel?.endpoint)
     warnings.push('OTLP endpoint is missing');
+  if (
+    parseBoolean(config.phoenix?.enabled) &&
+    config.phoenix?.endpoint !== undefined &&
+    !trim(config.phoenix.endpoint)
+  )
+    warnings.push('Phoenix endpoint is blank');
   return warnings;
 }

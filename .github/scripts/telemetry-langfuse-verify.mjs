@@ -66,7 +66,7 @@ export function traceIdForCodeword(codeword) {
 // io-carrying pages can hold large model inputs/outputs; cap what we buffer.
 const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
 
-async function readBodyCapped(response, maxBytes) {
+export async function readBodyCapped(response, maxBytes) {
   const chunks = [];
   let total = 0;
   for await (const chunk of response.body) {
@@ -80,7 +80,12 @@ async function readBodyCapped(response, maxBytes) {
 }
 
 // Returns a list of problems; empty list means the trace fully matches.
-export function evaluateTrace(observations, codeword, scenario = 'basic') {
+export function evaluateTrace(
+  observations,
+  codeword,
+  scenario = 'basic',
+  { requireServiceMetadata = true } = {},
+) {
   const spans = observations.filter((o) => o.type === 'SPAN');
   const tools = observations.filter((o) => o.type === 'TOOL');
   const generations = observations.filter((o) => o.type === 'GENERATION');
@@ -95,22 +100,24 @@ export function evaluateTrace(observations, codeword, scenario = 'basic') {
     sessionIds.size === 1 && observations.every((observation) => observation.sessionId),
     'observations do not share one non-empty sessionId',
   );
-  // langfuse.trace.tags is trace-level: we set it on every span, but whether
-  // the v2 API projects it onto every observation row is a live-API behavior.
-  // Require at least one observation to carry it (proves the tag landed)
-  // instead of every row (depends on projection semantics).
-  need(
-    observations.some(
-      (observation) => Array.isArray(observation.tags) && observation.tags.includes(SERVICE_NAME),
-    ),
-    `no observation carries the "${SERVICE_NAME}" service tag`,
-  );
-  need(
-    observations.every(
-      (observation) => observation.metadata?.serviceName === SERVICE_NAME,
-    ),
-    `observations are missing serviceName metadata "${SERVICE_NAME}"`,
-  );
+  if (requireServiceMetadata) {
+    // langfuse.trace.tags is trace-level: we set it on every span, but whether
+    // the v2 API projects it onto every observation row is a live-API behavior.
+    // Require at least one observation to carry it (proves the tag landed)
+    // instead of every row (depends on projection semantics).
+    need(
+      observations.some(
+        (observation) => Array.isArray(observation.tags) && observation.tags.includes(SERVICE_NAME),
+      ),
+      `no observation carries the "${SERVICE_NAME}" service tag`,
+    );
+    need(
+      observations.every(
+        (observation) => observation.metadata?.serviceName === SERVICE_NAME,
+      ),
+      `observations are missing serviceName metadata "${SERVICE_NAME}"`,
+    );
+  }
   for (const generation of generations) {
     const label = `generation "${generation.name ?? generation.id}"`;
     const modelParameters = generation.modelParameters ?? {};

@@ -157,8 +157,18 @@ test('loads pi-telemetry for every model-backed integration run', async () => {
   const matrix = workflow.slice(workflow.indexOf('  extension-tool-matrix:'));
   assert.match(smoke, /pi install "\.\/packages\/pi-telemetry"/);
   assert.match(smoke, /LANGFUSE_PUBLIC_KEY: \${{ secrets\.LANGFUSE_PUBLIC_KEY }}/);
+  assert.match(smoke, /PHOENIX_API_KEY: \${{ secrets\.PHOENIX_API_KEY }}/);
+  assert.match(smoke, /PHOENIX_COLLECTOR_ENDPOINT: \${{ secrets\.PHOENIX_COLLECTOR_ENDPOINT }}/);
+  assert.match(smoke, /PHOENIX_API_KEY and PHOENIX_COLLECTOR_ENDPOINT are required for Stage B telemetry/);
   assert.match(matrix, /pi install "\.\/packages\/pi-telemetry"/);
   assert.match(matrix, /LANGFUSE_PUBLIC_KEY: \${{ secrets\.LANGFUSE_PUBLIC_KEY }}/);
+  assert.match(matrix, /PHOENIX_API_KEY: \${{ secrets\.PHOENIX_API_KEY }}/);
+  assert.match(matrix, /PHOENIX_COLLECTOR_ENDPOINT: \${{ secrets\.PHOENIX_COLLECTOR_ENDPOINT }}/);
+  assert.match(matrix, /"phoenix": \{\s*"enabled": true,\s*"endpoint": "\\\$\{PHOENIX_COLLECTOR_ENDPOINT\}"/);
+  assert.match(matrix, /"projectName": "\$\{PHOENIX_PROJECT\}"/);
+  assert.match(matrix, /name: Verify Phoenix trace \(pi-telemetry only\)/);
+  assert.match(matrix, /node \.github\/scripts\/telemetry-phoenix-verify\.mjs/);
+  assert.match(matrix, /PHOENIX_API_KEY and PHOENIX_COLLECTOR_ENDPOINT are required for every model-backed E2E run/);
   assert.doesNotMatch(matrix, /matrix\.extension == 'pi-telemetry' && secrets\.LANGFUSE/);
 });
 
@@ -205,6 +215,10 @@ test('can isolate manual Browserless session runs while preserving the shared ap
   assert.match(workflow, /BROWSER_SESSION_ONLY: \$\{\{ inputs\.browser_session_only \}\}/);
   const invocation = matrix.slice(matrix.indexOf('          # Run the two model-backed'), matrix.indexOf('          # Provider-backed scenarios'))
     .replaceAll('${{ matrix.extension }}', 'pi-browser-use').replaceAll('${{ matrix.scenario }}', 'session');
+  const runStep = matrix.slice(matrix.indexOf('      - name: Run extension prompt'));
+  const browserBranch = runStep.indexOf('browser-session-model-e2e.mjs');
+  const phoenixGuard = runStep.indexOf('required for every model-backed E2E run');
+  assert.ok(browserBranch > 0 && phoenixGuard > 0 && browserBranch < phoenixGuard, 'browser-session branch must precede the Phoenix credential guard');
   for (const code of [0, 7]) {
     const run = () => execFileSync('bash', ['-c', `set -euo pipefail\nnode() { echo "$*"; return ${code}; }\n${invocation}\nexit 99`], { encoding: 'utf8', stdio: 'pipe' });
     if (code === 0) assert.equal(run().trim(), '.github/scripts/browser-session-model-e2e.mjs');
@@ -307,10 +321,12 @@ test('skips Stage C when no tested extension changed', () => {
     selectIntegrationMatrix(['packages/pi-telemetry/src/extension.ts']).map(({ extension }) => extension),
     ['pi-telemetry', 'pi-telemetry', 'pi-telemetry'],
   );
-  assert.deepEqual(
-    selectIntegrationMatrix(['.github/scripts/telemetry-langfuse-verify.mjs']).map(({ extension }) => extension),
-    ['pi-telemetry', 'pi-telemetry', 'pi-telemetry'],
-  );
+  for (const script of ['telemetry-langfuse-verify.mjs', 'telemetry-phoenix-verify.mjs']) {
+    assert.deepEqual(
+      selectIntegrationMatrix([`.github/scripts/${script}`]).map(({ extension }) => extension),
+      ['pi-telemetry', 'pi-telemetry', 'pi-telemetry'],
+    );
+  }
 });
 
 
@@ -325,7 +341,7 @@ test('threads the integration model through generated configs and skill evaluati
   assert.equal(documents.length, 4);
   for (const model of ['deepseek-v4-flash', 'glm-5.3-flash', 'custom-model']) {
     const configs = documents.map(([, kind, body]) => [kind, JSON.parse(execFileSync('bash', ['-c', `cat <<EOF\n${body}\nEOF`], {
-      encoding: 'utf8', env: { PATH: process.env.PATH, PI_INTEGRATION_MODEL: model, WEB_ACCESS_SETTINGS: '{}', IMAGE_GEN_MODEL: 'image-model', INCLUDE_PAYLOADS_JSON: 'true', RUNNER_TEMP: '/tmp/pi-integration-config-test' },
+      encoding: 'utf8', env: { PATH: process.env.PATH, PI_INTEGRATION_MODEL: model, WEB_ACCESS_SETTINGS: '{}', IMAGE_GEN_MODEL: 'image-model', INCLUDE_PAYLOADS_JSON: 'true', PHOENIX_PROJECT: 'ci-phoenix-test-project', RUNNER_TEMP: '/tmp/pi-integration-config-test' },
     }))]);
     for (const [, config] of configs.filter(([kind]) => kind === 'models')) {
       assert.equal(config.providers['deepseek-integration'].models[0].id, model);
@@ -341,6 +357,12 @@ test('threads the integration model through generated configs and skill evaluati
     // Non-redacted legs keep payloads on; the redacted scenario flips this to
     // false in the workflow before the heredoc runs.
     assert.equal(settings['pi-telemetry'].includePayloads, true);
+    assert.deepEqual(settings['pi-telemetry'].phoenix, {
+      enabled: true,
+      endpoint: '${PHOENIX_COLLECTOR_ENDPOINT}',
+      apiKey: '${PHOENIX_API_KEY}',
+      projectName: 'ci-phoenix-test-project',
+    });
   }
 });
 

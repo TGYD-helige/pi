@@ -15,7 +15,7 @@ This repository contains the open-source runtime contracts, adapters, and orches
 | Core | `@amaster.ai/pi-shared` | Shared runtime types and contracts: settings loader, session/event/artifact types, turn and subagent types. |
 | Core | `@amaster.ai/pi-storage` | JSON-file and MySQL/Prisma persistence adapters for sessions, transcripts, events, memory, artifacts, subagents, and scheduled tasks. |
 | Extension | `@amaster.ai/pi-attachments` | Attachment normalization, local/remote upload handling, document parsing, and model-readable attachment prompts. |
-| Extension | `@amaster.ai/pi-telemetry` | Runtime traces, TTFT, token/cost accounting and diagnostics with Langfuse and OpenTelemetry exporters. |
+| Extension | `@amaster.ai/pi-telemetry` | Runtime traces, TTFT, token/cost accounting and diagnostics with Langfuse, Arize Phoenix and OpenTelemetry exporters. |
 | Extension | `@amaster.ai/pi-task-scheduler` | Cron-based scheduled task management with LLM-callable tools. |
 | Extension | `@amaster.ai/pi-goal` | Derives a goal from the conversation and keeps the agent working until the condition is met, with iteration/token backstops. |
 | Extension | `@amaster.ai/pi-browser-use` | Browser automation via chrome-devtools-mcp, with opt-in live-session retention and cloud lifecycle adapters. |
@@ -121,7 +121,7 @@ import { createRuntimeStorage } from "@amaster.ai/pi-storage";
 import { JsonRuntimeStorage } from "@amaster.ai/pi-storage/json";
 import { loadPiSettings } from "@amaster.ai/pi-shared/settings";
 import { createLangfuseExporter } from "@amaster.ai/pi-telemetry/langfuse";
-import { createOtelExporter } from "@amaster.ai/pi-telemetry/otel";
+import { createOtelExporter, createPhoenixExporter } from "@amaster.ai/pi-telemetry/otel";
 import memoryExtension from "@amaster.ai/pi-memory/extension";
 ```
 

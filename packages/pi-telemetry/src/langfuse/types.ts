@@ -1,4 +1,5 @@
 import type { RuntimeTelemetryOptions } from '../index.js';
+import type { PhoenixDestinationConfig } from '../phoenix/types.js';
 
 export type LangfuseExporterConfig = {
   enabled: boolean;
@@ -25,6 +26,7 @@ export type OtelExporterConfig = {
     flushAt: number;
     flushIntervalMs: number;
   };
+  phoenix?: PhoenixDestinationConfig;
 } & RuntimeTelemetryOptions;
 
 export const DEFAULT_LANGFUSE_BASE_URL = 'https://cloud.langfuse.com';
