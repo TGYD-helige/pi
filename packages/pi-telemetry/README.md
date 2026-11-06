@@ -144,7 +144,7 @@ The Phoenix adapter projects the same finished spans to OpenInference `AGENT`, `
 
 Known Pi cost components are exported as OpenInference cost attributes without inventing a reasoning-cost split. Phoenix normally calculates displayed cost during ingestion from its own model/provider price table, so unknown models require Phoenix custom pricing and displayed cost can differ from the reported amount. A displayed `$0` with `costSource: "unknown"` does not establish that the request was free. A reported first-content timestamp is preserved as a `first_token` span event; Phoenix has no standard OpenInference TTFT attribute or dedicated TTFT display, although normal span latency remains available.
 
-Use `phoenix`, not `otel`, for a direct Phoenix endpoint: Phoenix receives gzip-compressed protobuf batches with a shared project resource, while generic OTLP intentionally retains its existing JSON wire format. An external collector that translates OTLP/JSON can still receive generic OTLP and forward it to Phoenix.
+Use `phoenix`, not `otel`, for a direct Phoenix endpoint: Phoenix receives gzip-compressed protobuf batches, while generic OTLP intentionally retains its existing JSON wire format. An external collector that translates OTLP/JSON can still receive generic OTLP and forward it to Phoenix.
 
 ### Live Phoenix verification
 
@@ -197,7 +197,7 @@ Compaction and branch summaries are generations in the active trace or standalon
 - `/telemetry status` (or `/telemetry`): show exporter state and session ID without exposing credentials.
 - `/telemetry flush`: flush pending finished spans and report export errors/timeouts. This does not end active spans or confirm backend ingestion.
 
-The TUI status indicates readiness, disabled export, missing credentials/endpoint, flush completion, or export failure. Configuration warnings remain visible when another destination is active. Export callbacks track failures separately for Langfuse, generic OTLP, and Phoenix; one destination succeeding does not hide another's failure. OTLP partial-success responses with `rejectedSpans > 0` also mark that destination as an error and are not retried as a whole batch, avoiding duplicate spans; decimal-string int64 values used by OTLP/JSON are recognized without numeric conversion. A later complete success clears the error. Status refreshes at session startup, settlement and explicit commands. Settlement flushes run in the background. Session shutdown calls `close()` after any background `flush()` completes; starting both together can reject final spans when the SDK export concurrency limit is full.
+The TUI status indicates readiness, disabled export, missing credentials/endpoint, flush completion, or export failure. Configuration warnings remain visible when another destination is active. Export callbacks track failures separately for Langfuse, generic OTLP, and Phoenix; one destination succeeding does not hide another's failure. OTLP partial-success responses with `rejectedSpans > 0` also mark that destination as an error and are not retried as a whole batch, avoiding duplicate spans; decimal-string int64 values used by OTLP/JSON are recognized without numeric conversion. A later complete success clears the error. Status refreshes at session startup, settlement and explicit commands. Prompt completion does not wait for backend flushing. Session shutdown waits for pending telemetry exports.
 
 ## Images and credential masking
 
