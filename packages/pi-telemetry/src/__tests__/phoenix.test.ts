@@ -295,6 +295,41 @@ describe('Phoenix telemetry export', () => {
     }
   });
 
+  it('accepts decimal string rejectedSpans in OTLP JSON', async () => {
+    const requests: string[] = [];
+    const server = createServer((request, response) => {
+      requests.push(request.url ?? '');
+      request.resume();
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ partialSuccess: { rejectedSpans: '1' } }));
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('missing test server port');
+    const exporter = createTelemetryExporter({
+      otel: { enabled: true, endpoint: `http://127.0.0.1:${address.port}` },
+    });
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      await exporter.publish({
+        ...context,
+        id: 'partial-rejection-string',
+        type: 'chat_turn_completed',
+        createdAt: '2026-05-02T00:00:01.000Z',
+      });
+      await exporter.flush?.();
+      expect(exporter.getStatus?.()).toMatchObject({ state: 'error' });
+      expect(requests).toHaveLength(1);
+      expect(JSON.stringify(errors.mock.calls)).toContain('otel rejected 1 span(s)');
+    } finally {
+      await exporter.close?.();
+      server.close();
+      await once(server, 'close');
+    }
+  });
+
   it('reports a Phoenix failure even when generic OTLP succeeds', async () => {
     vi.spyOn(OtlpProtoExporter.prototype, 'export').mockImplementation((_spans, callback) => {
       callback({ code: 1 });

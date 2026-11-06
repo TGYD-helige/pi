@@ -120,7 +120,7 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
   private readonly openSpans = new Map<string, LangfuseSpan>();
   private openSpanCapWarned = false;
   private exportFailures = new Set<string>();
-  private rejectedSpans = new Map<string, number>();
+  private rejectedSpans = new Map<string, number | string>();
   private flushFailed = false;
   private state = 'ready';
 
@@ -133,7 +133,7 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
         this.idGenerator,
         (destination, succeeded, rejectedSpans) => {
           if (rejectedSpans !== undefined) {
-            if (rejectedSpans > 0) this.rejectedSpans.set(destination, rejectedSpans);
+            if (rejectedSpans) this.rejectedSpans.set(destination, rejectedSpans);
             else this.rejectedSpans.delete(destination);
           }
           if (rejectedSpans) {
@@ -655,12 +655,13 @@ type OtlpExporterWithDelegate = SpanExporter & {
   };
 };
 
-function rejectedSpanCount(response: unknown): number {
+function rejectedSpanCount(response: unknown): number | string {
   if (!response || typeof response !== 'object') return 0;
   const partial = (response as { partialSuccess?: unknown }).partialSuccess;
   if (!partial || typeof partial !== 'object') return 0;
   const count = (partial as { rejectedSpans?: unknown }).rejectedSpans;
-  return typeof count === 'number' && Number.isFinite(count) && count > 0 ? count : 0;
+  if (typeof count === 'number') return Number.isFinite(count) && count > 0 ? count : 0;
+  return typeof count === 'string' && /^[1-9]\d*$/.test(count) ? count : 0;
 }
 
 // One span processor per destination inside a single provider; both are
@@ -668,7 +669,7 @@ function rejectedSpanCount(response: unknown): number {
 function buildTracerProvider(
   config: OtelExporterConfig,
   idGenerator: IdGenerator,
-  onExport: (destination: string, succeeded: boolean, rejectedSpans?: number) => void,
+  onExport: (destination: string, succeeded: boolean, rejectedSpans?: number | string) => void,
 ): BasicTracerProvider {
   const spanProcessors: SpanProcessor[] = [];
   function trackExporter(destination: string, exporter: SpanExporter): SpanExporter {
