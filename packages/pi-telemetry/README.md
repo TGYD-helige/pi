@@ -136,7 +136,7 @@ When the endpoint does not end with `/v1/traces`, the exporter appends `/v1/trac
 | `flushAt` | `number` | `20` | Phoenix batch size before flush |
 | `flushIntervalMs` | `number` | `5000` | Phoenix flush interval in ms |
 
-`projectName` is optional. Omit it to use the Phoenix server's default project; set it only when you need to select a different existing project. The Integration workflow supplies it through `PHOENIX_PROJECT_NAME` instead of creating per-run projects.
+`projectName` is optional. You may also set `PHOENIX_PROJECT_NAME` in the process environment. The settings value takes precedence over the environment variable; if neither is set, the Phoenix server selects its default project. The Integration workflow supplies the variable instead of creating per-run projects.
 
 For unauthenticated self-hosted Phoenix, use `endpoint: "http://localhost:6006"` and omit `apiKey`. For Phoenix Cloud or an authenticated server, set `apiKey` in user or agent-directory settings with `"${PHOENIX_API_KEY}"` interpolation and use the supplied space URL, for example `https://app.phoenix.arize.com/s/<space>`. A base URL or a full `/v1/traces` URL is accepted; trailing slashes are normalized and path prefixes are preserved without appending the suffix twice. Do not put API keys in trusted project settings: project settings do not expand environment variables.
 

@@ -1,6 +1,6 @@
 import { configurationWarnings, runtimeTelemetryOptions, type TelemetryConfig } from '../config.js';
 import { NoopRuntimeEventExporter } from '../exporters.js';
-import type { RuntimeEventExporter } from '../index.js';
+import type { RuntimeEventExporter, TelemetryEnvironment } from '../index.js';
 import { OtelRuntimeEventExporter } from '../otel/exporters.js';
 import {
   DEFAULT_FLUSH_AT,
@@ -39,13 +39,14 @@ export function toPhoenixDestinationConfig(
 
 export function resolvePhoenixExporterConfig(
   telemetryConfig: TelemetryConfig,
+  env: TelemetryEnvironment = process.env,
 ): PhoenixExporterConfig {
   const phoenix = telemetryConfig.phoenix;
   const endpoint = (
     phoenix?.endpoint === undefined ? DEFAULT_PHOENIX_ENDPOINT : (trim(phoenix.endpoint) ?? '')
   ).replace(/\/+$/, '');
   const apiKey = trim(phoenix?.apiKey);
-  const projectName = trim(phoenix?.projectName);
+  const projectName = trim(phoenix?.projectName ?? env.PHOENIX_PROJECT_NAME);
   return {
     enabled: Boolean(parseBoolean(phoenix?.enabled) && endpoint),
     configurationWarnings: configurationWarnings({ ...(phoenix ? { phoenix } : {}) }),
