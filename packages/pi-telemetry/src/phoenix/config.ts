@@ -1,12 +1,12 @@
 import { configurationWarnings, runtimeTelemetryOptions, type TelemetryConfig } from '../config.js';
 import { NoopRuntimeEventExporter } from '../exporters.js';
 import type { RuntimeEventExporter } from '../index.js';
-import { OtelRuntimeEventExporter } from '../langfuse/exporters.js';
+import { OtelRuntimeEventExporter } from '../otel/exporters.js';
 import {
   DEFAULT_FLUSH_AT,
   DEFAULT_FLUSH_INTERVAL_MS,
   type OtelExporterConfig,
-} from '../langfuse/types.js';
+} from '../otel/types.js';
 import { parseBoolean, parsePositiveInteger, trim } from '../parse.js';
 import type { PhoenixDestinationConfig, PhoenixExporterConfig } from './types.js';
 

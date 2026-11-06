@@ -14,14 +14,14 @@ import {
   NoopRuntimeEventExporter,
   type RuntimeTelemetryEvent,
 } from '../index.js';
-import { OtelRuntimeEventExporter, TelemetryIdGenerator } from '../langfuse/exporters.js';
-import { MAX_CLOSE_MS } from '../langfuse/types.js';
-import { normalizeOtelTracesEndpoint } from '../langfuse/utils.js';
 import {
   createRuntimeEventExporterFromEnv as createLangfuseRuntimeEventExporterFromEnv,
   resolveLangfuseConfig,
   resolveLangfuseExporterConfig,
 } from '../langfuse.js';
+import { OtelRuntimeEventExporter, TelemetryIdGenerator } from '../otel/exporters.js';
+import { MAX_CLOSE_MS } from '../otel/types.js';
+import { normalizeOtelTracesEndpoint } from '../otel/utils.js';
 import {
   createOtelRuntimeEventExporterFromEnv,
   createTelemetryExporter,

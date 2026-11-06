@@ -22,7 +22,7 @@ const { holder } = vi.hoisted(() => ({
 }));
 
 vi.mock('../otel.js', async () => {
-  const { OtelRuntimeEventExporter } = await import('../langfuse/exporters.js');
+  const { OtelRuntimeEventExporter } = await import('../otel/exporters.js');
   return {
     createTelemetryExporter: vi.fn((config: TelemetryConfig) => {
       const inMemory = new InMemorySpanExporter();

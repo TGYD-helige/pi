@@ -6,8 +6,6 @@ export {
   resolveLangfuseConfig,
   resolveLangfuseExporterConfig,
 } from './langfuse/config.js';
-export { OtelRuntimeEventExporter } from './langfuse/exporters.js';
-export type {
-  LangfuseExporterConfig,
-  OtelExporterConfig,
-} from './langfuse/types.js';
+export type { LangfuseExporterConfig } from './langfuse/types.js';
+export { OtelRuntimeEventExporter } from './otel/exporters.js';
+export type { OtelExporterConfig } from './otel/types.js';

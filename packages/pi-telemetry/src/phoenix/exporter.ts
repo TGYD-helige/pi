@@ -1,6 +1,6 @@
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-proto';
 import type { SpanExporter } from '@opentelemetry/sdk-trace-base';
-import { normalizeOtelTracesEndpoint } from '../langfuse/utils.js';
+import { normalizeOtelTracesEndpoint } from '../otel/utils.js';
 import { projectPhoenixSpan } from './mapping.js';
 import type { PhoenixDestinationConfig } from './types.js';
 
