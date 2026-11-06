@@ -1259,6 +1259,118 @@ describe('telemetryExtension', () => {
     expect(close).toHaveBeenCalledOnce();
   });
 
+  it('refreshes status when a background flush completes', async () => {
+    let state = 'ready';
+    let failFlush!: (error: Error) => void;
+    const flush = vi.fn(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          failFlush = reject;
+        }),
+    );
+    vi.mocked(createTelemetryExporter).mockReturnValue({
+      publish: vi.fn(() => Promise.resolve()),
+      flush,
+      close: vi.fn(() => Promise.resolve()),
+      getStatus: () => ({ enabled: true, state }),
+    });
+    const setStatus = vi.fn();
+    telemetryExtension(mockPi as any);
+    await fireEvent('session_start', {});
+    await fireEvent('turn_start', { timestamp: Date.now() });
+
+    const settled = fireEvent('agent_settled', {}, { hasUI: true, ui: { setStatus } });
+    await vi.waitFor(() => expect(flush).toHaveBeenCalled());
+    expect(setStatus).toHaveBeenLastCalledWith('telemetry', 'telemetry: ready');
+    state = 'error';
+    failFlush(new Error('backend unavailable'));
+    await settled;
+    await delay(10);
+    expect(setStatus).toHaveBeenLastCalledWith('telemetry', 'telemetry: error');
+  });
+
+  it('does not refresh status for a background flush from an older session', async () => {
+    const oldState = { value: 'ready' };
+    let failFlush!: (error: Error) => void;
+    const oldExporter = {
+      publish: vi.fn(() => Promise.resolve()),
+      flush: vi.fn(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            failFlush = reject;
+          }),
+      ),
+      close: vi.fn(() => Promise.resolve()),
+      getStatus: () => ({ enabled: true, state: oldState.value }),
+    };
+    const newExporter = {
+      publish: vi.fn(() => Promise.resolve()),
+      flush: vi.fn(() => Promise.resolve()),
+      close: vi.fn(() => Promise.resolve()),
+      getStatus: () => ({ enabled: true, state: 'ready' }),
+    };
+    vi.mocked(createTelemetryExporter)
+      .mockReturnValueOnce(oldExporter)
+      .mockReturnValueOnce(newExporter);
+    const setStatus = vi.fn();
+    telemetryExtension(mockPi as any);
+    await fireEvent('session_start', {});
+    await fireEvent('turn_start', { timestamp: Date.now() });
+    const settled = fireEvent('agent_settled', {}, { hasUI: true, ui: { setStatus } });
+    await vi.waitFor(() => expect(oldExporter.flush).toHaveBeenCalled());
+
+    await fireEvent(
+      'session_start',
+      {},
+      { hasUI: true, ui: { setStatus }, sessionManager: { getSessionId: () => 'new-session' } },
+    );
+    const callsBeforeOldFlush = setStatus.mock.calls.length;
+    oldState.value = 'error';
+    failFlush(new Error('old backend failed'));
+    await settled;
+    await delay(10);
+    expect(setStatus.mock.calls.length).toBe(callsBeforeOldFlush);
+    expect(setStatus).toHaveBeenLastCalledWith('telemetry', 'telemetry: ready');
+  });
+
+  it('ignores a stale UI context when a background flush completes', async () => {
+    let failFlush!: (error: Error) => void;
+    const flush = vi.fn(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          failFlush = reject;
+        }),
+    );
+    vi.mocked(createTelemetryExporter).mockReturnValue({
+      publish: vi.fn(() => Promise.resolve()),
+      flush,
+      close: vi.fn(() => Promise.resolve()),
+      getStatus: () => ({ enabled: true, state: 'ready' }),
+    });
+    let stale = false;
+    const setStatus = vi.fn();
+    const ctx = {
+      get hasUI() {
+        if (stale) {
+          throw new Error('This extension ctx is stale after session replacement or reload.');
+        }
+        return true;
+      },
+      ui: { setStatus },
+    };
+    telemetryExtension(mockPi as any);
+    await fireEvent('session_start', {});
+    await fireEvent('turn_start', { timestamp: Date.now() });
+    const settled = fireEvent('agent_settled', {}, ctx);
+    await vi.waitFor(() => expect(flush).toHaveBeenCalled());
+
+    stale = true;
+    failFlush(new Error('backend failed'));
+    await settled;
+    await expect(fireEvent('session_shutdown', {})).resolves.toBeUndefined();
+    expect(setStatus).toHaveBeenCalledOnce();
+  });
+
   it('closes exporter on session_shutdown', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', { type: 'session_start', reason: 'startup' });
