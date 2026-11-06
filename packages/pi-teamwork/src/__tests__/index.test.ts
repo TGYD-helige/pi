@@ -570,6 +570,23 @@ describe('MulticaAdapter cancellation', () => {
 });
 
 describe('initMulticaProvider', () => {
+  it('keeps version-probe timeouts distinct from a missing CLI', async () => {
+    await expect(
+      initMulticaProvider({}, async () => {
+        throw new DOMException('secret-token', 'TimeoutError');
+      }),
+    ).rejects.toMatchObject({ errorCategory: 'timeout' });
+  });
+  it('does not treat an unsuccessful configuration command as existing configuration', async () => {
+    await expect(
+      initMulticaProvider({ serverUrl: 'https://fixture.invalid' }, async (_cmd, args) => ({
+        stdout: '',
+        stderr: 'secret-token',
+        code: args[0] === 'config' ? 1 : 0,
+      })),
+    ).rejects.toThrow(/configuration/i);
+  });
+
   it('reports a missing CLI without requiring the deprecated autoInstall flag', async () => {
     const calls: string[][] = [];
     const exec: ExecFn = async (_cmd, args) => {
@@ -605,22 +622,21 @@ describe('initMulticaProvider', () => {
     expect(calls).toEqual([['--version'], ['daemon', 'start']]);
   });
 
-  it('continues even if login fails', async () => {
+  it('reports login failure instead of initializing an unauthenticated adapter', async () => {
     let daemonStarted = false;
     const exec: ExecFn = async (_cmd, args) => {
       if (args.includes('login')) throw new Error('login failed');
       if (args.includes('start')) daemonStarted = true;
       return { stdout: '', stderr: '', code: 0 };
     };
-    const { adapter } = await initMulticaProvider({ token: 'bad-token' }, exec);
-    expect(adapter).toBeInstanceOf(MulticaAdapter);
+    await expect(initMulticaProvider({ token: 'bad-token' }, exec)).rejects.toThrow(/login/i);
     expect(daemonStarted).toBe(true);
   });
 
-  it('continues even if daemon start fails', async () => {
+  it('accepts an already running daemon only after a positive status check', async () => {
     const exec: ExecFn = async (_cmd, args) => {
       if (args.includes('start')) throw new Error('already running');
-      return { stdout: '', stderr: '', code: 0 };
+      return { stdout: args.includes('status') ? '{"running":true}' : '', stderr: '', code: 0 };
     };
     const { adapter } = await initMulticaProvider({}, exec);
     expect(adapter).toBeInstanceOf(MulticaAdapter);
@@ -732,7 +748,7 @@ describe('initMulticaProvider', () => {
 
   it('reports the CLI as unavailable when the version check throws', async () => {
     const exec: ExecFn = async () => {
-      throw new Error('command not found');
+      throw Object.assign(new Error('command not found'), { code: 'ENOENT' });
     };
 
     const { installResult } = await initMulticaProvider({ autoInstall: true }, exec);

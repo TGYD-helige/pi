@@ -1,3 +1,4 @@
+import { classifyError } from '@amaster.ai/pi-shared';
 import { describe, expect, it } from 'vitest';
 import {
   cancelledError,
@@ -111,8 +112,9 @@ describe('classifyHttpError', () => {
 
 describe('describeNetworkError', () => {
   it('classifies timeout', () => {
-    const { message } = describeNetworkError(new Error('connect ETIMEDOUT'), builtIn);
-    expect(message).toMatch(/timed out/i);
+    const error = describeNetworkError(new Error('connect ETIMEDOUT'), builtIn);
+    expect(error.message).toMatch(/timed out/i);
+    expect(classifyError(error).errorCategory).toBe('timeout');
   });
 
   it('classifies DNS failure', () => {
@@ -402,5 +404,17 @@ describe('missingKeyError', () => {
     const err = missingKeyError(custom);
     expect(err.message).toMatch(/customProviders\.amaster\.apiKey/);
     expect(err.message).not.toMatch(/_API_KEY/);
+  });
+});
+
+describe('safe timeout metadata', () => {
+  it('keeps a deadline identifiable after sanitizing an image download failure', () => {
+    const error = describeDownloadError('image input', 'https://example.com/image?token=secret', {
+      rejected: new DOMException('secret', 'TimeoutError'),
+    });
+    expect(error.message).toContain('timed out');
+    expect(classifyError(error).errorCategory).toBe('timeout');
+    expect(error.cause).toBeUndefined();
+    expect(JSON.stringify(error)).not.toContain('token=secret');
   });
 });

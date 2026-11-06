@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
+import { connect as connectSocket, Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -10,6 +11,11 @@ import { DevToolsClient } from '../index.js';
 import { BrowserAcquisitionError, type ManagedBrowser } from '../session-backend.js';
 import * as connectionModule from '../session-connection.js';
 import { serveBrowserSession } from '../session-server.js';
+
+vi.mock('node:net', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:net')>();
+  return { ...actual, connect: vi.fn(actual.connect) };
+});
 
 function deferred() {
   let resolve!: () => void;
@@ -20,6 +26,37 @@ function deferred() {
   });
   return { promise, resolve, reject };
 }
+
+describe('browser session startup', () => {
+  it('publishes a reachable control port when the first allocation is blocked', async () => {
+    const token = randomBytes(32).toString('hex');
+    const probe = vi.mocked(connectSocket).mockImplementationOnce(() => {
+      const socket = new Socket();
+      queueMicrotask(() => socket.emit('error', new Error('ECONNREFUSED')));
+      return socket;
+    });
+    vi.spyOn(DevToolsClient.prototype, 'connect').mockResolvedValue();
+    vi.spyOn(DevToolsClient.prototype, 'close').mockResolvedValue();
+    let session: Awaited<ReturnType<typeof serveBrowserSession>> | undefined;
+    try {
+      session = await serveBrowserSession(
+        { session: { enabled: true, key: 'control-port', retentionMs: 30_000 } },
+        token,
+      );
+      expect(probe).toHaveBeenCalledTimes(2);
+      const response = await fetch(`http://127.0.0.1:${session.port}/`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'attach', owner: randomBytes(32).toString('hex') }),
+      });
+      expect(response.status).toBe(200);
+    } finally {
+      await session?.stop();
+      probe.mockReset();
+      vi.restoreAllMocks();
+    }
+  });
+});
 
 describe('browser session shutdown', () => {
   it.each([

@@ -13,6 +13,20 @@ import {
 const model = { provider: 'test', model: 'test-model' };
 
 describe('task scheduler', () => {
+  it('releases its lock when startup cannot read stored tasks', async () => {
+    const store = new MemoryScheduledTaskStore();
+    const failure = new Error('storage unavailable');
+    vi.spyOn(store, 'list').mockRejectedValueOnce(failure);
+    const lock = new MemorySchedulerLock();
+    const scheduler = new PersistentTaskScheduler({ store, lock, runner: async () => {} });
+    await expect(scheduler.start()).rejects.toBe(failure);
+    expect(scheduler.isActive()).toBe(false);
+    expect(lock.isAcquired()).toBe(false);
+    await scheduler.start();
+    expect(scheduler.isActive()).toBe(true);
+    await scheduler.stop();
+  });
+
   it('normalizes interval, once, cron, and RRULE schedules', () => {
     expect(resolveScheduledTaskDefinition({ type: 'interval', schedule: '10m' })).toMatchObject({
       type: 'interval',
@@ -113,13 +127,16 @@ describe('task scheduler', () => {
     await scheduler.stop();
   });
 
-  it('records failed task runs and emits failure hooks', async () => {
+  it.each([
+    new Error('secret-provider-body'),
+    new DOMException('secret-provider-body', 'TimeoutError'),
+  ])('records safe failed task runs and emits failure hooks (%s)', async (error) => {
     const failures: string[] = [];
     const scheduler = new PersistentTaskScheduler({
       store: new MemoryScheduledTaskStore(),
       lock: new MemorySchedulerLock(),
       runner: async () => {
-        throw new Error('nope');
+        throw error;
       },
       hooks: {
         onTaskFailed: ({ error }) => {
@@ -143,9 +160,13 @@ describe('task scheduler', () => {
     await waitFor(async () => (await scheduler.get(task.id))?.lastStatus === 'error');
 
     const failed = await scheduler.get(task.id);
-    expect(failed?.lastError).toBe('nope');
-    expect(failed?.runHistory?.at(-1)).toMatchObject({ status: 'error', message: 'nope' });
-    expect(failures).toEqual(['nope']);
+    expect(failed?.lastError).not.toContain('secret-provider-body');
+    expect(failed?.lastError).toContain(error.name === 'TimeoutError' ? 'timed out' : 'failed');
+    expect(failed?.runHistory?.at(-1)).toMatchObject({
+      status: 'error',
+      message: failed?.lastError,
+    });
+    expect(failures).toEqual([failed?.lastError]);
     await scheduler.stop();
   });
 

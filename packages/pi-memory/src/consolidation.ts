@@ -5,6 +5,7 @@
  * update entries. Follows a 4-phase prompt: Orient → Gather → Consolidate → Prune.
  */
 
+import { createModelErrorCapture, SafeToolError } from '@amaster.ai/pi-shared';
 import { Agent } from '@earendil-works/pi-agent-core';
 import { streamSimple } from '@earendil-works/pi-ai/compat';
 import { MEMORY_GUIDANCE } from './guidance.js';
@@ -107,18 +108,22 @@ export function buildConsolidationUserPrompt(turns: DreamTurn[]): string {
 export async function runConsolidation(opts: ConsolidationOptions): Promise<boolean> {
   const { memoryDir, turns, modelConfig, modelRegistry, signal, maxTurns } = opts;
 
+  signal?.throwIfAborted();
   const model = modelRegistry.find(modelConfig.provider, modelConfig.model);
   if (!model) return false;
 
   const auth = await modelRegistry.getApiKeyAndHeaders(model);
+  signal?.throwIfAborted();
   if (!auth.ok) return false;
 
   const store = new MemoryStore({ dir: memoryDir });
   await store.loadFromDisk();
+  signal?.throwIfAborted();
 
   const tools = createMemoryTools(store);
   const userPrompt = buildConsolidationUserPrompt(turns);
 
+  const modelErrors = createModelErrorCapture();
   const agent = new Agent({
     initialState: {
       systemPrompt: CONSOLIDATION_SYSTEM_PROMPT,
@@ -127,12 +132,17 @@ export async function runConsolidation(opts: ConsolidationOptions): Promise<bool
     },
     streamFn: (m, c, streamOpts) => {
       const existingSignal = (streamOpts as { signal?: AbortSignal } | undefined)?.signal;
-      return streamSimple(m, c, {
-        ...streamOpts,
-        ...(auth.apiKey ? { apiKey: auth.apiKey } : {}),
-        ...(auth.headers ? { headers: auth.headers } : {}),
-        ...(existingSignal ? { signal: existingSignal } : signal ? { signal } : {}),
-      });
+      return modelErrors.run(() =>
+        streamSimple(m, c, {
+          ...streamOpts,
+          ...modelErrors.fetchOptions(m.api, streamOpts?.fetch),
+          ...(auth.apiKey ? { apiKey: auth.apiKey } : {}),
+          ...(auth.headers ? { headers: auth.headers } : {}),
+          ...(signal
+            ? { signal: existingSignal ? AbortSignal.any([existingSignal, signal]) : signal }
+            : {}),
+        }),
+      );
     },
     convertToLlm: (msgs) => msgs as never[],
   });
@@ -148,6 +158,27 @@ export async function runConsolidation(opts: ConsolidationOptions): Promise<bool
     }
   });
 
-  await agent.prompt(userPrompt);
+  const onAbort = () => agent.abort();
+  signal?.addEventListener('abort', onAbort, { once: true });
+  try {
+    signal?.throwIfAborted();
+    await agent.prompt(userPrompt);
+  } finally {
+    signal?.removeEventListener('abort', onAbort);
+  }
+  signal?.throwIfAborted();
+  const last = agent.state.messages.filter((message) => message.role === 'assistant').at(-1);
+  if (last?.role === 'assistant' && (last.stopReason === 'error' || last.stopReason === 'aborted'))
+    throw modelErrors.error(
+      'Memory consolidation model',
+      last,
+      'Consolidation did not complete. Inspect memory before retrying any writes; the checkpoint was not advanced.',
+    );
+  if (agent.state.messages.some((message) => message.role === 'toolResult' && message.isError))
+    throw new SafeToolError(
+      'Memory consolidation',
+      undefined,
+      'A memory tool failed; consolidation may be incomplete. Inspect memory before retrying any writes; the checkpoint was not advanced.',
+    );
   return true;
 }

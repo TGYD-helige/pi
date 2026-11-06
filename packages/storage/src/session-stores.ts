@@ -5,6 +5,7 @@
  * validation, runtime event recording, and memory tool policy outside these
  * stores.
  */
+
 import { randomUUID } from 'node:crypto';
 import type {
   ConversationMessage,
@@ -18,6 +19,7 @@ import type {
   RuntimeSessionSummary,
   TranscriptStore,
 } from '@amaster.ai/pi-shared';
+import { ValidationError } from '@amaster.ai/pi-shared';
 import { readJsonFile, writeJsonFile } from './json-file.js';
 
 type RuntimeSessionSummaryFields = Omit<RuntimeSessionSummary, keyof RuntimeSession>;
@@ -167,7 +169,12 @@ export class JsonFileTranscriptStore implements TranscriptStore {
       return;
     }
     const raw = await readJsonFile<unknown>(this.filePath, createEmptyConversationHistoryState());
-    this.state = isConversationHistoryState(raw) ? raw : createEmptyConversationHistoryState();
+    if (!isConversationHistoryState(raw))
+      throw new ValidationError(
+        'Stored conversation history has an invalid or unsupported schema. Restore the file before updating it; existing data was not replaced.',
+        'configuration_error',
+      );
+    this.state = raw;
     this.loaded = true;
   }
 

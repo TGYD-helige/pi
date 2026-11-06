@@ -133,6 +133,20 @@ describe('runGoalEngine', () => {
     expect(deps.sendUserMessage).not.toHaveBeenCalled();
   });
 
+  it('makes an evaluator failure visible while keeping the goal active and avoiding continuation', async () => {
+    const state = new GoalState();
+    state.set('c', 'derived');
+    const deps = makeDeps(state);
+    evaluateCondition.mockImplementation(async (opts) => {
+      opts.onError({ error: 'Evaluator timed out.', errorCategory: 'timeout' });
+      return null;
+    });
+    expect(await runGoalEngine(deps, messages)).toBe('skipped');
+    expect(state.get()?.status).toBe('active');
+    expect(deps.notify).toHaveBeenCalledWith(expect.stringContaining('timed out'), 'warning');
+    expect(deps.sendUserMessage).not.toHaveBeenCalled();
+  });
+
   it('does nothing when the evaluator call fails (returns null)', async () => {
     const state = new GoalState();
     state.set('c', 'derived');

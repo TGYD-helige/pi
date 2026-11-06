@@ -1,5 +1,10 @@
+import { describeToolError } from '@amaster.ai/pi-shared';
 import { isProjectTrusted } from '@amaster.ai/pi-shared/settings';
-import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  ToolDefinition,
+} from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
 import { ChatBridge } from './bridge.js';
 import { loadChannelConfig, updateLocalChannelConfig } from './config.js';
@@ -55,6 +60,30 @@ function enumSchema(values: string[], description: string): unknown {
 }
 
 export default function piChannelsExtension(pi: ExtensionAPI): void {
+  const registerTool = (tool: ToolDefinition) =>
+    pi.registerTool({
+      ...tool,
+      async execute(...args) {
+        try {
+          return await tool.execute(...args);
+        } catch (error) {
+          if (args[2]?.aborted) throw error;
+          const failure = describeToolError(
+            tool.name,
+            error,
+            'Delivery may have completed. Inspect delivery state before retrying.',
+          );
+          console.error(`[pi-channels] ${tool.name} failed (category=${failure.errorCategory})`);
+          return {
+            content: [{ type: 'text' as const, text: failure.error }],
+            structuredContent: failure,
+            details: undefined,
+            isError: true,
+          };
+        }
+      },
+    });
+
   const registry = new ChannelRegistry();
   let bridge: ChatBridge | null = null;
   let sessionCwd = process.cwd();
@@ -255,7 +284,7 @@ export default function piChannelsExtension(pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerTool({
+  registerTool({
     name: 'notify',
     label: 'Channel',
     description:
@@ -339,10 +368,15 @@ export default function piChannelsExtension(pi: ExtensionAPI): void {
       else if (params.source !== undefined) message.source = params.source;
       if (rawBody !== undefined) message.rawBody = rawBody;
       const result = await registry.send(message, signal);
+      if (!result.ok)
+        return {
+          content: [{ type: 'text' as const, text: `Failed: ${result.error}` }],
+          details: undefined,
+          structuredContent: result,
+          isError: true,
+        };
       return textToolResult(
-        result.ok
-          ? `Sent via "${adapterName.value}"${params.recipient ? ` to ${params.recipient}` : ''}.`
-          : `Failed: ${result.error}`,
+        `Sent via "${adapterName.value}"${params.recipient ? ` to ${params.recipient}` : ''}.`,
       );
     },
   });

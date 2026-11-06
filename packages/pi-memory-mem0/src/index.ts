@@ -52,14 +52,10 @@ const SESSION_RECALL_ENTRY = 'mem0-session-recall';
 const CAPTURE_ENTRY = 'mem0-pending-capture';
 
 function loadConfig(cwd: string, projectTrusted = false): Mem0ExtensionConfig {
-  try {
-    return loadPiSettings<Mem0ExtensionConfig>(SETTINGS_KEY, {
-      cwd,
-      projectTrusted,
-    });
-  } catch {
-    return {};
-  }
+  return loadPiSettings<Mem0ExtensionConfig>(SETTINGS_KEY, {
+    cwd,
+    projectTrusted,
+  });
 }
 
 function resolveUserId(configUserId?: string, scope: MemoryUserIdScope = 'project'): string {
@@ -347,7 +343,7 @@ export default function mem0Extension(pi: ExtensionAPI): void {
     const recalled = await current.consume();
     if (prefetch !== current) return;
     if (activeRecallFrequency === 'session' && activeMode === 'embedded') {
-      recallQueuedThisSession = recalled !== undefined;
+      recallQueuedThisSession = current.didComplete;
       if (recallQueuedThisSession)
         pi.appendEntry(SESSION_RECALL_ENTRY, ctx.sessionManager.getSessionId());
     }

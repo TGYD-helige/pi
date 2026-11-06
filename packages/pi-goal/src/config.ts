@@ -59,12 +59,8 @@ export function resolveConfig(raw?: PiGoalConfig): ResolvedGoalConfig {
 }
 
 export function loadSettings(cwd: string, projectTrusted = false): PiGoalConfig | undefined {
-  try {
-    const config = loadPiSettings<Partial<PiGoalConfig>>(SETTINGS_KEY, { cwd, projectTrusted });
-    return Object.keys(config).length > 0 ? (config as PiGoalConfig) : undefined;
-  } catch {
-    return undefined;
-  }
+  const config = loadPiSettings<Partial<PiGoalConfig>>(SETTINGS_KEY, { cwd, projectTrusted });
+  return Object.keys(config).length > 0 ? (config as PiGoalConfig) : undefined;
 }
 
 function isValidModel(model: GoalModelConfig | undefined): model is GoalModelConfig {

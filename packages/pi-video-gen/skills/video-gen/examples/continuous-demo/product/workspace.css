@@ -1,0 +1,16 @@
+.request-workspace { width: 880px; color: #12203c; background: white; border: 1px solid #c8d5ee; border-radius: 20px; overflow: hidden; font: 24px/1.5 "PingFang SC", "Microsoft YaHei", sans-serif; }
+.request-workspace * { box-sizing: border-box; }
+.request-workspace header { display: flex; align-items: center; gap: 16px; padding: 22px 32px; background: #f3f6fd; border-bottom: 1px solid #dce5f4; }
+.request-workspace header > span:last-child { margin-left: auto; color: #536786; font-size: 18px; }
+.request-workspace .workspace-mark { display: grid; place-items: center; width: 36px; height: 36px; color: white; background: #275de9; border-radius: 9px; }
+.request-workspace form { display: grid; gap: 14px; padding: 28px 32px; }
+.request-workspace textarea { width: 100%; height: 96px; padding: 16px; border: 2px solid #aebfdf; border-radius: 10px; font: inherit; resize: none; color: inherit; background: white; }
+.request-workspace textarea:focus-visible, .request-workspace button:focus-visible { outline: 3px solid #275de9; outline-offset: 3px; }
+.request-workspace button { justify-self: end; padding: 10px 24px; border: 0; border-radius: 10px; background: #275de9; color: white; font: inherit; cursor: pointer; }
+.request-workspace button:disabled { background: #e3eaf8; color: #536786; cursor: default; }
+.request-workspace .workspace-result { min-height: 224px; margin: 0 32px; padding: 20px 24px; background: #f3f6fd; border-radius: 12px; }
+.request-workspace h2 { font-size: 27px; margin: 0 0 12px; }
+.request-workspace p { color: #536786; margin: 0; }
+.request-workspace ul { margin: 0; padding-left: 28px; }
+.request-workspace li + li { margin-top: 8px; }
+.request-workspace footer { padding: 18px 32px; color: #536786; font-size: 17px; }

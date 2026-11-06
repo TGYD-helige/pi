@@ -1,3 +1,4 @@
+import { ValidationError } from '@amaster.ai/pi-shared';
 import type {
   FetchResponse,
   ResolvedProvider,
@@ -39,8 +40,9 @@ export class FirecrawlProvider extends BaseProvider {
     signal?: AbortSignal,
   ): Promise<SearchResponse> {
     if (!provider.apiKey) {
-      throw new Error(
+      throw new ValidationError(
         'Firecrawl API key not configured. Set FIRECRAWL_API_KEY env var or configure in settings.json.',
+        'configuration_error',
       );
     }
 
@@ -109,8 +111,9 @@ export class FirecrawlProvider extends BaseProvider {
     signal?: AbortSignal,
   ): Promise<FetchResponse> {
     if (!provider.apiKey) {
-      throw new Error(
+      throw new ValidationError(
         'Firecrawl API key not configured. Set FIRECRAWL_API_KEY env var or configure in settings.json.',
+        'configuration_error',
       );
     }
 

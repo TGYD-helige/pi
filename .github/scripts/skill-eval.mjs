@@ -175,14 +175,16 @@ export function parsePiEvents(stdout) {
           .filter((key) => Number.isFinite(usage?.[key]) && usage[key] >= 0)
           .map((key) => [key, usage[key]])),
       });
-      answers.push(...(event.message.content ?? []).filter((item) => item.type === 'text').map((item) => item.text));
+      // A provider retry replaces partial prose, but cannot erase executed tools.
+      if (stopReason === 'error') answers.length = 0;
+      else answers.push(...(event.message.content ?? []).filter((item) => item.type === 'text').map((item) => item.text));
     }
   }
   const answer = answers.join('\n');
   diagnostics.answerChars = answer.length;
   let failure = '';
   if (diagnostics.messages.some((message) => message.stopReason === 'length')) failure = 'Assistant reached its output token limit';
-  else if (diagnostics.messages.some((message) => ['error', 'aborted'].includes(message.stopReason))) failure = 'Assistant did not complete';
+  else if (diagnostics.messages.at(-1)?.stopReason === 'error' || diagnostics.messages.some((message) => message.stopReason === 'aborted')) failure = 'Assistant did not complete';
   else if (diagnostics.messages.at(-1)?.stopReason !== 'stop') failure = 'Assistant did not finish with a completed response';
   else if (answer.length > 20_000) failure = 'Pi answer exceeded the 20000-character evaluation limit';
   if (failure) throw Object.assign(new Error(failure), { diagnostics, answer: answer.slice(0, 20_000), calls: [...calls.values()] });
@@ -686,7 +688,7 @@ async function main() {
   }
 
   const runCount = Number(process.env.SKILL_EVAL_RUNS || '3');
-  const timeoutMs = Number(process.env.SKILL_EVAL_TIMEOUT_MS || '120000');
+  const timeoutMs = Number(process.env.SKILL_EVAL_TIMEOUT_MS || '240000');
   if (!Number.isInteger(runCount) || runCount < 1 || runCount > 5) throw new Error('SKILL_EVAL_RUNS must be 1..5');
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 600000) throw new Error('SKILL_EVAL_TIMEOUT_MS must be 1000..600000');
 

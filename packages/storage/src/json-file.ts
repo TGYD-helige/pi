@@ -1,3 +1,4 @@
+import { SafeToolError } from '@amaster.ai/pi-shared';
 /**
  * Minimal JSON-file persistence helpers.
  *
@@ -29,9 +30,15 @@ export async function readJsonFile<T>(filePath: string, fallback: T): Promise<T>
     }
     if (error instanceof SyntaxError) {
       try {
-        return await readJsonFileStrict<T>(backupPath);
-      } catch {
-        return fallback;
+        const restored = await readJsonFileStrict<T>(backupPath);
+        console.error('[pi-storage] primary JSON is malformed; recovered from backup');
+        return restored;
+      } catch (backupError) {
+        throw new SafeToolError(
+          'Read stored JSON',
+          backupError,
+          'The primary file is corrupt and its backup is unavailable or malformed. Refusing to initialize empty data; restore the file or backup before retrying.',
+        );
       }
     }
     throw error;
@@ -42,16 +49,27 @@ export async function writeJsonFile(filePath: string, value: unknown): Promise<v
   await mkdir(path.dirname(filePath), { recursive: true });
   const tempPath = `${filePath}.${randomUUID()}.tmp`;
   const backupPath = jsonBackupPath(filePath);
-  await copyFile(filePath, backupPath).catch((error) => {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      throw error;
-    }
-  });
+  const backupCandidate = `${tempPath}.bak`;
+  try {
+    await copyFile(filePath, backupCandidate);
+    await readJsonFileStrict<unknown>(backupCandidate);
+    await rename(backupCandidate, backupPath);
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      console.error('[pi-storage] primary JSON is malformed; retained the existing backup');
+    } else if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  } finally {
+    await rm(backupCandidate, { force: true }).catch(() =>
+      console.error('[pi-storage] backup cleanup failed'),
+    );
+  }
   try {
     await writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`);
     await rename(tempPath, filePath);
   } catch (error) {
-    await rm(tempPath, { force: true }).catch(() => undefined);
+    await rm(tempPath, { force: true }).catch(() =>
+      console.error('[pi-storage] temporary JSON cleanup failed'),
+    );
     throw error;
   }
 }

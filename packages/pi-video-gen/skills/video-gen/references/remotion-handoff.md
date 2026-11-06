@@ -30,4 +30,6 @@ For frame-derived animation, persistent carriers and shared picture/sound timing
 
 The [continuous motion film](../examples/continuous-demo/README.md) is an editable 26-second project: one persistent preview travels through material collection, a full-frame shot, an editing timeline, separated picture/text/audio planes, a review view and a closing play mark. Shared event times drive both motion landings and the locally synthesized score. Its UI illustrates the workflow rather than an editor supplied by the plugin.
 
+The same project includes a [product component example](../examples/continuous-demo/README.md#product-component-example) with one styled business view shared between an interactive playground and a frame-derived film. For source component or release-note demonstrations, follow [product component integration](product-components.md).
+
 Remotion has its own [license terms and FAQ](https://www.remotion.dev/docs/license/faq). The project owner should check the applicable terms before using this path in commercial automation. The plugin does not bundle Remotion code.

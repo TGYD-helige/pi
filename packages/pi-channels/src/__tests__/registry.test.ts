@@ -9,6 +9,20 @@ vi.mock('@amaster.ai/pi-shared', async (importOriginal) => ({
 }));
 
 describe('ChannelRegistry', () => {
+  it('returns a safe timeout and ambiguous delivery outcome', async () => {
+    const registry = new ChannelRegistry();
+    registry.register('fixture', {
+      direction: 'outgoing',
+      send: async () => {
+        throw new DOMException('secret-token', 'TimeoutError');
+      },
+    } as any);
+    const result = await registry.send({ adapter: 'fixture', recipient: 'room', text: 'hello' });
+    expect(result).toHaveProperty('errorCategory', 'timeout');
+    expect(result.error).toContain('Delivery may have completed');
+    expect(JSON.stringify(result)).not.toContain('secret-token');
+  });
+
   beforeEach(() => {
     vi.unstubAllGlobals();
     safeFetchMock.mockReset();
@@ -83,6 +97,7 @@ describe('ChannelRegistry', () => {
     ).resolves.toEqual({
       ok: false,
       error: expect.stringContaining('Outbound URL must use a public HTTP(S) destination.'),
+      errorCategory: 'invalid_request',
     });
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -121,7 +136,7 @@ describe('ChannelRegistry', () => {
       text: 'hello',
     });
 
-    expect(result).toEqual({ ok: false, error: 'Webhook request failed with HTTP 500.' });
+    expect(result).toMatchObject({ ok: false, errorCategory: 'http_error', httpStatus: 500 });
     expect(JSON.stringify(result)).not.toContain('secret material');
   });
 
@@ -148,7 +163,7 @@ describe('ChannelRegistry', () => {
     expect(serialized).not.toContain('configured-secret');
     expect(log).toHaveBeenCalledWith(
       'message_send_failed',
-      { adapter: 'failing', source: 'unit' },
+      { adapter: 'failing', source: 'unit', errorCategory: 'request_failed' },
       'ERROR',
     );
   });

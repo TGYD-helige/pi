@@ -242,3 +242,7 @@ pnpm build      # tsc -b
 pnpm typecheck  # tsc -b --pretty false
 pnpm test       # vitest run src
 ```
+
+### Tool failures
+
+`web_search`, `web_fetch`, `x_search`, and `image_search` return `isError: true` with a safe `error` message and `errorCategory`: `timeout` for request deadlines, `http_error` for recognized HTTP failures (with numeric `httpStatus`), `network_error` for recognized transport failures, `cancelled` for an upstream cancellation, `configuration_error` / `invalid_request` / `invalid_response` for vetted local validation failures, or `request_failed` for unclassified failures. Raw provider errors, response bodies, URLs, and credentials are excluded from these failure results and diagnostic logs. Caller cancellation propagates to the runtime. The `/web-search`, `/web-fetch`, and `/image-search` commands use the same safe messages and log categories. A timeout does not imply invalid provider configuration.

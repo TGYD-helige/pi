@@ -116,3 +116,7 @@ Prefer a small, cheap model for `model` — the evaluator runs after every agent
 - **Not included:** Codex's idle auto-resume, pause/resume dialogs, file-backed objectives, and cross-session persistence.
 
 Transcript limits include role labels and separators. An oversized newest message retains its beginning and conclusion within the configured limit and is reported as partially omitted evidence. If evaluation reports insufficient evidence, continuation asks the agent to recover original files or recorded results before rerunning unavailable checks.
+
+### Failure diagnostics
+
+Evaluator failures keep the goal active and make the unavailable evaluation visible; they do not trigger continuation or mark the goal complete. The nullable completion API is preserved, with an optional `onError` callback carrying safe diagnostics on `completeOnce`, `EvaluateOptions`, and `DeriveOptions`.

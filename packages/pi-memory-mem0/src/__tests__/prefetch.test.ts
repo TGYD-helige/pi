@@ -23,6 +23,30 @@ function pendingProvider(cancellable = true) {
 afterEach(() => vi.useRealTimers());
 
 describe('Prefetch', () => {
+  it('reports a safe recall failure instead of implying an empty search', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const prefetch = new Prefetch(
+        {
+          ...pendingProvider().provider,
+          search: async () => {
+            throw Object.assign(new Error('secret-token'), { code: 'ECONNREFUSED' });
+          },
+        },
+        'user',
+        { topK: 5 },
+      );
+      prefetch.queue('fixture');
+      const result = await prefetch.consume();
+      expect(result).toContain('Memory recall unavailable');
+      expect(prefetch.didComplete).toBe(false);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('category=network_error'));
+      expect(result).not.toContain('secret-token');
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it('cancels a timed-out recall and clears its timer', async () => {
     vi.useFakeTimers();
     const { provider, search } = pendingProvider();
@@ -30,7 +54,7 @@ describe('Prefetch', () => {
     prefetch.queue('query');
     const result = prefetch.consume();
     await vi.advanceTimersByTimeAsync(3000);
-    expect(await result).toBeUndefined();
+    expect(await result).toContain('timed out');
     expect(search.mock.calls[0]![1].signal?.aborted).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -41,7 +65,7 @@ describe('Prefetch', () => {
     prefetch.queue('first');
     const result = prefetch.consume();
     await vi.advanceTimersByTimeAsync(3000);
-    expect(await result).toBeUndefined();
+    expect(await result).toContain('timed out');
     prefetch.queue('second');
     expect(search).toHaveBeenCalledOnce();
     expect(await prefetch.consume()).toBeUndefined();
@@ -87,7 +111,7 @@ describe('Prefetch', () => {
     prefetch.queue('expired before initialization');
     const first = prefetch.consume();
     await vi.advanceTimersByTimeAsync(3000);
-    expect(await first).toBeUndefined();
+    expect(await first).toContain('timed out');
     expect(search).not.toHaveBeenCalled();
     initialize();
     await vi.advanceTimersByTimeAsync(0);
@@ -97,7 +121,7 @@ describe('Prefetch', () => {
     expect(search).toHaveBeenCalledOnce();
     const next = prefetch.consume();
     await vi.advanceTimersByTimeAsync(3000);
-    expect(await next).toBeUndefined();
+    expect(await next).toContain('timed out');
     expect(prefetch.queue('while SDK search is still running')).toBe(false);
     finish();
     await vi.advanceTimersByTimeAsync(0);
@@ -117,6 +141,7 @@ describe('Prefetch', () => {
     const prefetch = new Prefetch(provider, 'user', { topK: 5 });
     prefetch.queue('language');
     expect(await prefetch.consume()).toContain('prefers TypeScript');
+    expect(prefetch.didComplete).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
   });
 

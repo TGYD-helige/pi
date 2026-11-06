@@ -72,10 +72,11 @@ async function imageFileToDataUri(path: string): Promise<string> {
   return `data:${mime};base64,${bytes.toString('base64')}`;
 }
 
-function ambiguousSubmitError(): AmbiguousSubmitError {
+function ambiguousSubmitError(error?: unknown): AmbiguousSubmitError {
   return new AmbiguousSubmitError(
     'Task creation failed with an ambiguous result (network error or server 5xx). The provider MAY have created a paid task — check the MiniMax console before retrying to avoid double billing.',
     'minimax submit: ambiguous outcome',
+    error,
   );
 }
 
@@ -166,11 +167,12 @@ export const minimaxAdapter: VideoProviderAdapter = {
         body: JSON.stringify(body),
         signal: signal ?? null,
       });
-    } catch {
-      throw ambiguousSubmitError();
+    } catch (error) {
+      throw ambiguousSubmitError(error);
     }
     if (!res.ok) {
-      if (res.status >= 500) throw ambiguousSubmitError();
+      if (res.status >= 500)
+        throw ambiguousSubmitError(Object.assign(new Error(), { status: res.status }));
       throw httpStatusError('minimax', 'submit', res.status);
     }
 
@@ -178,8 +180,8 @@ export const minimaxAdapter: VideoProviderAdapter = {
     try {
       const json = (await res.json()) as { task_id?: string };
       taskId = json.task_id;
-    } catch {
-      throw ambiguousSubmitError();
+    } catch (error) {
+      throw ambiguousSubmitError(error);
     }
     if (!taskId) {
       // 2xx but no id: the task MAY exist server-side — this is ambiguous,
@@ -210,8 +212,8 @@ export const minimaxAdapter: VideoProviderAdapter = {
           signal: signal ?? null,
         },
       );
-    } catch {
-      throw networkError('minimax', 'inspect');
+    } catch (error) {
+      throw networkError('minimax', 'inspect', error);
     }
     if (!res.ok) throw httpStatusError('minimax', 'inspect', res.status);
 

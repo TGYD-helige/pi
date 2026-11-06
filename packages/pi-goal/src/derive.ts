@@ -3,7 +3,7 @@
  */
 
 import type { GoalModelConfig } from './config.js';
-import { completeOnce, type GoalModelRegistry } from './llm.js';
+import { type CompletionFailure, completeOnce, type GoalModelRegistry } from './llm.js';
 import { buildDeriveUserPrompt, DERIVE_SYSTEM_PROMPT } from './prompts.js';
 
 export interface DeriveOptions {
@@ -11,6 +11,7 @@ export interface DeriveOptions {
   modelConfig: GoalModelConfig;
   transcript: string;
   signal?: AbortSignal;
+  onError?: (failure: CompletionFailure) => void;
 }
 
 /**
@@ -30,6 +31,7 @@ export async function deriveCondition(opts: DeriveOptions): Promise<string | nul
     DERIVE_SYSTEM_PROMPT,
     buildDeriveUserPrompt(transcript),
     signal,
+    opts.onError,
   );
   if (raw === null) {
     console.error('[pi-goal] derive: model unavailable or call failed');

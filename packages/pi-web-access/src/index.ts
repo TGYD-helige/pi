@@ -1,3 +1,4 @@
+import { describeToolError } from '@amaster.ai/pi-shared';
 import { isProjectTrusted } from '@amaster.ai/pi-shared/settings';
 import type {
   ExtensionAPI,
@@ -79,6 +80,15 @@ function formatImageSearch(response: SearchResponse): string {
   return lines.join('\n');
 }
 
+function describeError(operation: string, error: unknown) {
+  const failure = describeToolError(operation, error);
+  const { errorCategory, httpStatus } = failure;
+  console.error(
+    `[pi-web-access] ${operation} failed (category=${errorCategory}${httpStatus ? `, HTTP ${httpStatus}` : ''})`,
+  );
+  return failure;
+}
+
 export default function piWebToolExtension(pi: ExtensionAPI): void {
   let settings: WebToolSettings = {};
   const registerTool = <P extends TSchema>(tool: ToolDefinition<P>) =>
@@ -89,16 +99,12 @@ export default function piWebToolExtension(pi: ExtensionAPI): void {
           return await tool.execute(...args);
         } catch (error) {
           if (args[2]?.aborted) throw error;
-          const status = (error instanceof Error ? error.message : '').match(
-            /(?:^|HTTP[ :]+)([45]\d{2})\b/,
-          )?.[1];
-          const message = `${tool.name} failed${status ? ` (HTTP ${status})` : ''}. Check the provider configuration and retry.`;
-          console.error(`[pi-web-access] ${message}`);
+          const failure = describeError(tool.name, error);
           return {
             isError: true,
-            content: [{ type: 'text', text: message }],
+            content: [{ type: 'text', text: failure.error }],
             details: undefined,
-            structuredContent: { error: message },
+            structuredContent: failure,
           };
         }
       },
@@ -240,12 +246,9 @@ export default function piWebToolExtension(pi: ExtensionAPI): void {
           try {
             const result = await runSearch({ query }, cmdCtx.signal);
             cmdCtx.ui.notify(result.content[0]!.text, 'info');
-          } catch {
-            console.error('[pi-web-access] web-search command failed');
-            cmdCtx.ui.notify(
-              'Web search failed. Check the provider configuration and try again.',
-              'error',
-            );
+          } catch (error) {
+            if (cmdCtx.signal?.aborted) throw error;
+            cmdCtx.ui.notify(describeError('web-search', error).error, 'error');
           }
         },
       });
@@ -333,12 +336,9 @@ export default function piWebToolExtension(pi: ExtensionAPI): void {
               cmdCtx.signal,
             );
             cmdCtx.ui.notify(result.content[0]!.text, 'info');
-          } catch {
-            console.error('[pi-web-access] web-fetch command failed');
-            cmdCtx.ui.notify(
-              'Web fetch failed. Check the URL and provider configuration.',
-              'error',
-            );
+          } catch (error) {
+            if (cmdCtx.signal?.aborted) throw error;
+            cmdCtx.ui.notify(describeError('web-fetch', error).error, 'error');
           }
         },
       });
@@ -482,10 +482,9 @@ export default function piWebToolExtension(pi: ExtensionAPI): void {
           }
           try {
             cmdCtx.ui.notify((await runImageSearch(query, cmdCtx.signal)).content[0]!.text, 'info');
-          } catch {
-            const message = 'image-search failed. Check the provider configuration and retry.';
-            console.error(`[pi-web-access] ${message}`);
-            cmdCtx.ui.notify(message, 'error');
+          } catch (error) {
+            if (cmdCtx.signal?.aborted) throw error;
+            cmdCtx.ui.notify(describeError('image-search', error).error, 'error');
           }
         },
       });

@@ -20,6 +20,12 @@ beforeEach(() => mkdirSync(TEST_ROOT, { recursive: true }));
 afterEach(() => rmSync(TEST_ROOT, { recursive: true, force: true }));
 
 describe('MemoryStore basic CRUD', () => {
+  it('reports an unreadable memory file instead of loading an empty store', async () => {
+    const dir = freshDir();
+    mkdirSync(path.join(dir, 'MEMORY.md'));
+    await expect(makeStore(dir).loadFromDisk()).rejects.toThrow('Memory read failed');
+  });
+
   it('add appends and persists across reload', async () => {
     const dir = freshDir();
     const store = makeStore(dir);

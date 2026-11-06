@@ -3,6 +3,90 @@ import { describe, expect, it } from 'vitest';
 import { toPiToolResult } from '../tool-result.js';
 
 describe('toPiToolResult', () => {
+  it.each([
+    ['browser_ref_stale', 'Omit the old continuation'],
+    ['browser_binding_stale', 'Rediscover the browser target'],
+    ['browser_tab_not_found', 'Rediscover the browser target'],
+    ['browser_input_incomplete', 'do not automatically repeat the full input'],
+  ])('retains fixed recovery for %s while removing the driver payload', (code, hint) => {
+    const result = toPiToolResult(
+      {
+        content: [{ type: 'text', text: `refused (${code}): test-token` }],
+        structuredContent: {
+          status: 'refused',
+          refusal: {
+            code,
+            message: 'test-token',
+            detail: {
+              continuation: 'test-token',
+              next_call: { tool: 'run_script', arguments: { secret: 'test-token' } },
+            },
+          },
+        },
+      },
+      'get_browser_state',
+      undefined,
+      { target_id: 'target-1', tab_id: 'tab-1', session: 'checkout', continuation: 'test-token' },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.details?.code).toBe(code);
+    expect(result.content[0]).toMatchObject({
+      text: expect.stringContaining(hint),
+    });
+    if (code === 'browser_ref_stale')
+      expect(result.content[0]).toMatchObject({
+        text: expect.stringContaining('computer_use_get_browser_state'),
+      });
+    expect(JSON.stringify(result)).not.toContain('test-token');
+    expect(JSON.stringify(result)).not.toContain('run_script');
+    expect(JSON.stringify(result)).not.toContain('outcome is unknown');
+  });
+
+  it.each([
+    undefined,
+    'checkout',
+  ])('sanitizes a real driver refusal and preserves caller session %s', (session) => {
+    const result = toPiToolResult(
+      {
+        content: [{ type: 'text', text: 'refused (browser_requires_setup): test-token' }],
+        structuredContent: {
+          status: 'refused',
+          refusal: {
+            code: 'browser_requires_setup',
+            message: 'test-token',
+            detail: {
+              next_call: {
+                tool: 'browser_prepare',
+                arguments: {
+                  pid: 123,
+                  window_id: 456,
+                  session: 'test-token',
+                  strategy: { kind: 'existing_profile' },
+                  allow_launch: true,
+                },
+              },
+              private: 'test-token',
+            },
+          },
+        },
+      },
+      'get_browser_state',
+      undefined,
+      { session },
+    );
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).not.toContain('test-token');
+    expect(result.details?.next_call).toEqual({
+      tool: 'browser_prepare',
+      arguments: {
+        pid: 123,
+        window_id: 456,
+        strategy: { kind: 'existing_profile' },
+        ...(session ? { session } : {}),
+      },
+    });
+  });
+
   it('preserves text-only results when structured content is absent', () => {
     expect(
       toPiToolResult({ content: [{ type: 'text', text: 'Action executed with details.' }] })
@@ -54,6 +138,93 @@ describe('toPiToolResult', () => {
     expect(text.split('\n').length).toBeLessThanOrEqual(DEFAULT_MAX_LINES);
   });
 
+  it.each([
+    'browser_requires_setup',
+    'browser_consent_required',
+  ])('keeps vetted setup recovery for %s without raw payloads', (code) => {
+    const result = toPiToolResult(
+      {
+        isError: true,
+        content: [{ type: 'text', text: `${code}: test-token` }],
+        structuredContent: {
+          code,
+          hint: 'test-token',
+          detail: {
+            next_call: {
+              tool: 'browser_prepare',
+              arguments: {
+                pid: 123,
+                window_id: 456,
+                strategy: { kind: 'existing_profile', private: 'test-token' },
+                session: 'test-token',
+                allow_launch: true,
+              },
+            },
+          },
+        },
+      },
+      'get_browser_state',
+    );
+    expect(JSON.stringify(result)).toContain('browser_prepare');
+    expect(JSON.stringify(result)).not.toContain('test-token');
+    expect(result.details).toMatchObject({
+      code,
+      next_call: {
+        tool: 'browser_prepare',
+        arguments: { pid: 123, window_id: 456, strategy: { kind: 'existing_profile' } },
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain('allow_launch');
+  });
+
+  it('reads a bounded JSON setup refusal while removing its private fields', () => {
+    const payload = {
+      error: {
+        code: 'browser_requires_setup',
+        detail: {
+          next_call: {
+            tool: 'browser_prepare',
+            arguments: { pid: 1, window_id: 2, strategy: { kind: 'existing_profile' } },
+          },
+          private: 'test-token',
+        },
+      },
+    };
+    const result = toPiToolResult(
+      { isError: true, content: [{ type: 'text', text: JSON.stringify(payload) }] },
+      'get_browser_state',
+    );
+    expect(result.details).toMatchObject({
+      code: 'browser_requires_setup',
+      next_call: { tool: 'browser_prepare' },
+    });
+    expect(JSON.stringify(result)).not.toContain('test-token');
+  });
+
+  it('uses a fixed browser guide when suggested setup arguments are unsafe', () => {
+    const result = toPiToolResult(
+      {
+        isError: true,
+        content: [{ type: 'text', text: 'test-token' }],
+        structuredContent: {
+          code: 'browser_requires_setup',
+          detail: {
+            next_call: {
+              tool: 'run_script',
+              arguments: { pid: 'test-token', script: 'test-token' },
+            },
+          },
+        },
+      },
+      'get_browser_state',
+    );
+    expect(result.details).toMatchObject({
+      next_call: { tool: 'get_guide', arguments: { topic: 'browser' } },
+    });
+    expect(JSON.stringify(result)).not.toContain('test-token');
+    expect(JSON.stringify(result)).not.toContain('run_script');
+  });
+
   it('counts text block wrappers within the aggregate byte limit', () => {
     const result = toPiToolResult(
       {
@@ -90,9 +261,15 @@ describe('toPiToolResult', () => {
 
       expect(text).toContain('unverifiable');
       expect(text).toContain('"delivered_count":1');
-      expect(text).toContain('Readback unavailable.');
+      if (isError) expect(text).not.toContain('Readback unavailable.');
+      else expect(text).toContain('Readback unavailable.');
       expect(text).toContain('effect_unconfirmed');
-      expect(result.details).toEqual(structuredContent);
+      if (isError)
+        expect(result.details).toMatchObject({
+          effect: 'unverifiable',
+          delivery: { delivered_count: 1 },
+        });
+      else expect(result.details).toEqual(structuredContent);
       expect(Boolean(result.isError)).toBe(isError);
     });
 
@@ -147,10 +324,15 @@ describe('toPiToolResult', () => {
         'browser_select',
       );
       const text = result.content.map((c) => ('text' in c ? c.text : '')).join('\n');
-      expect(text).toContain('Read the page before repeating the action.');
-      expect(text).toContain('get_browser_state');
-      expect(text).toContain('bt-123');
-      expect(text).toContain('tab-456');
+      if (isError) {
+        expect(text).toContain('Read the current target state');
+        expect(text).not.toContain('bt-123');
+      } else {
+        expect(text).toContain('Read the page before repeating the action.');
+        expect(text).toContain('get_browser_state');
+        expect(text).toContain('bt-123');
+        expect(text).toContain('tab-456');
+      }
     });
 
     it.each([
@@ -397,7 +579,11 @@ describe('toPiToolResult', () => {
         },
         'get_config',
       );
-      expect(result.content).toEqual([{ type: 'text', text: 'Request refused.' }]);
+      expect(result.content[0]).toMatchObject({
+        type: 'text',
+        text: expect.stringContaining('Computer tool failed'),
+      });
+      expect(JSON.stringify(result)).not.toContain('private diagnostic');
       expect(result.isError).toBe(true);
     });
 

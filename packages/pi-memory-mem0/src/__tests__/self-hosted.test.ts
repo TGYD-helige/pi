@@ -202,7 +202,7 @@ describe('self-hosted Mem0 provider', () => {
 
     await expect(provider.getAll({ userId: 'company-1' })).rejects.toThrow('Mem0 request failed.');
     await expect(provider.getAll({ userId: 'company-1' })).rejects.toThrow(
-      'Mem0 returned an invalid response.',
+      'Mem0 returned invalid JSON.',
     );
   });
 

@@ -1,15 +1,70 @@
 import { createServer, request } from 'node:http';
-import { connect } from 'node:net';
+import { connect, Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createBrowserConnection } from '../session-connection.js';
 
 vi.mock('node:http', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:http')>();
-  return { ...actual, request: vi.fn(actual.request) };
+  return { ...actual, createServer: vi.fn(actual.createServer), request: vi.fn(actual.request) };
+});
+
+vi.mock('node:net', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:net')>();
+  return { ...actual, connect: vi.fn(actual.connect) };
 });
 
 describe('browser session connection', () => {
+  afterEach(() => {
+    vi.mocked(connect).mockReset();
+  });
+
+  it('replaces a loopback listener that the browser subprocess cannot reach', async () => {
+    const probe = vi.mocked(connect).mockImplementationOnce(() => {
+      const socket = new Socket();
+      queueMicrotask(() => socket.emit('error', new Error('ECONNREFUSED')));
+      return socket;
+    });
+    const tunnel = await createBrowserConnection(
+      { wsEndpoint: 'ws://127.0.0.1:9222' },
+      new AbortController().signal,
+    );
+    try {
+      expect(probe).toHaveBeenCalledTimes(2);
+      const endpoint = new URL(tunnel.wsEndpoint);
+      const response = await fetch(`http://${endpoint.host}`);
+      expect(response.status).toBe(403);
+    } finally {
+      await tunnel.close();
+    }
+  });
+
+  it('closes the unpublished listener and its pending requests when aborted during the probe', async () => {
+    const { connect: realConnect } = await vi.importActual<typeof import('node:net')>('node:net');
+    const controller = new AbortController();
+    const reason = new Error('cancelled');
+    const server = createServer();
+    vi.mocked(createServer).mockReturnValueOnce(server);
+    server.once('connection', (socket) => socket.once('data', () => controller.abort(reason)));
+    let peer: Socket | undefined;
+    vi.mocked(connect).mockImplementationOnce((port) => {
+      const socket = realConnect(Number(port), '127.0.0.1');
+      peer = socket;
+      socket.on('error', () => {});
+      socket.write('GET / HTTP/1.1\r\nHost:');
+      return new Socket();
+    });
+    const result = expect(
+      createBrowserConnection({ wsEndpoint: 'ws://127.0.0.1:9222' }, controller.signal),
+    ).rejects.toBe(reason);
+    try {
+      await vi.waitFor(() => expect(peer?.destroyed).toBe(true));
+    } finally {
+      peer?.destroy();
+      await result;
+    }
+  });
+
   it.each([
     { Authorization: 'secret\nvalue' },
     { 'invalid header': 'secret' },

@@ -1,3 +1,9 @@
+import {
+  createModelErrorCapture,
+  describeToolError,
+  SafeToolError,
+  ValidationError,
+} from '@amaster.ai/pi-shared';
 /**
  * Background memory extraction via a sub-agent loop.
  *
@@ -116,6 +122,7 @@ export function createExtractionRunner(opts: ExtractionRunnerOptions): Extractio
   let inFlight = false;
   let shutdownFlag = false;
   let warnedOnce = false;
+  let activeAgent: Agent | undefined;
 
   /** Rolling buffer of conversation messages for the sub-agent's context. */
   const messageBuffer: Array<{ role: string; text: string }> = [];
@@ -136,6 +143,7 @@ export function createExtractionRunner(opts: ExtractionRunnerOptions): Extractio
     // Fire-and-forget: never block the main agent.
     runExtraction(messagesToAnalyze)
       .then((actionCount) => {
+        warnedOnce = false;
         if (actionCount > 0 && onNotify) {
           onNotify(
             `Background memory: ${actionCount} action${actionCount === 1 ? '' : 's'} taken.`,
@@ -143,7 +151,19 @@ export function createExtractionRunner(opts: ExtractionRunnerOptions): Extractio
           );
         }
       })
-      .catch(() => {})
+      .catch((error) => {
+        if (shutdownFlag) return;
+        const failure = describeToolError(
+          'Background memory extraction',
+          error,
+          'Extraction did not complete. Some memory writes may have completed; inspect memory before retrying.',
+        );
+        console.error(
+          `[pi-memory] background extraction failed (category=${failure.errorCategory})`,
+        );
+        if (!warnedOnce) onNotify?.(failure.error, 'warning');
+        warnedOnce = true;
+      })
       .finally(() => {
         inFlight = false;
       });
@@ -183,19 +203,18 @@ export function createExtractionRunner(opts: ExtractionRunnerOptions): Extractio
 
     const registry = modelRegistry ?? (await createFallbackRegistry());
     const model = registry.find(modelConfig.provider, modelConfig.model);
-    if (!model) {
-      if (!warnedOnce && onNotify) {
-        onNotify(
-          `Background extraction: model "${modelConfig.provider}/${modelConfig.model}" not found.`,
-          'warning',
-        );
-        warnedOnce = true;
-      }
-      return 0;
-    }
-
+    if (!model)
+      throw new ValidationError(
+        'Background extraction model not found. Check pi-memory extraction model settings.',
+        'configuration_error',
+      );
     const auth = await registry.getApiKeyAndHeaders(model);
-    if (!auth.ok) return 0;
+    if (shutdownFlag) return 0;
+    if (!auth.ok)
+      throw new ValidationError(
+        'Background extraction credentials are unavailable. Check the configured model credentials.',
+        'configuration_error',
+      );
 
     // Reuse the same tool definitions as the main agent — structurally compatible.
     const tools = createMemoryTools(store) as unknown as AgentTool[];
@@ -203,6 +222,7 @@ export function createExtractionRunner(opts: ExtractionRunnerOptions): Extractio
     const userPrompt = `Analyze this recent conversation and save any durable facts worth remembering:\n\n${serialized}`;
 
     let turnCount = 0;
+    const modelErrors = createModelErrorCapture();
     const agent = new Agent({
       initialState: {
         systemPrompt: REVIEW_SYSTEM_PROMPT,
@@ -213,7 +233,8 @@ export function createExtractionRunner(opts: ExtractionRunnerOptions): Extractio
         const merged = { ...streamOpts };
         if (auth.apiKey) (merged as Record<string, unknown>).apiKey = auth.apiKey;
         if (auth.headers) (merged as Record<string, unknown>).headers = auth.headers;
-        return streamSimple(m as never, ctx as never, merged);
+        Object.assign(merged, modelErrors.fetchOptions(m.api, merged.fetch));
+        return modelErrors.run(() => streamSimple(m as never, ctx as never, merged));
       },
       convertToLlm: (msgs) => msgs as never[],
     });
@@ -228,13 +249,35 @@ export function createExtractionRunner(opts: ExtractionRunnerOptions): Extractio
       }
     });
 
-    await agent.prompt(userPrompt);
-
+    activeAgent = agent;
+    try {
+      await agent.prompt(userPrompt);
+    } finally {
+      activeAgent = undefined;
+    }
+    if (shutdownFlag) return 0;
+    const last = agent.state.messages.filter((message) => message.role === 'assistant').at(-1);
+    if (
+      last?.role === 'assistant' &&
+      (last.stopReason === 'error' || last.stopReason === 'aborted')
+    )
+      throw modelErrors.error(
+        'Background extraction model',
+        last,
+        'Extraction did not complete. Inspect memory before retrying any writes.',
+      );
+    if (agent.state.messages.some((message) => message.role === 'toolResult' && message.isError))
+      throw new SafeToolError(
+        'Background extraction',
+        undefined,
+        'A memory tool failed; extraction may be incomplete. Inspect memory before retrying any writes.',
+      );
     return countMemoryActions(agent.state.messages);
   }
 
   function shutdown(): void {
     shutdownFlag = true;
+    activeAgent?.abort();
     messageBuffer.length = 0;
     bufferedChars = 0;
   }

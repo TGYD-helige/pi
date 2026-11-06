@@ -1,3 +1,4 @@
+import { describeToolError } from '@amaster.ai/pi-shared';
 import type { CloudBrowserProvider } from './adapter.js';
 import type { BrowserUseConfig } from './config.js';
 import { parseBrowserHeaders } from './session-connection.js';
@@ -201,7 +202,12 @@ export async function requestBrowserManagement(
     if (signal.aborted) throw signal.reason;
     if (error instanceof BrowserSessionError) throw error;
     throw new BrowserSessionError(
-      'Browser management request failed; its outcome may be unknown. Inspect the provider before retrying.',
+      describeToolError(
+        'Browser management request',
+        error,
+        'Its outcome may be unknown. Inspect the provider before retrying.',
+      ).error,
+      error,
     );
   }
 }

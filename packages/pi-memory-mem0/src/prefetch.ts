@@ -1,3 +1,4 @@
+import { classifyError, describeToolError } from '@amaster.ai/pi-shared';
 /**
  * Two-phase semantic prefetch — kicks off a background search on input,
  * consumes the result on before_agent_start with a timeout.
@@ -15,6 +16,7 @@ const MAX_BLOCK_LINES = 50;
 
 export class Prefetch {
   private readonly provider: Mem0Provider;
+  private completed = false;
   private readonly userId: string;
   private readonly agentId: string | undefined;
   private readonly topK: number;
@@ -43,6 +45,7 @@ export class Prefetch {
   queue(query: string, signal?: AbortSignal): boolean {
     if (!query.trim()) return false;
     this.cancel();
+    this.completed = false;
     // shortcut: embedded searches cannot be aborted; pass signals when its SDK supports them.
     if (this.searchState.active && !this.provider.supportsSearchCancellation) return false;
     const controller = new AbortController();
@@ -70,6 +73,10 @@ export class Prefetch {
     return true;
   }
 
+  get didComplete(): boolean {
+    return this.completed;
+  }
+
   get hasPending(): boolean {
     return this.pending !== undefined;
   }
@@ -84,11 +91,15 @@ export class Prefetch {
     if (!this.pending) return;
 
     const pending = this.pending;
-    const timer = setTimeout(() => pending.controller.abort(), timeoutMs);
+    const timer = setTimeout(
+      () => pending.controller.abort(new DOMException('Memory recall timed out', 'TimeoutError')),
+      timeoutMs,
+    );
 
     try {
       const memories = await waitWithCancellation(pending.promise, pending.signal);
       if (pending.signal.aborted) return;
+      if (this.pending === pending) this.completed = true;
 
       if (memories.length === 0) return '';
 
@@ -104,8 +115,16 @@ export class Prefetch {
         maxBytes: MAX_BLOCK_BYTES,
         maxLines: MAX_BLOCK_LINES,
       }).content;
-    } catch {
-      return;
+    } catch (error) {
+      const reason = pending.signal.aborted ? pending.signal.reason : error;
+      if (pending.signal.aborted && classifyError(reason).errorCategory !== 'timeout') return;
+      const failure = describeToolError(
+        'Mem0 recall',
+        reason,
+        'Memory recall did not complete. Do not treat this as evidence that no matching memories exist.',
+      );
+      console.error(`[pi-memory-mem0] recall failed (category=${failure.errorCategory})`);
+      return `## Memory recall unavailable\n${failure.error}`;
     } finally {
       clearTimeout(timer);
       if (this.pending === pending) this.pending = undefined;

@@ -211,6 +211,27 @@ it('rejects token-limited answers while retaining bounded completion diagnostics
   });
 });
 
+it('grades the completed retry after a provider error while preserving the full tool trace', () => {
+  const message = (stopReason, text) => ({ type: 'message_end', message: {
+    role: 'assistant', stopReason, content: [{ type: 'text', text }],
+  } });
+  const events = [
+    message('toolUse', 'Discard this interrupted plan.'),
+    { type: 'tool_execution_start', toolCallId: 'paid', toolName: 'video_generate', args: {} },
+    { type: 'tool_execution_end', toolCallId: 'paid', isError: false },
+    message('error', 'Incomplete provider output.'),
+    message('toolUse', 'Read the skill.'),
+    message('stop', 'Completed answer after recovery.'),
+  ];
+  const result = parsePiEvents(events.map(JSON.stringify).join('\n'));
+  assert.equal(result.answer, 'Read the skill.\nCompleted answer after recovery.');
+  assert.equal(result.diagnostics.messages[1].stopReason, 'error');
+  assert.equal(gradeTrace(result.calls, [{ text: 'No paid generation', forbiddenTools: ['video_generate'] }]).score, 0);
+  for (const reason of ['error', 'aborted', 'length', 'toolUse']) {
+    assert.throws(() => parsePiEvents([...events, message(reason, 'unfinished')].map(JSON.stringify).join('\n')));
+  }
+});
+
 it('classifies incomplete subprocess results before grading, including judge responses', async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'pi-skill-eval-completion-'));
   const oldPath = process.env.PATH;
@@ -569,6 +590,7 @@ it('uses trusted base code, comments before enforcing, and never executes PR cod
   assert.match(workflow, /peter-evans\/create-or-update-comment@v5/);
   assert.match(workflow, /skill-eval\.mjs --detect/);
   assert.match(workflow, /timeout-minutes: 120/);
+  assert.match(workflow, /SKILL_EVAL_TIMEOUT_MS: '240000'/);
   assert.ok(workflow.indexOf('Post PR comment') < workflow.indexOf('Enforce gate outcome'));
   assert.doesNotMatch(workflow, /ref: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/);
 });

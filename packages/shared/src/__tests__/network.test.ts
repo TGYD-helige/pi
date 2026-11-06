@@ -7,6 +7,7 @@ import {
   safeFetch,
   trustedHostsFromUrls,
 } from '../network.js';
+import { classifyError } from '../tool-errors.js';
 
 const publicLookup: DnsLookup = async () => [{ address: '93.184.216.34', family: 4 }];
 
@@ -81,9 +82,17 @@ describe('network', () => {
     globalThis.fetch = wrappedFetch;
 
     try {
-      await expect(safeFetch('https://does-not-resolve.invalid/private')).rejects.toThrow(
-        /public HTTP/i,
-      );
+      await expect(
+        safeFetch(
+          'https://does-not-resolve.invalid/private',
+          {},
+          {
+            lookup: async () => {
+              throw Object.assign(new Error('DNS unavailable'), { code: 'ENOTFOUND' });
+            },
+          },
+        ),
+      ).rejects.toMatchObject({ errorCategory: 'network_error' });
       expect(wrappedFetch).not.toHaveBeenCalled();
     } finally {
       globalThis.fetch = originalFetch;
@@ -226,5 +235,18 @@ describe('trustedHostsFromUrls', () => {
 
   it('returns an empty list when nothing parses', () => {
     expect(trustedHostsFromUrls(undefined, '')).toEqual([]);
+  });
+});
+
+describe('DNS error preservation', () => {
+  it('keeps transient DNS failures distinct from public-destination rejection', async () => {
+    const error = await assertPublicHttpUrl('https://fixture.invalid', {
+      lookup: async () => {
+        throw Object.assign(new Error('secret-token'), { code: 'EAI_AGAIN' });
+      },
+    }).catch((error) => error);
+    expect(classifyError(error).errorCategory).toBe('network_error');
+    expect(error.message).not.toContain('must use a public');
+    expect(JSON.stringify(error)).not.toContain('secret-token');
   });
 });

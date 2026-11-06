@@ -56,3 +56,7 @@ Session `metadata` is an optional JSON object preserved across saves and reads b
 ## Public API Policy
 
 Types and contracts live in `@amaster.ai/pi-shared` and are re-exported from the root storage entry point. Concrete adapters are exposed through explicit subpath entry points so applications can depend on the smallest stable surface they need.
+
+### Failure diagnostics
+
+JSON stores use a valid backup when the primary is malformed and log that recovery. If recovery is unavailable, reads fail rather than initializing an empty store and risking replacement of existing data.

@@ -1,3 +1,4 @@
+import { SafeToolError, ValidationError } from '@amaster.ai/pi-shared';
 /**
  * Mem0 provider abstraction for Platform, embedded, and self-hosted REST modes.
  *
@@ -441,22 +442,38 @@ class SelfHostedProvider implements Mem0Provider {
     let response: Response;
     try {
       response = await fetch(`${this.baseUrl}${path}`, { ...init, headers, signal });
-    } catch {
+    } catch (error) {
       if (callerSignal?.aborted) {
         throw callerSignal.reason instanceof Error
           ? callerSignal.reason
           : new Error('Mem0 request cancelled.');
       }
-      if (timeoutSignal.aborted) throw new Error('Mem0 request timed out.');
-      throw new Error('Mem0 request failed.');
+      if (timeoutSignal.aborted) throw new DOMException('Mem0 request timed out.', 'TimeoutError');
+      throw new SafeToolError(
+        'Mem0 request',
+        error,
+        'Check connectivity and inspect stored memories before retrying a write.',
+      );
     }
-    if (!response.ok) throw new Error(`Mem0 request failed (${response.status}).`);
+    if (!response.ok)
+      throw Object.assign(new Error(`Mem0 request failed (${response.status}).`), {
+        status: response.status,
+      });
     try {
       return await response.json();
-    } catch {
+    } catch (error) {
       if (callerSignal?.aborted) throw cancellationReason(callerSignal);
-      if (timeoutSignal.aborted) throw new Error('Mem0 request timed out.');
-      throw new Error('Mem0 returned an invalid response.');
+      if (timeoutSignal.aborted) throw new DOMException('Mem0 request timed out.', 'TimeoutError');
+      if (error instanceof SyntaxError)
+        throw new ValidationError(
+          'Mem0 returned invalid JSON. Inspect stored memories before retrying a write.',
+          'invalid_response',
+        );
+      throw new SafeToolError(
+        'Read Mem0 response',
+        error,
+        'The response could not be read. Inspect stored memories before retrying a write.',
+      );
     }
   }
 

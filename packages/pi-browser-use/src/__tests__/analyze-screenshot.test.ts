@@ -5,7 +5,8 @@ import {
   type VisionCaller,
 } from '../analyze-screenshot.js';
 
-vi.mock('@earendil-works/pi-coding-agent', () => {
+vi.mock('@earendil-works/pi-coding-agent', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@earendil-works/pi-coding-agent')>();
   const mockModel = { id: 'gpt-4o', provider: 'openai', reasoning: false };
   const mockReasoningModel = {
     id: 'kimi-k2.6',
@@ -25,6 +26,7 @@ vi.mock('@earendil-works/pi-coding-agent', () => {
     ),
   };
   return {
+    ...actual,
     ModelRuntime: { create: vi.fn(() => Promise.resolve({})) },
     ModelRegistry: class {
       find = mockRegistry.find;
@@ -68,6 +70,29 @@ function failingVisionCaller(error: string): VisionCaller {
 }
 
 describe('handleAnalyzeScreenshot', () => {
+  it.each([
+    false,
+    true,
+  ])('rejects a failed screenshot before vision, even with image=%s', async (withImage) => {
+    const client = createMockClient();
+    client.callTool.mockResolvedValueOnce({
+      isError: true,
+      content: [
+        { type: 'text', text: 'TimeoutError: test-token' },
+        ...(withImage ? [{ type: 'image', data: 'test-token', mimeType: 'image/png' }] : []),
+      ],
+      structuredContent: { private: 'test-token' },
+    });
+    const caller = mockVisionCaller('false success');
+    const result = await handleAnalyzeScreenshot(client, caller, {});
+    expect(result).toMatchObject({
+      isError: true,
+      structuredContent: { errorCategory: 'timeout', phase: 'capture' },
+    });
+    expect(caller).not.toHaveBeenCalled();
+    expect(JSON.stringify(result)).not.toContain('test-token');
+  });
+
   it.each([
     ['429 quota exceeded; token=private-token', 'vision', 'HTTP 429', 'rate limit or quota'],
     ['Auth failed for vision model: private-token', 'authentication', 'credentials', 'credentials'],
@@ -154,6 +179,7 @@ describe('handleAnalyzeScreenshot', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toContain('Failed to capture screenshot');
+    expect(result.structuredContent?.errorCategory).toBe('invalid_response');
     expect(caller).not.toHaveBeenCalled();
   });
 
@@ -193,13 +219,14 @@ describe('handleAnalyzeScreenshot', () => {
 
   test('empty analysis returns error', async () => {
     const client = createMockClient();
-    const caller = mockVisionCaller('');
+    const caller = mockVisionCaller('   ');
     const result = await handleAnalyzeScreenshot(client, caller, {
       instruction: 'Find button',
     });
 
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toContain('no analysis');
+    expect(result.structuredContent?.errorCategory).toBe('invalid_response');
   });
 
   test('defaults instruction to empty string', async () => {
@@ -276,6 +303,43 @@ describe('handleAnalyzeScreenshot', () => {
     expect(result.content[0]!.text).toContain('not available');
   });
 
+  it('rejects late visual analysis after caller cancellation', async () => {
+    const controller = new AbortController();
+    const reason = new DOMException('Cancelled', 'AbortError');
+    const caller = vi.fn(async () => {
+      controller.abort(reason);
+      return 'late analysis';
+    });
+    await expect(
+      handleAnalyzeScreenshot(createMockClient(), caller, {}, controller.signal),
+    ).rejects.toBe(reason);
+  });
+
+  it('rejects an oversized single-line analysis when truncation would remove all analysis', async () => {
+    const result = await handleAnalyzeScreenshot(
+      createMockClient(),
+      mockVisionCaller('x'.repeat(100_000)),
+      {},
+    );
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(50 * 1024);
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent?.errorCategory).toBe('invalid_response');
+    expect(result.content[0]!.text).toContain('shorter analysis');
+  });
+
+  it('keeps useful analysis when a multiline response is truncated', async () => {
+    const result = await handleAnalyzeScreenshot(
+      createMockClient(),
+      mockVisionCaller('Button at (100, 200)\n'.repeat(3000)),
+      {},
+    );
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0]!.text).toContain('Button at (100, 200)');
+    expect(result.content[0]!.text).toContain('truncated');
+    expect(result.content[0]!.text.split('\n').length).toBeLessThanOrEqual(2000);
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(50 * 1024);
+  });
+
   test('prefixes success result with Visual Analysis Result', async () => {
     const client = createMockClient();
     const caller = mockVisionCaller('Found button at (100, 200)');
@@ -297,6 +361,21 @@ describe('createFetchVisionCaller', () => {
 
     const { complete } = await import('@earendil-works/pi-ai/compat');
     expect(complete).toHaveBeenCalled();
+  });
+
+  it('initializes the registry only on demand and retries failed initialization safely', async () => {
+    const { ModelRuntime } = await import('@earendil-works/pi-coding-agent');
+    const create = vi.mocked(ModelRuntime.create);
+    create.mockClear();
+    const caller = createFetchVisionCaller({ provider: 'openai', model: 'gpt-4o' });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(create).not.toHaveBeenCalled();
+    create.mockRejectedValueOnce(new Error('test-token'));
+    await expect(caller('describe', 'image', 'image/png')).rejects.toThrow(
+      'Initialize vision registry',
+    );
+    await expect(caller('describe', 'image', 'image/png')).resolves.toBe('Analysis result');
+    expect(create).toHaveBeenCalledTimes(2);
   });
 
   test('throws when model not found in registry', async () => {
@@ -350,18 +429,21 @@ describe('createFetchVisionCaller', () => {
     expect(options).not.toHaveProperty('temperature');
   });
 
-  it('surfaces model error results instead of treating them as empty analysis', async () => {
+  it.each([
+    ['error', 'request_failed'],
+    ['aborted', 'cancelled'],
+    ['empty', 'invalid_response'],
+  ])('rejects %s model output safely', async (kind, category) => {
     const piAi = await import('@earendil-works/pi-ai/compat');
     (piAi.complete as any).mockResolvedValueOnce({
-      content: [],
-      stopReason: 'error',
-      errorMessage: 'invalid temperature',
+      content: [{ type: 'text', text: kind === 'empty' ? '   ' : 'partial analysis' }],
+      stopReason: kind === 'empty' ? 'stop' : kind,
+      errorMessage: 'test-token',
     });
-
     const caller = createFetchVisionCaller({ provider: 'openai', model: 'gpt-4o' });
-
-    await expect(caller('Describe this', 'aW1hZ2U=', 'image/png')).rejects.toThrow(
-      'invalid temperature',
-    );
+    await expect(caller('Describe this', 'aW1hZ2U=', 'image/png')).rejects.toMatchObject({
+      errorCategory: category,
+      message: expect.not.stringContaining('test-token'),
+    });
   });
 });

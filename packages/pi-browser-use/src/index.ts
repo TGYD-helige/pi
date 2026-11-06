@@ -1,12 +1,23 @@
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import {
+  classifyError,
+  createModelErrorCapture,
+  describeToolError,
+  SafeToolError,
+  ValidationError,
+} from '@amaster.ai/pi-shared';
+import {
   isProjectTrusted,
   loadPiSettings,
   type PiSettingsOptions,
 } from '@amaster.ai/pi-shared/settings';
 import type { TextContent as AiTextContent } from '@earendil-works/pi-ai';
-import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  ToolDefinition,
+} from '@earendil-works/pi-coding-agent';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { CallToolResultSchema, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import { Type } from 'typebox';
@@ -103,7 +114,16 @@ function summarizeMcpFailure(stderr: string, errorName: string, errorCode?: stri
   if (/(?:browser|chrome).+already running|profile.+in use/i.test(stderr)) {
     return 'Chrome profile is already in use.';
   }
-  const safeErrorName = /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(errorName) ? errorName : 'UnknownError';
+  const safeErrorName = [
+    'Error',
+    'TypeError',
+    'RangeError',
+    'SyntaxError',
+    'TimeoutError',
+    'AbortError',
+  ].includes(errorName)
+    ? errorName
+    : 'UnknownError';
   return `MCP transport failed (${safeErrorName}).`;
 }
 
@@ -207,7 +227,7 @@ export class DevToolsClient {
         if (generation !== this.generation) return;
         transportErrorCode = safeMcpSystemErrorCode((error as Error & { code?: unknown }).code);
         console.error(
-          `[pi-browser-use] chrome-devtools-mcp transport error (${transportErrorCode ?? error.name})`,
+          `[pi-browser-use] chrome-devtools-mcp transport error (${transportErrorCode ?? classifyError(error).errorCategory})`,
         );
         void this.disconnectUnhealthyClient(generation);
       };
@@ -237,7 +257,7 @@ export class DevToolsClient {
           : undefined;
       const diagnostic = summarizeMcpFailure(stderr, errorName, transportErrorCode ?? errorCode);
       console.error(`[pi-browser-use] browser connection failed: ${diagnostic}`);
-      throw new Error(`Browser connection failed. ${diagnostic}`);
+      throw new SafeToolError('Browser connection', error, diagnostic);
     }
   }
 
@@ -353,11 +373,21 @@ export class DevToolsClient {
     } catch (error) {
       if (signal?.aborted) throw error;
       if (this.state !== 'ready' || this.client !== client) {
-        throw new Error('Browser connection lost; retry the tool.');
+        throw new SafeToolError(
+          'Browser tool call',
+          error,
+          'The browser connection was lost. The action may have completed; inspect the current page before retrying.',
+        );
       }
-      const errorName = error instanceof Error ? error.name : 'UnknownError';
-      console.error(`[pi-browser-use] upstream tool call failed (${errorName})`);
-      throw new Error('Browser tool call failed.');
+      const failure = new SafeToolError(
+        'Browser tool call',
+        error,
+        'The action may have completed. Inspect the current page before retrying.',
+      );
+      console.error(
+        `[pi-browser-use] upstream tool call failed (category=${failure.errorCategory})`,
+      );
+      throw failure;
     }
   }
 
@@ -441,6 +471,30 @@ function loadConfigFromFile(options?: PiSettingsOptions): BrowserUseConfig {
  * If visionModel is configured, an additional analyze_screenshot tool is registered.
  */
 export default function browserUseExtension(pi: ExtensionAPI): void {
+  const registerTool = (tool: ToolDefinition) =>
+    pi.registerTool({
+      ...tool,
+      async execute(...args) {
+        try {
+          return await tool.execute(...args);
+        } catch (error) {
+          if (args[2]?.aborted) throw error;
+          const failure = describeToolError(
+            tool.name,
+            error,
+            'The action may have completed. Inspect the current page before retrying.',
+          );
+          console.error(`[pi-browser-use] ${tool.name} failed (category=${failure.errorCategory})`);
+          return {
+            content: [{ type: 'text' as const, text: failure.error }],
+            structuredContent: failure,
+            details: undefined,
+            isError: true,
+          };
+        }
+      },
+    });
+
   let config: BrowserUseConfig | undefined;
   let client: DevToolsClient | undefined;
   const upstreamToolNames = new Set<string>();
@@ -491,7 +545,7 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
   }
 
   function registerToolGroupSurface(): void {
-    pi.registerTool({
+    registerTool({
       name: TOOLS_META_TOOL,
       exposure: 'model-only',
       label: TOOLS_META_TOOL,
@@ -608,7 +662,7 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
         exposure = CORE_TOOLS.includes(originalName) ? 'direct' : 'deferred';
       }
 
-      pi.registerTool({
+      registerTool({
         name: prefixedName,
         label: prefixedName,
         ...(nativeDiscovery
@@ -651,18 +705,25 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
       mimeType: string,
       signal?: AbortSignal,
     ): Promise<string> => {
+      signal?.throwIfAborted();
       // Imported lazily: pi-ai is heavy and only needed when a vision call actually runs.
       const { complete } = await import('@earendil-works/pi-ai/compat');
+      signal?.throwIfAborted();
       const model = ctx.modelRegistry.find(visionConfig.provider, visionConfig.model);
       if (!model) {
-        throw new Error(
-          `Vision model "${visionConfig.provider}/${visionConfig.model}" not found in model registry.`,
+        throw new ValidationError(
+          'Vision model not found in model registry. Check the configured provider/model.',
+          'configuration_error',
         );
       }
 
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+      signal?.throwIfAborted();
       if (!auth.ok) {
-        throw new Error(`Auth failed for vision model: ${auth.error}`);
+        throw new ValidationError(
+          'Auth failed for vision model: credentials are unavailable. Check the vision model credentials.',
+          'configuration_error',
+        );
       }
 
       const options: Record<string, unknown> = {
@@ -672,6 +733,8 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
       if (auth.headers) options.headers = auth.headers;
       if (signal) options.signal = signal;
 
+      const modelErrors = createModelErrorCapture();
+      Object.assign(options, modelErrors.fetchOptions(model.api));
       const result = await complete(
         model,
         {
@@ -693,14 +756,25 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
         options,
       );
 
-      if (result.stopReason === 'error') {
-        throw new Error(result.errorMessage || 'Vision model request failed');
+      signal?.throwIfAborted();
+      if (result.stopReason === 'error' || result.stopReason === 'aborted') {
+        throw modelErrors.error(
+          'Vision model request',
+          result,
+          'Use accessibility tree elements instead.',
+        );
       }
 
-      return result.content
+      const analysis = result.content
         .filter((c): c is AiTextContent => c.type === 'text')
         .map((c) => c.text)
         .join('');
+      if (!analysis.trim())
+        throw new ValidationError(
+          'Vision model returned no analysis. Use accessibility tree elements instead.',
+          'invalid_response',
+        );
+      return analysis;
     };
   }
 
@@ -714,7 +788,7 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
         }
       : {};
 
-    pi.registerTool({
+    registerTool({
       name: `${TOOL_PREFIX}analyze_screenshot`,
       label: `${TOOL_PREFIX}analyze_screenshot`,
       description:
@@ -751,7 +825,12 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
           content.push({ type: 'text', text: '' });
         }
         return result.isError
-          ? { content, isError: true, details: undefined }
+          ? {
+              content,
+              isError: true,
+              details: undefined,
+              ...(result.structuredContent ? { structuredContent: result.structuredContent } : {}),
+            }
           : { content, details: undefined };
       },
     });
@@ -759,7 +838,7 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
 
   registerToolGroupSurface();
   function registerSessionSurface() {
-    pi.registerTool({
+    registerTool({
       name: 'browser_session',
       label: 'Browser session',
       description: SESSION_DESCRIPTION,
@@ -772,7 +851,7 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
         config?.session?.enabled ? undefined : { hiddenDeclarations: ['browser_session'] },
       async execute(_id, params, signal) {
         return sessionToolResult(
-          params.action,
+          (params as { action: string }).action,
           config?.session?.enabled && client
             ? (action, callerSignal) => client!.sessionControl(action, callerSignal)
             : undefined,

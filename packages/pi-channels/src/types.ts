@@ -158,4 +158,6 @@ export type ChannelConfig = {
 export type SendResult = {
   ok: boolean;
   error?: string;
+  errorCategory?: import('@amaster.ai/pi-shared').ErrorCategory;
+  httpStatus?: number;
 };

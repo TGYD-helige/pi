@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "prepare-audio": "node prepare-audio.mjs",
+    "verify-product": "node verify-product.mjs",
     "studio": "remotion studio src/index.tsx"
   },
   "dependencies": {
@@ -14,6 +15,7 @@
     "remotion": "4.0.527"
   },
   "devDependencies": {
+    "@types/react": "19.1.1",
     "@remotion/cli": "4.0.527"
   }
 }

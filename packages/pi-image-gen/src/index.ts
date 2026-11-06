@@ -1,3 +1,4 @@
+import { classifyError } from '@amaster.ai/pi-shared';
 import { isProjectTrusted } from '@amaster.ai/pi-shared/settings';
 import { StringEnum } from '@earendil-works/pi-ai';
 import {
@@ -111,7 +112,9 @@ export default function piImageGenExtension(pi: ExtensionAPI): void {
           // returns an ImageGenError's vetted, body-free hint (and a generic
           // sentence for any unexpected throw), while toLogSummary gives stderr a
           // terse category. Neither echoes a raw fs/fetch error or response body.
-          console.error(`[pi-image-gen] image_generate failed: ${toLogSummary(error)}`);
+          console.error(
+            `[pi-image-gen] image_generate failed: ${toLogSummary(error)} (category=${classifyError(error).errorCategory})`,
+          );
           const errorText = truncateHead(`image_generate failed: ${errorMessageForUser(error)}`, {
             maxBytes: 2048,
             maxLines: 100,
@@ -124,7 +127,7 @@ export default function piImageGenExtension(pi: ExtensionAPI): void {
               },
             ],
             details: undefined,
-            structuredContent: { error: errorText },
+            structuredContent: { error: errorText, ...classifyError(error) },
             isError: true,
           };
         }
@@ -167,7 +170,9 @@ export default function piImageGenExtension(pi: ExtensionAPI): void {
         } catch (error) {
           // Terse category summary to stderr; the notify surface gets the fuller
           // (still body-free) sanitized message. See execute() and errors.ts.
-          console.error(`[pi-image-gen] /image-gen generate failed: ${toLogSummary(error)}`);
+          console.error(
+            `[pi-image-gen] /image-gen generate failed: ${toLogSummary(error)} (category=${classifyError(error).errorCategory})`,
+          );
           ctx.ui.notify(`image generation failed: ${errorMessageForUser(error)}`, 'error');
         }
         return;

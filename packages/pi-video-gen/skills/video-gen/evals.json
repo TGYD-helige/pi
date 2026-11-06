@@ -62,8 +62,8 @@
     },
     {
       "id": "continuous-product-film",
-      "prompt": "Plan a 30-second, three-part launch film for a task manager. Supplied material: genuine screenshots of its inbox, request composer and completed-result view, plus brand colors; no performance measurements or mascot art. Use a recurring mascot. Choose the visual direction yourself. Keep the request visibly connected as input expands into the workspace and becomes its result. I want music and effects on the reveals, with varied energy rather than three identical beats. Explain the production route and what you will check before delivery. No paid generation is approved. No tools or files except reading skill references.",
-      "expected_output": "Read film-direction.md and its motion-authoring reference; ground claims in supplied product material without inventing performance numbers, recommend a direction without a mandatory selection, and provide a structured multi-shot plan covering intent, timing, readable key frames and mascot continuity. Identify persistent objects and before/after states at continuous handoffs. Use image_generate only for missing frames and confirm any paid scope. Choose one video_compose call for local/Remotion assembly or one video_render call for a prepared generated-shot batch with assembly. Share landing times between picture and audio in Remotion, select qcTimesSec around handoffs, and review actual stills, motion and audio with honest verification limits. Timeline does not provide arbitrary timed effects or dynamic ducking. Choose a motion language that explains the actual product operation, describe meaningful contrasts in shot scale, pace, density or music, and plan concrete director review without inventing export observations.",
+      "prompt": "Plan a 30-second, three-part launch film for a task manager. Supplied material: genuine screenshots of its inbox, request composer and completed-result view, plus brand colors; no performance measurements or mascot art. Use a recurring mascot. Choose the visual direction yourself. Keep the request visibly connected as input expands into the workspace and becomes its result. I want music and effects on the reveals, with varied energy rather than three identical beats. Explain the production route and what you will check before delivery. No paid generation is approved. No tools or files except reading skill references. The request composer/result business component source, original CSS and theme provider are also available at the release tag; reuse them. A bulk-action feature exists only on a development branch. Render workers may start at any frame. Supplied click audio has a 120 ms lead-in.",
+      "expected_output": "Read film-direction.md and its motion-authoring reference; ground claims in supplied product material without inventing performance numbers, recommend a direction without a mandatory selection, and provide a structured multi-shot plan covering intent, timing, readable key frames and mascot continuity. Identify persistent objects and before/after states at continuous handoffs. Use image_generate only for missing frames and confirm any paid scope. Choose one video_compose call for local/Remotion assembly or one video_render call for a prepared generated-shot batch with assembly. Share landing times between picture and audio in Remotion, select qcTimesSec around handoffs, and review actual stills, motion and audio with honest verification limits. Timeline does not provide arbitrary timed effects or dynamic ducking. Choose a motion language that explains the actual product operation, describe meaningful contrasts in shot scale, pace, density or music, and plan concrete director review without inventing export observations. Also read product-components.md: trace claims to the release tag; reuse the business component, original CSS/provider and fixed data; resolve source outside the frozen project; derive state from frame/time and verify arbitrary/repeated frames. Keep music and effects separate and account for the click lead-in.",
       "expectations": [
         {
           "text": "Provides a structured multi-shot plan with shot intent, timing and recurring mascot continuity; a shot book, beat map or equivalent scene plan is acceptable without a required artifact name",
@@ -76,9 +76,10 @@
           ]
         },
         {
-          "text": "Uses image_generate for needed mascot/reference frames while reusing suitable supplied screenshots; does not regenerate all supplied visuals by default.",
-          "includes": [
-            "image_generate"
+          "text": "Reuses suitable supplied screenshots and explains the missing mascot/reference asset route: image_generate for needed bitmap art subject to paid approval, or an editable native vector mascot that needs no image generation. Does not regenerate supplied visuals or bypass approval.",
+          "includes_any": [
+            "image_generate",
+            "vector"
           ]
         },
         {
@@ -163,6 +164,47 @@
             "normal speed",
             "normal-speed",
             "playback"
+          ]
+        },
+        {
+          "text": "Grounds demonstrated functionality in the release tag and excludes the development-only bulk-action feature from the shipped demonstration",
+          "includes_any": [
+            "release",
+            "released"
+          ],
+          "includes": [
+            "bulk"
+          ]
+        },
+        {
+          "text": "Reuses the business component with original CSS and required provider, rather than only drawing a lookalike",
+          "includes": [
+            "component",
+            "CSS",
+            "provider"
+          ]
+        },
+        {
+          "text": "Accounts for source outside the frozen project and tests time-derived state at arbitrary/repeated frames",
+          "includes_any": [
+            "fingerprint",
+            "frozen",
+            "snapshot"
+          ],
+          "includes": [
+            "frame"
+          ]
+        },
+        {
+          "text": "Accounts for the supplied sound lead-in and keeps independently editable stems",
+          "includes_any": [
+            "120",
+            "0.12",
+            "lead-in"
+          ],
+          "includes": [
+            "music",
+            "effect"
           ]
         }
       ]

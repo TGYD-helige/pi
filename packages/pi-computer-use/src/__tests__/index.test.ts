@@ -137,7 +137,7 @@ vi.mock('node:fs', async (importOriginal) => {
     chmodSync: vi.fn(),
     readFileSync: vi.fn(() => {
       if (mockConfigContent !== null) return mockConfigContent;
-      throw new Error('ENOENT');
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     }),
   };
 });
@@ -381,6 +381,58 @@ describe('computerUseExtension', () => {
     });
   });
 
+  it('sanitizes actual driver refusals and keeps the original recovery session', async () => {
+    await start();
+    mockCallTool = (name) =>
+      name === 'get_browser_state'
+        ? {
+            content: [{ type: 'text', text: 'refused (browser_requires_setup): test-token' }],
+            structuredContent: {
+              status: 'refused',
+              refusal: {
+                code: 'browser_requires_setup',
+                message: 'test-token',
+                detail: {
+                  next_call: {
+                    tool: 'browser_prepare',
+                    arguments: {
+                      pid: 123,
+                      window_id: 456,
+                      session: 'test-token',
+                      strategy: { kind: 'existing_profile' },
+                    },
+                  },
+                },
+              },
+            },
+          }
+        : { content: [{ type: 'text', text: 'ok' }] };
+    const result = await tools
+      .get('computer_use_get_browser_state')!
+      .execute(
+        'state',
+        { pid: 123, window_id: 456, session: 'checkout' },
+        undefined,
+        undefined,
+        mockCtx,
+      );
+    expect(result).toMatchObject({ isError: true });
+    expect(JSON.stringify(result)).not.toContain('test-token');
+    expect(result).toMatchObject({
+      details: {
+        next_call: {
+          tool: 'browser_prepare',
+          arguments: {
+            pid: 123,
+            window_id: 456,
+            session: 'checkout',
+            strategy: { kind: 'existing_profile' },
+          },
+        },
+      },
+    });
+  });
+
   it('returns the current dialog capability without dispatching a blocked browser action', async () => {
     const calls: string[] = [];
     await start();
@@ -446,14 +498,22 @@ describe('computerUseExtension', () => {
     expect(calls).not.toContain('browser_click');
   });
 
-  it('does not dispatch a browser action when dialog observation is refused', async () => {
+  it.each([
+    undefined,
+    true,
+  ])('cleans failed dialog observations and preserves the not-executed hint: %s', async (isError) => {
     const calls: string[] = [];
     await start();
     mockCallTool = (name) => {
       calls.push(name);
       return {
-        content: [{ type: 'text', text: 'dialog observation unavailable' }],
-        structuredContent: { code: 'browser_action_unavailable' },
+        ...(isError === undefined ? {} : { isError }),
+        content: [{ type: 'text', text: 'test-token dialog observation unavailable' }],
+        structuredContent: {
+          status: 'failed',
+          code: 'browser_action_unavailable',
+          secret: 'test-token',
+        },
       };
     };
     const result = await tools.get('computer_use_browser_click')!.execute(
@@ -468,6 +528,9 @@ describe('computerUseExtension', () => {
     );
     expect(result).toMatchObject({ isError: true });
     expect(calls).not.toContain('browser_click');
+    expect(JSON.stringify(result)).not.toContain('test-token');
+    expect(JSON.stringify(result)).toContain('was not executed');
+    expect(JSON.stringify(result)).not.toContain('execution outcome is unknown');
   });
 
   it('requests macOS permissions once on the first computer-use call', async () => {
@@ -857,7 +920,7 @@ describe('computerUseExtension', () => {
     expect(dispatch).toHaveBeenCalledOnce();
     expect(result.isError).toBe(true);
     const text = result.content.map((item: { text: string }) => item.text).join('\n');
-    expect(text).toContain('execution outcome is unknown');
+    expect(text).toMatch(/execution outcome is unknown/i);
     expect(text).toContain('Read the current target state before retrying any action');
     expect(text).not.toContain('retry the tool');
     expect(text).not.toContain('Failed to connect');
@@ -1333,20 +1396,29 @@ describe('computerUseExtension', () => {
     expect(result.content[0].text).toContain('requires interactive user confirmation');
   });
 
-  it('keeps upstream recovery guidance when translating permission errors', async () => {
+  it.each([
+    'permissions_pending: test-token',
+    'ax_not_granted test-token',
+    'HTTP 403: test-token',
+    'unknown test-token',
+  ])('cleans all returned MCP error fields: %s', async (message) => {
     await start();
     mockCallTool = () => ({
       isError: true,
-      content: [{ type: 'text', text: 'ax_not_granted' }],
-      structuredContent: { hint: 'Grant Accessibility, then inspect permissions again.' },
+      content: [
+        { type: 'text', text: message },
+        { type: 'image', data: 'test-token', mimeType: 'image/png' },
+      ],
+      structuredContent: { hint: 'test-token', raw: 'private diagnostic' },
     });
-    const result = (await tools
+    const result = await tools
       .get('computer_use_check_permissions')!
-      .execute('id', { prompt: false }, undefined, undefined, mockCtx)) as any;
-    expect(result.isError).toBe(true);
-    expect(result.content.map((c: { text: string }) => c.text).join('\n')).toContain(
-      'Grant Accessibility, then inspect permissions again.',
-    );
+      .execute('id', { prompt: false }, undefined, undefined, mockCtx);
+    expect(result).toMatchObject({ isError: true });
+    expect(JSON.stringify(result)).not.toMatch(/test-token|private diagnostic/);
+    if (message.startsWith('permissions_pending'))
+      expect(JSON.stringify(result)).toContain('permissions_pending');
+    if (message.startsWith('ax_')) expect(JSON.stringify(result)).toContain('Accessibility');
   });
 
   it('uses get_window_state for optional vision analysis', async () => {

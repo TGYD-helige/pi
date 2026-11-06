@@ -1,3 +1,4 @@
+import { ValidationError } from '@amaster.ai/pi-shared';
 import type {
   FetchResponse,
   ResolvedProvider,
@@ -23,8 +24,9 @@ export class AnthropicProvider extends BaseProvider {
     signal?: AbortSignal,
   ): Promise<SearchResponse> {
     if (!provider.apiKey) {
-      throw new Error(
+      throw new ValidationError(
         'Anthropic API key not configured. Set ANTHROPIC_API_KEY env var or configure in settings.json.',
+        'configuration_error',
       );
     }
 
@@ -97,8 +99,9 @@ export class AnthropicProvider extends BaseProvider {
     signal?: AbortSignal,
   ): Promise<FetchResponse> {
     if (!provider.apiKey) {
-      throw new Error(
+      throw new ValidationError(
         'Anthropic API key not configured. Set ANTHROPIC_API_KEY env var or configure in settings.json.',
+        'configuration_error',
       );
     }
 

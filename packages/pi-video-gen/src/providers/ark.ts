@@ -75,10 +75,11 @@ function bearerHeaders(apiKey: string): Record<string, string> {
 export { requestFingerprint as fingerprint };
 
 /** Thrown when submit failed without a definitive server verdict (network/5xx). */
-function ambiguousSubmitError(): AmbiguousSubmitError {
+function ambiguousSubmitError(error?: unknown): AmbiguousSubmitError {
   return new AmbiguousSubmitError(
     'Task creation failed with an ambiguous result (network error or server 5xx). The provider MAY have created a paid task — check the Volcengine Ark console before retrying to avoid double billing.',
     'ark submit: ambiguous outcome',
+    error,
   );
 }
 
@@ -168,12 +169,13 @@ export const arkAdapter: VideoProviderAdapter = {
         body: JSON.stringify(body),
         signal: signal ?? null,
       });
-    } catch {
-      throw ambiguousSubmitError();
+    } catch (error) {
+      throw ambiguousSubmitError(error);
     }
 
     if (!res.ok) {
-      if (res.status >= 500) throw ambiguousSubmitError();
+      if (res.status >= 500)
+        throw ambiguousSubmitError(Object.assign(new Error(), { status: res.status }));
       if (res.status === 400) {
         const privacyError = await portraitPrivacyError(res);
         if (privacyError) throw privacyError;
@@ -185,9 +187,9 @@ export const arkAdapter: VideoProviderAdapter = {
     try {
       const json = (await res.json()) as { id?: string };
       taskId = json.id;
-    } catch {
-      // Response said OK but wasn't JSON — treat as ambiguous rather than assume.
-      throw ambiguousSubmitError();
+    } catch (error) {
+      // A body failure cannot tell us whether the paid task was created.
+      throw ambiguousSubmitError(error);
     }
     if (!taskId) {
       // 2xx but no id: the task MAY exist server-side — this is ambiguous,
@@ -217,8 +219,8 @@ export const arkAdapter: VideoProviderAdapter = {
           signal: signal ?? null,
         },
       );
-    } catch {
-      throw networkError('ark', 'inspect');
+    } catch (error) {
+      throw networkError('ark', 'inspect', error);
     }
     if (!res.ok) throw httpStatusError('ark', 'inspect', res.status);
 

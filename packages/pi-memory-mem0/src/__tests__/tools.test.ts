@@ -38,6 +38,27 @@ async function execute(
 }
 
 describe('mem0_memory tool', () => {
+  it('retains timeout classification and write uncertainty without leaking provider data', async () => {
+    const tool = createTool(
+      mockProvider({
+        add: vi.fn().mockRejectedValue(new DOMException('secret-token', 'TimeoutError')),
+      }),
+    );
+    const result = await tool.execute(
+      'call',
+      { action: 'add', content: 'fact' },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    expect(result.structuredContent).toHaveProperty('errorCategory', 'timeout');
+    expect(result.content[0]).toHaveProperty(
+      'text',
+      expect.stringContaining('Inspect stored memories before retrying'),
+    );
+    expect(JSON.stringify(result)).not.toContain('secret-token');
+  });
+
   it('exposes bounded redacted records with stable IDs and typed errors', async () => {
     const tool = createTool(
       mockProvider({
@@ -335,7 +356,7 @@ describe('mem0_memory tool', () => {
       const result = await execute(tool, { action: 'search', query: 'x' });
 
       expect(result.isError).toBe(true);
-      expect(result.content[0]!.text).toContain('Mem0 request failed (500).');
+      expect(result.content[0]!.text).toContain('HTTP 500');
       expect(result.content[0]!.text).not.toContain('Error:');
     });
 

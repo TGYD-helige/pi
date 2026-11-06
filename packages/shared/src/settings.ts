@@ -2,6 +2,7 @@ import { constants, readdirSync, readFileSync } from 'node:fs';
 import { open, opendir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
+import { ValidationError } from './tool-errors.js';
 
 export type PiSettingsOptions = {
   /** Stop asynchronous reads between native filesystem operations. */
@@ -13,7 +14,7 @@ export type PiSettingsOptions = {
   projectTrusted?: boolean;
   /** Whether to expand bare $ENV_VAR references in global and agent-dir settings. Defaults to true. */
   expandBareEnvVars?: boolean;
-  /** Refuse malformed/unreadable trusted project settings instead of ignoring them. */
+  /** @deprecated Malformed settings are always rejected; retained for compatibility. */
   strictProjectSettings?: boolean;
 };
 
@@ -60,23 +61,23 @@ function readSettingsSection<T>(
     const raw = readFileSync(filePath, 'utf-8');
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      const section = parsed[key] ?? {};
+      const section = parsed[key] === undefined ? {} : parsed[key];
       if (!section || typeof section !== 'object' || Array.isArray(section)) {
-        if (options.strict) throw new Error('project settings section must be an object');
-        return {};
+        throw new Error('Settings section must be an object');
       }
       return (
         options.expandEnv ? resolveEnvVars(section, options.expandBareEnvVars) : section
       ) as Partial<T>;
     }
-    if (options.strict) throw new Error('project settings root must be an object');
-    return {};
+    throw new Error('Settings root must be an object');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
-    if (options.strict) {
-      throw new Error('Trusted project settings are unreadable or malformed.', { cause: error });
-    }
-    return {};
+    throw new ValidationError(
+      options.strict
+        ? 'Trusted project settings are unreadable or malformed. Fix settings.json before retrying.'
+        : 'Settings are unreadable or malformed. Fix settings.json before retrying; defaults were not substituted.',
+      'configuration_error',
+    );
   }
 }
 
@@ -232,7 +233,7 @@ export async function loadPiSettingsAsync<T>(key: string, options?: PiSettingsOp
       options?.signal?.throwIfAborted();
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
         throw new Error('Settings root must be an object.');
-      const section = parsed[key] ?? {};
+      const section = parsed[key] === undefined ? {} : parsed[key];
       if (!section || typeof section !== 'object' || Array.isArray(section))
         throw new Error('Settings section must be an object.');
       result = {

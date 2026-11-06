@@ -148,6 +148,8 @@ Keep Remotion source files and imports outside the video output directory; that 
 
 Remotion is installed by the local project rather than distributed with this package. Review [Remotion's license FAQ](https://www.remotion.dev/docs/license/faq) for the project's usage and organization before deploying an automated rendering service.
 
+For source-based product demonstrations, see [component integration](skills/video-gen/references/product-components.md) and the [shared business-component example](skills/video-gen/examples/continuous-demo/README.md#product-component-example). The example also provides independently editable music/effects stems with sample-peak calibration and a reference report; its sample product is not Pi's UI.
+
 ## Jobs on disk
 
 ```

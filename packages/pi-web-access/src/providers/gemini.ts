@@ -1,3 +1,4 @@
+import { ValidationError } from '@amaster.ai/pi-shared';
 import {
   BaseProvider,
   getEnvironmentContext,
@@ -17,8 +18,9 @@ export class GeminiProvider extends BaseProvider {
     signal?: AbortSignal,
   ): Promise<SearchResponse> {
     if (!provider.apiKey) {
-      throw new Error(
+      throw new ValidationError(
         'Gemini API key not configured. Set GEMINI_API_KEY env var or configure in settings.json.',
+        'configuration_error',
       );
     }
 

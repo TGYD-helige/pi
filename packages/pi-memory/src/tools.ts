@@ -1,4 +1,4 @@
-import { boundStructuredContent } from '@amaster.ai/pi-shared';
+import { boundStructuredContent, describeToolError } from '@amaster.ai/pi-shared';
 import type {
   AgentToolResult,
   AgentToolUpdateCallback,
@@ -26,6 +26,8 @@ const memoryOutputSchema = Type.Union([
   Type.Object({
     success: Type.Optional(Type.Literal(false)),
     error: Type.String(),
+    errorCategory: Type.Optional(Type.String()),
+    httpStatus: Type.Optional(Type.Integer()),
     matches: Type.Optional(Type.Array(Type.String())),
     currentEntries: Type.Optional(Type.Array(Type.String())),
     usage: Type.Optional(Type.String()),
@@ -168,5 +170,27 @@ export function createMemoryTools(store: MemoryStore): ToolDefinition[] {
     },
   };
 
-  return [addTool, replaceTool, removeTool, readTool];
+  return [addTool, replaceTool, removeTool, readTool].map((tool) => ({
+    ...tool,
+    async execute(...args: Parameters<ToolDefinition['execute']>) {
+      try {
+        return await tool.execute(...args);
+      } catch (error) {
+        if (args[2]?.aborted) throw error;
+        const failure = describeToolError(
+          tool.name,
+          error,
+          'Inspect the existing memory file before retrying a write.',
+        );
+        console.error(`[pi-memory] ${tool.name} failed (category=${failure.errorCategory})`);
+        const data = boundStructuredContent({ success: false, ...failure });
+        return {
+          content: [{ type: 'text' as const, text: failure.error }],
+          details: data,
+          structuredContent: data,
+          isError: true,
+        };
+      }
+    },
+  }));
 }

@@ -71,10 +71,11 @@ async function imageFileToDataUri(path: string): Promise<string> {
   return `data:${mime};base64,${bytes.toString('base64')}`;
 }
 
-function ambiguousSubmitError(): AmbiguousSubmitError {
+function ambiguousSubmitError(error?: unknown): AmbiguousSubmitError {
   return new AmbiguousSubmitError(
     'Task creation failed with an ambiguous result (network error or server 5xx). The provider MAY have created a paid task — check the DashScope console before retrying to avoid double billing.',
     'dashscope submit: ambiguous outcome',
+    error,
   );
 }
 
@@ -140,11 +141,12 @@ export const dashscopeAdapter: VideoProviderAdapter = {
           signal: signal ?? null,
         },
       );
-    } catch {
-      throw ambiguousSubmitError();
+    } catch (error) {
+      throw ambiguousSubmitError(error);
     }
     if (!res.ok) {
-      if (res.status >= 500) throw ambiguousSubmitError();
+      if (res.status >= 500)
+        throw ambiguousSubmitError(Object.assign(new Error(), { status: res.status }));
       throw httpStatusError('dashscope', 'submit', res.status);
     }
 
@@ -152,8 +154,8 @@ export const dashscopeAdapter: VideoProviderAdapter = {
     try {
       const json = (await res.json()) as { output?: { task_id?: string } };
       taskId = json.output?.task_id;
-    } catch {
-      throw ambiguousSubmitError();
+    } catch (error) {
+      throw ambiguousSubmitError(error);
     }
     if (!taskId) {
       // 2xx but no id: the task MAY exist server-side — this is ambiguous,
@@ -184,8 +186,8 @@ export const dashscopeAdapter: VideoProviderAdapter = {
           signal: signal ?? null,
         },
       );
-    } catch {
-      throw networkError('dashscope', 'inspect');
+    } catch (error) {
+      throw networkError('dashscope', 'inspect', error);
     }
     if (!res.ok) throw httpStatusError('dashscope', 'inspect', res.status);
 
@@ -248,8 +250,8 @@ export const dashscopeAdapter: VideoProviderAdapter = {
           signal: signal ?? null,
         },
       );
-    } catch {
-      throw networkError('dashscope', 'cancel');
+    } catch (error) {
+      throw networkError('dashscope', 'cancel', error);
     }
     if (!res.ok) throw httpStatusError('dashscope', 'cancel', res.status);
     return { cancelled: true };

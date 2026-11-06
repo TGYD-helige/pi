@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { ConversationTurn, RuntimeSession } from '@amaster.ai/pi-shared';
@@ -10,6 +10,19 @@ const tmpDirs: string[] = [];
 describe('JsonFileTranscriptStore', () => {
   afterEach(async () => {
     await Promise.all(tmpDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  });
+
+  it('refuses to overwrite parseable history with an invalid schema', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'pi-history-'));
+    tmpDirs.push(dir);
+    const filePath = path.join(dir, 'transcripts.json');
+    const original = JSON.stringify({ version: 2, turns: [], messages: [{ text: 'keep me' }] });
+    await writeFile(filePath, original);
+    const store = new JsonFileTranscriptStore(filePath);
+    await expect(store.appendTurn(turn('turn-1', 'session-1', 'hello', 'hi'))).rejects.toThrow(
+      /schema/,
+    );
+    expect(await readFile(filePath, 'utf8')).toBe(original);
   });
 
   it('writes versioned history state with turns, messages, and session summaries', async () => {

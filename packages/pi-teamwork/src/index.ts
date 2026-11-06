@@ -1,5 +1,5 @@
 import { addAbortListener } from 'node:events';
-import { boundStructuredContent } from '@amaster.ai/pi-shared';
+import { boundStructuredContent, describeToolError, SafeToolError } from '@amaster.ai/pi-shared';
 import { isProjectTrusted, loadPiSettings } from '@amaster.ai/pi-shared/settings';
 import { defineTool, type ExtensionAPI, truncateHead } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
@@ -41,7 +41,12 @@ const WORKSPACE_ID_PARAM = Type.Optional(
   }),
 );
 
-const errorSchema = Type.Object({ error: Type.String(), truncated: Type.Boolean() });
+const errorSchema = Type.Object({
+  error: Type.String(),
+  errorCategory: Type.Optional(Type.String()),
+  httpStatus: Type.Optional(Type.Integer()),
+  truncated: Type.Boolean(),
+});
 const issueSchema = Type.Union([
   Type.Object({
     id: Type.String(),
@@ -96,6 +101,7 @@ const issueOutputSchema = Type.Union([
 export default function piTeamworkExtension(pi: ExtensionAPI): void {
   let provider: TeamworkProvider | undefined;
   let readyPromise: Promise<void> | undefined;
+  let initializationError: SafeToolError | undefined;
   let sessionGeneration = 0;
   let sessionAbort: AbortController | undefined;
   let active = false;
@@ -127,6 +133,7 @@ export default function piTeamworkExtension(pi: ExtensionAPI): void {
     }
     waitSignal.throwIfAborted();
     if (generation !== sessionGeneration) return 'Teamwork session was replaced.';
+    if (initializationError) throw initializationError;
     if (!provider) return 'Teamwork provider is not initialized.';
     return provider.withExecution({ ...(signal ? { signal } : {}), deadline });
   }
@@ -170,6 +177,7 @@ export default function piTeamworkExtension(pi: ExtensionAPI): void {
     }
 
     active = true;
+    initializationError = undefined;
     registerProviderTools();
     let initDeadline: number | undefined = Date.now() + 10_000;
     const startupSignal = ctx.signal
@@ -186,10 +194,12 @@ export default function piTeamworkExtension(pi: ExtensionAPI): void {
         execution?.deadline ?? Infinity,
       );
       const timeout = deadline - Date.now();
-      if (timeout <= 0) throw new Error('Teamwork initialization timed out.');
+      if (timeout <= 0)
+        throw new DOMException('Teamwork initialization timed out.', 'TimeoutError');
       const result = await pi.exec(command, args, { cwd: ctx.cwd, signal, timeout });
       signal.throwIfAborted();
-      if (Date.now() >= deadline) throw new Error('Teamwork operation timed out.');
+      if (Date.now() >= deadline)
+        throw new DOMException('Teamwork operation timed out.', 'TimeoutError');
       return { stdout: result.stdout, stderr: result.stderr, code: result.code };
     };
 
@@ -224,9 +234,12 @@ export default function piTeamworkExtension(pi: ExtensionAPI): void {
 
       ctx.ui.setStatus(STATUS_KEY, `teamwork: ${adapter.name}`);
     })()
-      .catch(() => {
+      .catch((error) => {
         if (generation !== sessionGeneration) return;
-        console.error('[pi-teamwork] initialization failed');
+        initializationError = new SafeToolError('Initialize teamwork', error);
+        console.error(
+          `[pi-teamwork] initialization failed (category=${initializationError.errorCategory})`,
+        );
         ctx.ui.setStatus(STATUS_KEY, 'teamwork: multica initialization failed');
       })
       .finally(() => {
@@ -262,8 +275,9 @@ export default function piTeamworkExtension(pi: ExtensionAPI): void {
         }
         const s = await backend.status();
         ctx.ui.notify(JSON.stringify(s, null, 2), 'info');
-      } catch {
-        ctx.ui.notify('Teamwork status request failed or was cancelled.', 'error');
+      } catch (error) {
+        if (ctx.signal?.aborted) throw error;
+        ctx.ui.notify(providerErrorResult(error).content[0]!.text, 'error');
       }
     },
   });
@@ -283,8 +297,9 @@ function createTeamworkTools(ensureReady: EnsureReadyFn) {
       const backend = await ensureReady(signal, Date.now() + 30_000);
       if (typeof backend === 'string') return errorResult(backend);
       return await operation(backend);
-    } catch {
-      return providerErrorResult();
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      return providerErrorResult(error);
     }
   }
 
@@ -576,11 +591,14 @@ function textResult(value: object, text?: string) {
   };
 }
 
-function providerErrorResult() {
-  console.error('[pi-teamwork] provider operation failed');
-  return errorResult(
-    'Teamwork operation failed. Check provider status and inspect issue state before retrying.',
+function providerErrorResult(error: unknown) {
+  const failure = describeToolError(
+    'Teamwork operation',
+    error,
+    'The operation may have completed. Inspect issue state before retrying a write.',
   );
+  console.error(`[pi-teamwork] provider operation failed (category=${failure.errorCategory})`);
+  return textResult(failure, failure.error);
 }
 
 function errorResult(text: string) {
@@ -588,13 +606,9 @@ function errorResult(text: string) {
 }
 
 function loadConfig(cwd: string, projectTrusted = false): TeamworkConfig {
-  try {
-    const config = loadPiSettings<Partial<TeamworkConfig>>(SETTINGS_KEY, {
-      cwd,
-      projectTrusted,
-    });
-    return Object.keys(config).length > 0 ? (config as TeamworkConfig) : {};
-  } catch {
-    return {};
-  }
+  const config = loadPiSettings<Partial<TeamworkConfig>>(SETTINGS_KEY, {
+    cwd,
+    projectTrusted,
+  });
+  return Object.keys(config).length > 0 ? (config as TeamworkConfig) : {};
 }

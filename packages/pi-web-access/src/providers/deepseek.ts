@@ -1,3 +1,4 @@
+import { SafeToolError, ValidationError } from '@amaster.ai/pi-shared';
 import type { FetchResponse, ResolvedProvider, SearchParams, SearchResponse } from './base.js';
 import { BaseProvider, timeoutSignal } from './base.js';
 
@@ -11,8 +12,9 @@ export class DeepSeekProvider extends BaseProvider {
     signal?: AbortSignal,
   ): Promise<T> {
     if (!provider.apiKey) {
-      throw new Error(
+      throw new ValidationError(
         'DeepSeek API key not configured. Set DEEPSEEK_API_KEY or configure settings.json.',
+        'configuration_error',
       );
     }
     const requestSignal = timeoutSignal(provider.timeoutMs ?? 30_000, signal);
@@ -41,7 +43,7 @@ export class DeepSeekProvider extends BaseProvider {
       ) {
         throw error;
       }
-      throw new Error(`DeepSeek ${endpoint} request failed.`);
+      throw new SafeToolError(`DeepSeek ${endpoint} request`, error);
     }
   }
 
@@ -62,13 +64,17 @@ export class DeepSeekProvider extends BaseProvider {
       query += ` after:${new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10)}`;
     }
     if (!params.query.trim() || Array.from(query).length > 128) {
-      throw new Error(
+      throw new ValidationError(
         'DeepSeek search query must contain 1–128 Unicode characters, including filters.',
+        'invalid_request',
       );
     }
     const count = params.maxResults ?? 5;
     if (!Number.isInteger(count) || count < 1 || count > 50) {
-      throw new Error('DeepSeek search maxResults must be an integer between 1 and 50.');
+      throw new ValidationError(
+        'DeepSeek search maxResults must be an integer between 1 and 50.',
+        'invalid_request',
+      );
     }
     const data = await this.post<{
       results: Array<{

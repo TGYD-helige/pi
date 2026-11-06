@@ -1,3 +1,4 @@
+import { ValidationError } from '@amaster.ai/pi-shared';
 import type { ResolvedProvider, SearchParams, SearchResponse, SearchResult } from './base.js';
 import { BaseProvider, timeoutSignal } from './base.js';
 
@@ -12,8 +13,9 @@ export class BraveProvider extends BaseProvider {
     signal?: AbortSignal,
   ): Promise<SearchResponse> {
     if (!provider.apiKey) {
-      throw new Error(
+      throw new ValidationError(
         'Brave Search API key not configured. Set BRAVE_API_KEY env var or configure in settings.json.',
+        'configuration_error',
       );
     }
 

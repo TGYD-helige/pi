@@ -1,3 +1,4 @@
+import { classifyError, describeToolError, SafeToolError } from '@amaster.ai/pi-shared';
 import type { VideoApiStyle } from './types.js';
 
 /**
@@ -8,10 +9,11 @@ import type { VideoApiStyle } from './types.js';
  * `VideoGenError`, the only value whose text is vetted body-free, carrying two
  * curated views: `message` (LLM-facing) and `logSummary` (stderr-facing).
  */
-export class VideoGenError extends Error {
+export class VideoGenError extends SafeToolError {
   readonly logSummary: string;
-  constructor(message: string, logSummary: string) {
-    super(message);
+  constructor(message: string, logSummary: string, cause?: unknown) {
+    super('Media operation', cause ?? new Error(message));
+    this.message = message;
     this.name = 'VideoGenError';
     this.logSummary = logSummary.split(/[\r\n]/, 1)[0] || 'video generation failed';
   }
@@ -22,7 +24,12 @@ export class VideoGenError extends Error {
  * Render orchestration must NOT auto-resubmit on this — the shot is parked in
  * an `ambiguous` state until the user confirms the provider side is clean.
  */
-export class AmbiguousSubmitError extends VideoGenError {}
+export class AmbiguousSubmitError extends VideoGenError {
+  constructor(message: string, logSummary: string, cause?: unknown) {
+    super(message, logSummary, cause);
+    if (this.errorCategory === 'timeout') this.message = `The request timed out. ${message}`;
+  }
+}
 
 /** Marker for inspect failures that are safe and useful to retry locally. */
 export class RetryableProviderError extends VideoGenError {}
@@ -48,7 +55,13 @@ export function toLogSummary(error: unknown): string {
 /** user/LLM sink: a VideoGenError's vetted message, else a fixed sentence. */
 export function errorMessageForUser(error: unknown): string {
   if (error instanceof VideoGenError) return error.message;
-  return 'Video generation failed unexpectedly. Retry once; if it persists, report a pi-video-gen bug.';
+  if (classifyError(error).errorCategory !== 'request_failed')
+    return describeToolError(
+      'Video generation',
+      error,
+      'Inspect the saved job and provider task before retrying; do not submit another generation automatically.',
+    ).error;
+  return 'Video generation failed unexpectedly. Inspect the saved job and provider task before retrying; report a pi-video-gen bug if it persists.';
 }
 
 /**
@@ -115,13 +128,24 @@ export function httpStatusError(
   return new ErrorType(
     `${providerLabel(style)} ${action} failed with HTTP ${status}.${hint}`,
     `${providerLabel(style)} ${action} HTTP ${status}`,
+    Object.assign(new Error(), { status }),
   );
 }
 
 /** Network-level failure (no HTTP status). Message stays free of error.message paths. */
-export function networkError(style: VideoApiStyle, action: string): VideoGenError {
+export function networkError(style: VideoApiStyle, action: string, error?: unknown): VideoGenError {
+  const networkCause =
+    classifyError(error).errorCategory === 'request_failed'
+      ? Object.assign(new Error(), { code: 'UND_ERR_SOCKET' })
+      : error;
+  const failure = describeToolError(
+    `${providerLabel(style)} ${action}`,
+    networkCause,
+    'Inspect the saved task before retrying; do not submit another generation.',
+  );
   return new RetryableProviderError(
-    `${providerLabel(style)} ${action} failed: network error. Check connectivity and retry.`,
-    `${providerLabel(style)} ${action} network error`,
+    failure.error,
+    `${providerLabel(style)} ${action} ${failure.errorCategory}`,
+    networkCause,
   );
 }

@@ -1,4 +1,4 @@
-import { boundStructuredContent } from '@amaster.ai/pi-shared';
+import { boundStructuredContent, describeMcpError } from '@amaster.ai/pi-shared';
 import { truncateHead } from '@earendil-works/pi-coding-agent';
 import { extractTextContent, postProcessToolResult } from './tool-augment.js';
 
@@ -22,6 +22,19 @@ export function toToolContent(
   isError?: boolean;
   structuredContent?: ReturnType<typeof boundStructuredContent>;
 } {
+  if (result.isError) {
+    const failure = describeMcpError(
+      'Browser tool',
+      result,
+      'The action may have completed. Inspect the current page before retrying.',
+    );
+    console.error(`[pi-browser-use] upstream tool failed (category=${failure.errorCategory})`);
+    return {
+      content: [{ type: 'text', text: failure.error }],
+      structuredContent: failure,
+      isError: true,
+    };
+  }
   const textContent = extractTextContent(result.content);
   const processed = postProcessToolResult(originalName, textContent);
 
@@ -66,7 +79,6 @@ export function toToolContent(
 
   return {
     content,
-    ...(result.isError ? { isError: true } : {}),
     ...(result.structuredContent
       ? { structuredContent: boundStructuredContent(result.structuredContent) }
       : {}),

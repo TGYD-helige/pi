@@ -4,6 +4,22 @@ import type { TaskScheduler } from '../index.js';
 import { createSchedulerTools } from '../tools.js';
 
 describe('createSchedulerTools', () => {
+  it('does not misreport a create timeout as invalid configuration', async () => {
+    const scheduler = {
+      create: vi.fn().mockRejectedValue(new DOMException('secret-token', 'TimeoutError')),
+    } as unknown as TaskScheduler;
+    const tool = createSchedulerTools(scheduler).find((tool) => tool.name === 'scheduler_create')!;
+    const result = await tool.execute(
+      'call',
+      { type: 'interval', schedule: '5m', prompt: 'check' },
+      undefined,
+      undefined,
+      { sessionManager: { getSessionId: () => 's1' } } as never,
+    );
+    expect(result.structuredContent).toHaveProperty('errorCategory', 'timeout');
+    expect(JSON.stringify(result)).not.toMatch(/secret-token|Check the schedule/);
+  });
+
   it('keeps oversized created tasks available for later updates', async () => {
     const task = {
       id: 'persisted-task',

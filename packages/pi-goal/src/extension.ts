@@ -1,3 +1,4 @@
+import { describeToolError } from '@amaster.ai/pi-shared';
 import { isProjectTrusted } from '@amaster.ai/pi-shared/settings';
 import {
   buildSessionContext,
@@ -65,6 +66,10 @@ export async function runGoalEngine(
     condition: goal.condition,
     transcript,
     omittedCount: omitted,
+    onError: (failure) => {
+      deps.notify(`Goal evaluation unavailable: ${failure.error}`, 'warning');
+      deps.setStatus(`${formatStatus(goal)} — evaluation unavailable (${failure.errorCategory})`);
+    },
     ...(deps.signal ? { signal: deps.signal } : {}),
   });
   // Model unavailable / call failed: do nothing this round (degrade quietly).
@@ -180,7 +185,9 @@ export default function goalExtension(
         messages,
       );
     } catch (err) {
-      console.error(`[pi-goal] engine error: ${err instanceof Error ? err.message : String(err)}`);
+      const failure = describeToolError('Goal engine', err);
+      console.error(`[pi-goal] engine failed (category=${failure.errorCategory})`);
+      ctx.ui.notify(failure.error, 'warning');
     } finally {
       engineRunning = false;
     }
@@ -289,13 +296,19 @@ export default function goalExtension(
     const buffered = buildTranscript(history, config.transcriptMaxChars);
     const extra = extraContext.trim() ? `[user] ${extraContext.trim()}` : '';
     const transcript = [buffered, extra].filter(Boolean).join('\n\n');
+    let derivationFailed = false;
     const condition = await deriveCondition({
       registry,
       modelConfig: config.model,
       transcript,
+      onError: (failure) => {
+        derivationFailed = true;
+        ctx.ui.notify(failure.error, 'warning');
+      },
       ...(ctx.signal ? { signal: ctx.signal } : {}),
     });
     if (!condition) {
+      if (derivationFailed || ctx.signal?.aborted) return;
       ctx.ui.notify(
         'Could not derive a clear goal from the conversation. Try `/goal <condition>`.',
         'warning',
