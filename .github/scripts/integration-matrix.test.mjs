@@ -160,13 +160,15 @@ test('loads pi-telemetry for every model-backed integration run', async () => {
   assert.match(smoke, /PHOENIX_API_KEY: \${{ secrets\.PHOENIX_API_KEY }}/);
   assert.match(smoke, /PHOENIX_COLLECTOR_ENDPOINT: \${{ secrets\.PHOENIX_COLLECTOR_ENDPOINT }}/);
   assert.match(smoke, /PHOENIX_API_KEY and PHOENIX_COLLECTOR_ENDPOINT are required for Stage B telemetry/);
-  assert.doesNotMatch(smoke, /"projectName"/);
+  assert.match(smoke, /"projectName": "\\\$\{PHOENIX_PROJECT_NAME\}"/);
   assert.match(matrix, /pi install "\.\/packages\/pi-telemetry"/);
   assert.match(matrix, /LANGFUSE_PUBLIC_KEY: \${{ secrets\.LANGFUSE_PUBLIC_KEY }}/);
   assert.match(matrix, /PHOENIX_API_KEY: \${{ secrets\.PHOENIX_API_KEY }}/);
   assert.match(matrix, /PHOENIX_COLLECTOR_ENDPOINT: \${{ secrets\.PHOENIX_COLLECTOR_ENDPOINT }}/);
+  assert.match(workflow, /PHOENIX_PROJECT_NAME: \$\{\{ vars\.PHOENIX_PROJECT_NAME \|\| 'github-pi' \}\}/);
   assert.match(matrix, /"phoenix": \{\s*"enabled": true,\s*"endpoint": "\\\$\{PHOENIX_COLLECTOR_ENDPOINT\}"/);
-  assert.doesNotMatch(matrix, /PHOENIX_PROJECT|"projectName"/);
+  assert.match(matrix, /"projectName": "\\\$\{PHOENIX_PROJECT_NAME\}"/);
+  assert.doesNotMatch(matrix, /ci-phoenix-(?:probe|smoke)|PHOENIX_PROJECT(?!_NAME)/);
   assert.match(matrix, /name: Verify Phoenix trace \(pi-telemetry only\)/);
   assert.match(matrix, /node \.github\/scripts\/telemetry-phoenix-verify\.mjs/);
   assert.match(matrix, /PHOENIX_API_KEY and PHOENIX_COLLECTOR_ENDPOINT are required for every model-backed E2E run/);
@@ -362,8 +364,9 @@ test('threads the integration model through generated configs and skill evaluati
       enabled: true,
       endpoint: '${PHOENIX_COLLECTOR_ENDPOINT}',
       apiKey: '${PHOENIX_API_KEY}',
+      projectName: '${PHOENIX_PROJECT_NAME}',
     });
-    assert.equal('projectName' in settings['pi-telemetry'].phoenix, false);
+    assert.equal(settings['pi-telemetry'].phoenix.projectName, '${PHOENIX_PROJECT_NAME}');
   }
 });
 

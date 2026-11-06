@@ -43,6 +43,22 @@ describe('config', () => {
     expect(credentialMaskValues({ phoenix: { apiKey: ' \n\t ' } })).toEqual([]);
   });
 
+  it('uses PHOENIX_PROJECT_NAME as a fallback below settings', () => {
+    const env = { PHOENIX_PROJECT_NAME: 'env-project' };
+    expect(resolvePhoenixExporterConfig({ phoenix: { enabled: true } }, env).projectName).toBe(
+      'env-project',
+    );
+    expect(
+      resolvePhoenixExporterConfig(
+        { phoenix: { enabled: true, projectName: 'settings-project' } },
+        env,
+      ).projectName,
+    ).toBe('settings-project');
+    expect(resolvePhoenixExporterConfig({ phoenix: { enabled: true } }, {}).projectName).toBe(
+      undefined,
+    );
+  });
+
   it('resolves Phoenix settings and masks its API key', () => {
     const config = {
       phoenix: {
