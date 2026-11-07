@@ -51,52 +51,8 @@ jobs:
         with:
           install-pi-cli: 'true'
           set-pi-agent-dir: 'true'
-      - name: Build packaged browser extension
-        if: inputs.target == 'browser'
-        run: pnpm --filter @amaster.ai/pi-browser-use build
-      - name: Check configuration
-        run: |
-          test -n "$PI_INTEGRATION_BASE_URL" && test -n "$PI_INTEGRATION_API_KEY"
-      - name: Build baseline
-        run: |
-          git fetch --no-tags -- origin "$BASE_REF"
-          git worktree add --detach "$RUNNER_TEMP/pi-eval-base" FETCH_HEAD
-          cd "$RUNNER_TEMP/pi-eval-base"
-          pnpm install --frozen-lockfile
-          pnpm build
-          if [ "$TARGET" = browser ]; then pnpm --filter @amaster.ai/pi-browser-use build; fi
-      - name: Install Chrome
-        if: inputs.target == 'browser'
-        run: |
-          npx -y @puppeteer/browsers install chrome@stable --path "$RUNNER_TEMP/chrome-install"
-          CHROME_BIN=$(find "$RUNNER_TEMP/chrome-install" -name chrome -type f | head -1)
-          test -n "$CHROME_BIN"
-          echo "CHROME_BIN=$CHROME_BIN" >> "$GITHUB_ENV"
-      - name: Evaluate baseline and candidate with identical graders
-        run: |
-          if [ "$TARGET" = browser ]; then
-            SCRIPT=eval:browser
-          else
-            SCRIPT=eval:memory:product
-          fi
-          pnpm --filter @amaster.ai/pi-eval "$SCRIPT" -- \
-            --package-root "$RUNNER_TEMP/pi-eval-base" --trials "$TRIALS" --tasks "$TASKS" \
-            --output "$GITHUB_WORKSPACE/tests/eval/results/base.json"
-          pnpm --filter @amaster.ai/pi-eval "$SCRIPT" -- \
-            --trials "$TRIALS" --tasks "$TASKS" \
-            --output "$GITHUB_WORKSPACE/tests/eval/results/head.json"
-          pnpm --filter @amaster.ai/pi-eval compare -- \
-            results/base.json results/head.json results/comparison.md
-          cat tests/eval/results/comparison.md >> "$GITHUB_STEP_SUMMARY"
-      - name: Evaluate no-memory control
-        if: inputs.target == 'memory'
-        run: |
-          pnpm --filter @amaster.ai/pi-eval eval:memory:product -- \
-            --without-memory --trials "$TRIALS" --tasks "$TASKS" \
-            --output "$GITHUB_WORKSPACE/tests/eval/results/control.json"
-          pnpm --filter @amaster.ai/pi-eval compare -- \
-            results/control.json results/head.json results/memory-benefit.md
-          cat tests/eval/results/memory-benefit.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Evaluate and compare revisions
+        run: bash .github/scripts/effect-eval.sh
       - name: Upload results and diagnostic traces
         if: always()
         uses: actions/upload-artifact@v7

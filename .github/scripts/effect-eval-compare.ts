@@ -1,5 +1,5 @@
 import { readFile, writeFile } from 'node:fs/promises';
-import { compareResults, type EvalResults } from '../src/results.js';
+import { compareResults, type EvalResults } from '../../tests/eval/src/results.js';
 
 const argv = process.argv.slice(2).filter((arg) => arg !== '--');
 if (argv.length < 2 || argv.length > 3) {
