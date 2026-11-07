@@ -135,8 +135,8 @@ export function evaluateTrace(
     if (scenario !== 'redacted') {
       const input = Array.isArray(generation.input) ? generation.input : [];
       need(
-        input.some((message) => message?.role === 'system' && typeof message.content === 'string' && message.content.trim()),
-        `${label} is missing non-empty system input`,
+        input.some((message) => ['system', 'developer'].includes(message?.role) && typeof message.content === 'string' && message.content.trim()),
+        `${label} is missing non-empty system/developer input`,
       );
       let rawInput = generation.metadata?.rawInput;
       if (typeof rawInput === 'string') {
@@ -146,11 +146,11 @@ export function evaluateTrace(
           need(false, `${label} has invalid JSON in raw provider input`);
         }
       }
-      const rawMessages = rawInput?.messages;
+      const rawMessages = rawInput?.messages ?? rawInput?.input;
       if (Array.isArray(rawMessages)) {
-        const systemText = input.filter((message) => message?.role === 'system').map((message) => message.content).join('\n\n');
+        const systemText = input.filter((message) => ['system', 'developer'].includes(message?.role)).map((message) => message.content).join('\n\n');
         for (const message of rawMessages) {
-          if (message?.role === 'system' && typeof message.content === 'string' && message.content.trim()) {
+          if (['system', 'developer'].includes(message?.role) && typeof message.content === 'string' && message.content.trim()) {
             need(systemText.includes(message.content), `${label} is missing complete system content from the provider request`);
           }
         }

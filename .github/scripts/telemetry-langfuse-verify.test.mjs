@@ -471,3 +471,16 @@ it('accepts missing unpriced costs only with explicit unknown provenance', () =>
   const unlabeled = trace.map((row) => ({ ...row, metadata: { serviceName: SERVICE_NAME } }));
   assert.ok(evaluateTrace(unlabeled, CODEWORD).some((problem) => problem.includes('cost')));
 });
+
+it('accepts Responses developer instructions and still rejects incomplete raw instruction content', () => {
+  const trace = fullTrace().map((row) => row.type === 'GENERATION' ? {
+    ...row,
+    input: [{ role: 'developer', content: 'complete developer rules', tools: [{ name: 'bash' }] }, { role: 'user', content: CODEWORD }],
+    metadata: { ...row.metadata, rawInput: { input: [{ role: 'developer', content: 'complete developer rules' }] } },
+  } : row);
+  assert.deepEqual(evaluateTrace(trace, CODEWORD), []);
+  const incomplete = trace.map((row) => row.type === 'GENERATION' ? {
+    ...row, input: [{ role: 'developer', content: 'complete' }],
+  } : row);
+  assert.ok(evaluateTrace(incomplete, CODEWORD).some((problem) => problem.includes('complete system')));
+});

@@ -96,6 +96,8 @@ describe('telemetry', () => {
       ...completedTurnEvent('http-headers'),
       requestHeaders: {
         authorization: 'Bearer hidden-auth',
+        'x-api-key': 'hidden-anthropic',
+        'X-API-Key': 'hidden-uppercase',
         'x-session-id': 'session-id',
         'x-private': 'hidden-field',
       },
