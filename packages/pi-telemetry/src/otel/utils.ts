@@ -5,7 +5,7 @@ import type {
   RuntimeTelemetryEvent,
   RuntimeTelemetryOptions,
 } from '../index.js';
-import { isInlineImage } from '../observations.js';
+import { captureProviderHeaders, isInlineImage } from '../observations.js';
 import { MAX_ATTRIBUTE_VALUE_BYTES } from './types.js';
 
 export function utf8Prefix(value: string, maxBytes: number): string {
@@ -126,7 +126,18 @@ export function applyTelemetryRedaction(
   if (!redacted) {
     return undefined;
   }
-  const stripped = config.includePayloads === false ? stripTelemetryPayloads(redacted) : redacted;
+  const stripped =
+    config.includePayloads === false
+      ? stripTelemetryPayloads(redacted)
+      : {
+          ...redacted,
+          ...(redacted.requestHeaders
+            ? { requestHeaders: captureProviderHeaders(redacted.requestHeaders) }
+            : {}),
+          ...(redacted.responseHeaders
+            ? { responseHeaders: captureProviderHeaders(redacted.responseHeaders) }
+            : {}),
+        };
   const payloadKeys = [
     'input',
     'output',
@@ -137,6 +148,8 @@ export function applyTelemetryRedaction(
     'streamEvents',
     'error',
     'contextMetadata',
+    'requestHeaders',
+    'responseHeaders',
   ];
   const fieldsRedacted = config.redactFields?.length
     ? Object.fromEntries(
@@ -223,7 +236,12 @@ export function redactTelemetryValue(
 }
 
 export function stripTelemetryPayloads(event: RuntimeTelemetryEvent): RuntimeTelemetryEvent {
-  const { contextMetadata: _contextMetadata, ...withoutContext } = event;
+  const {
+    contextMetadata: _contextMetadata,
+    requestHeaders: _requestHeaders,
+    responseHeaders: _responseHeaders,
+    ...withoutContext
+  } = event;
   event = withoutContext;
   if (isLlmStreamEvent(event)) {
     const {

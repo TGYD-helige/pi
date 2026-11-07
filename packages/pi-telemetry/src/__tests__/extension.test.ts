@@ -282,6 +282,38 @@ describe('telemetryExtension', () => {
     );
   });
 
+  it.each([
+    true,
+    false,
+  ])('captures bounded redacted headers per request when payloads=%s', async (includePayloads) => {
+    vi.mocked(loadConfigFromFile).mockReturnValue({ includePayloads });
+    telemetryExtension(mockPi as any);
+    await fireEvent('session_start', {});
+    await fireEvent('input', { text: 'headers' });
+    await fireEvent('before_provider_request', { payload: {} });
+    const headers = { Authorization: 'Bearer private', 'x-session-id': 'session-1' };
+    await fireEvent('before_provider_headers', { headers });
+    await fireEvent('after_provider_response', {
+      status: 429,
+      headers: { 'set-cookie': 'private', 'x-request-id': 'request-1' },
+    });
+    const failed = getPublishedEvents().find(
+      (event) => 'status' in event && event.status === 'failed',
+    )!;
+    expect(failed.requestHeaders).toEqual(
+      includePayloads ? { Authorization: '[redacted]', 'x-session-id': 'session-1' } : undefined,
+    );
+    expect(failed.responseHeaders).toEqual(
+      includePayloads ? { 'set-cookie': '[redacted]', 'x-request-id': 'request-1' } : undefined,
+    );
+    expect(headers.Authorization).toBe('Bearer private');
+    await fireEvent('before_provider_request', { payload: {} });
+    await fireEvent('message_end', { message: { role: 'assistant', content: 'done' } });
+    const last = getPublishedEvents().at(-1)!;
+    expect(last.requestHeaders).toBeUndefined();
+    expect(last.responseHeaders).toBeUndefined();
+  });
+
   it('measures first content latency rather than the stream start and records actual model attribution', async () => {
     vi.useFakeTimers();
     try {

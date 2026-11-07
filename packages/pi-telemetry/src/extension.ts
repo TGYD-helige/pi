@@ -11,10 +11,12 @@ import { loadConfigFromFile, resolveConfig } from './config.js';
 import { NoopRuntimeEventExporter } from './exporters.js';
 import type {
   RuntimeEventExporter,
+  RuntimeTelemetryEvent,
   TelemetryAuxiliaryEvent,
   TelemetryRequestContext,
 } from './index.js';
 import {
+  captureProviderHeaders,
   displayContent,
   displayMessage,
   hasFirstToken,
@@ -290,6 +292,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   let streamStartedAt: number | undefined;
   let completionStartTime: string | undefined;
   let requestParameters: JsonObject = {};
+  let providerHeaders: Pick<RuntimeTelemetryEvent, 'requestHeaders' | 'responseHeaders'> = {};
   let modelPricingKnown = false;
   let generationOpen = false;
   let boundaryFailure: { error?: string; outcome?: string } = {};
@@ -421,6 +424,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     streamTruncated = false;
     hasProviderFrames = false;
     completionStartTime = undefined;
+    providerHeaders = {};
     compactionStartedAt = undefined;
     branchSummaryStartedAt = undefined;
     supportsSettlement = false;
@@ -1021,6 +1025,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
       error,
       stopReason,
       modelParameters: requestParameters,
+      ...providerHeaders,
       ...(completionStartTime ? { completionStartTime } : {}),
     });
   }
@@ -1034,6 +1039,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     lastModelConfig = modelConfigFromCtx(ctx);
     modelPricingKnown = hasModelPricing(ctx);
     requestParameters = modelParameters(event.payload, ctx.thinkingLevel);
+    providerHeaders = {};
     if (capturePayloads) systemPrompt = ctx.getSystemPrompt?.() ?? systemPrompt;
     completionStartTime = undefined;
     streamStartedAt = Date.now();
@@ -1058,12 +1064,20 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
       model: lastModelConfig,
       ...(capturePayloads ? { input: event.payload as JsonValue } : {}),
       modelParameters: requestParameters,
+      ...providerHeaders,
       ...(displayInput !== undefined ? { displayInput } : {}),
     });
   });
 
+  pi.on('before_provider_headers', (event) => {
+    if (enabled && capturePayloads && generationOpen)
+      providerHeaders.requestHeaders = captureProviderHeaders(event.headers);
+  });
+
   pi.on('after_provider_response', async (event) => {
     if (!enabled) return;
+    if (capturePayloads && generationOpen)
+      providerHeaders.responseHeaders = captureProviderHeaders(event.headers);
     if (event.status >= 400) await failOpenGeneration(`HTTP ${event.status}`, 'error');
   });
 
@@ -1144,6 +1158,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
       },
       requestedModel: lastModelConfig.model,
       modelParameters: requestParameters,
+      ...providerHeaders,
       ...(completionStartTime ? { completionStartTime } : {}),
       ...(typeof msg.api === 'string' ? { api: msg.api } : {}),
       ...(Object.keys(output).length > 0 ? { output } : {}),

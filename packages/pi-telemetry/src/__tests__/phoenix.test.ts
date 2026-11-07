@@ -70,6 +70,8 @@ describe('Phoenix telemetry export', () => {
       await exporter.publish({
         ...context,
         id: 'end',
+        requestHeaders: { Authorization: 'hidden-token', 'x-session-id': 'session-1' },
+        responseHeaders: { 'set-cookie': 'hidden-cookie', 'x-request-id': 'request-1' },
         llmGenerationId: 'gen-1',
         status: 'completed',
         model,
@@ -105,6 +107,8 @@ describe('Phoenix telemetry export', () => {
         environment: 'test',
         release: 'release-1',
         costSource: 'unknown',
+        requestHeaders: { Authorization: '[redacted]', 'x-session-id': 'session-1' },
+        responseHeaders: { 'set-cookie': '[redacted]', 'x-request-id': 'request-1' },
       });
       expect(spans[0]!.attributes['llm.cost.total']).toBeUndefined();
     } finally {

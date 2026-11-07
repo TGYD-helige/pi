@@ -251,3 +251,33 @@ export function displayMessage(message: unknown, systemUpdate = false): JsonObje
   }
   return result;
 }
+
+/** Snapshot runtime-provided HTTP headers without retaining credentials or unbounded values. */
+export function captureProviderHeaders(headers: unknown): Record<string, string> {
+  const result: Record<string, string> = {};
+  if (!headers || typeof headers !== 'object' || Array.isArray(headers)) return result;
+  let bytes = 0;
+  let count = 0;
+  for (const key in headers) {
+    if (!Object.hasOwn(headers, key)) continue;
+    if (count++ >= 64) {
+      result['telemetry-truncated'] = '[additional headers omitted]';
+      break;
+    }
+    const raw = (headers as Record<string, unknown>)[key];
+    if (typeof raw !== 'string') continue;
+    const name = key.slice(0, 128);
+    const value = /auth|cookie|key|token|secret|password|credential|signature/i.test(key)
+      ? '[redacted]'
+      : raw.length > 2048
+        ? `${raw.slice(0, 2048)} [truncated]`
+        : raw;
+    bytes += Buffer.byteLength(JSON.stringify({ [name]: value }));
+    if (bytes > 16_000) {
+      result['telemetry-truncated'] = '[additional headers omitted]';
+      break;
+    }
+    result[name] = value;
+  }
+  return result;
+}

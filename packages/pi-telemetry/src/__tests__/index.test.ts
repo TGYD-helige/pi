@@ -87,6 +87,42 @@ afterEach(() => {
 });
 
 describe('telemetry', () => {
+  it.each([
+    true,
+    false,
+  ])('exports bounded masked HTTP headers only with payloads=%s', async (includePayloads) => {
+    const { exporter, inMemory } = makeExporter({ includePayloads, redactFields: ['x-private'] });
+    await exporter.publish({
+      ...completedTurnEvent('http-headers'),
+      requestHeaders: {
+        authorization: 'Bearer hidden-auth',
+        'x-session-id': 'session-id',
+        'x-private': 'hidden-field',
+      },
+      responseHeaders: {
+        'set-cookie': 'hidden-cookie',
+        'x-request-id': 'response-id',
+        ...Object.fromEntries(
+          Array.from({ length: 100 }, (_, index) => [`x-${index}`, 'a'.repeat(3000)]),
+        ),
+      },
+    });
+    const attrs = inMemory.getFinishedSpans()[0]!.attributes;
+    const serialized = JSON.stringify(attrs);
+    expect(serialized).not.toMatch(/hidden-auth|hidden-field|hidden-cookie/);
+    if (includePayloads) {
+      const request = JSON.parse(String(attrs['langfuse.observation.metadata.requestHeaders']));
+      const response = JSON.parse(String(attrs['langfuse.observation.metadata.responseHeaders']));
+      expect(request['x-session-id']).toBe('session-id');
+      expect(response['x-request-id']).toBe('response-id');
+      expect(response['telemetry-truncated']).toBeTruthy();
+      expect(Buffer.byteLength(JSON.stringify(response))).toBeLessThan(17_000);
+    } else {
+      expect(serialized).not.toMatch(/requestHeaders|responseHeaders|session-id|response-id/);
+    }
+    await exporter.close();
+  });
+
   it('does not fully serialize oversized nested display messages', async () => {
     const stringify = vi.spyOn(JSON, 'stringify');
     const { exporter, inMemory } = makeExporter();

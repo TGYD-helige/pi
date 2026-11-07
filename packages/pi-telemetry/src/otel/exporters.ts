@@ -693,6 +693,10 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
       ...base,
       'langfuse.trace.name': this.requestContext.traceName || this.config.traceName || 'chat-turn',
     };
+    if (event.requestHeaders)
+      enriched['langfuse.observation.metadata.requestHeaders'] = event.requestHeaders;
+    if (event.responseHeaders)
+      enriched['langfuse.observation.metadata.responseHeaders'] = event.responseHeaders;
     const contextMetadata = event.contextMetadata ?? {};
     for (const [key, value] of Object.entries(contextMetadata).slice(0, 32)) {
       if (value === undefined) continue;

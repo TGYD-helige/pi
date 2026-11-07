@@ -18,7 +18,11 @@ export type RuntimeTelemetryEvent = (
   | RuntimeToolEvent
   | RuntimeLlmGenerationEvent
   | RuntimeLlmStreamEvent
-) & { contextMetadata?: Record<string, JsonValue> };
+) & {
+  contextMetadata?: Record<string, JsonValue>;
+  requestHeaders?: Record<string, string>;
+  responseHeaders?: Record<string, string>;
+};
 
 export interface RuntimeEventExporter {
   publish(event: RuntimeTelemetryEvent): Promise<void>;
