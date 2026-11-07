@@ -88,9 +88,14 @@ afterEach(() => {
 
 describe('telemetry', () => {
   it('bounds custom context metadata before retaining it', async () => {
+    const readLate = vi.fn(() => 'late');
+    const largeArray = Array.from({ length: 1000 }, () => 'entry');
+    Object.defineProperty(largeArray, 999, { get: readLate });
+
     const { exporter, inMemory } = makeExporter();
     exporter.setContext({
       metadata: {
+        nested: { array: largeArray },
         huge: 'x'.repeat(100_000),
         ...Object.fromEntries(
           Array.from({ length: 50 }, (_, index) => [`key-${index}`, 'v'.repeat(3000)]),
@@ -98,6 +103,7 @@ describe('telemetry', () => {
       },
     });
     await exporter.publish(completedTurnEvent('context-bound'));
+    expect(readLate).not.toHaveBeenCalled();
     const attrs = inMemory.getFinishedSpans()[0]!.attributes;
     const values = Object.fromEntries(
       Object.entries(attrs).filter(([key]) => key.startsWith('langfuse.trace.metadata.')),

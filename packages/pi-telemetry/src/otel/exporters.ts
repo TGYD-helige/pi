@@ -734,7 +734,46 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
 
 function boundMetadata(value: Record<string, JsonValue>): JsonObject {
   const result: JsonObject = {};
-  let bytes = 0;
+  const limit = new Error('Metadata budget exceeded');
+  const ancestors = new Set<object>();
+  // Reserve omission markers and attribute-key overhead before copying values.
+  let bytes = 6200;
+  let nodes = 0;
+  function copy(field: JsonValue | undefined, depth: number): JsonValue {
+    if (++nodes > 128 || depth > 16 || bytes > 60_000) throw limit;
+    if (typeof field === 'string') {
+      if (Buffer.byteLength(field) > 60_000 - bytes) throw limit;
+      bytes += Buffer.byteLength(JSON.stringify(field));
+      if (bytes > 60_000) throw limit;
+      return field;
+    }
+    if (!field || typeof field !== 'object') {
+      bytes += 24;
+      return field ?? null;
+    }
+    if (ancestors.has(field)) throw limit;
+    ancestors.add(field);
+    try {
+      if (Array.isArray(field)) {
+        const items: JsonValue[] = [];
+        for (const item of field) {
+          bytes += 1;
+          items.push(copy(item, depth + 1));
+        }
+        return items;
+      }
+      const object: JsonObject = {};
+      for (const key in field) {
+        if (!Object.hasOwn(field, key)) continue;
+        bytes += Buffer.byteLength(key) * 6 + 4;
+        if (bytes > 60_000) throw limit;
+        object[key] = copy(field[key], depth + 1);
+      }
+      return object;
+    } finally {
+      ancestors.delete(field);
+    }
+  }
   let count = 0;
   for (const key in value) {
     if (!Object.hasOwn(value, key)) continue;
@@ -742,23 +781,15 @@ function boundMetadata(value: Record<string, JsonValue>): JsonObject {
       result.telemetryTruncated = '[additional metadata omitted]';
       break;
     }
-    const field = value[key];
-    let encoded: string | undefined;
-    try {
-      if (typeof field !== 'string' || Buffer.byteLength(field) <= 60_000 - bytes)
-        encoded = JSON.stringify(field);
-    } catch {
-      /* Non-JSON metadata is represented by an omission marker. */
-    }
-    const size =
-      encoded === undefined ? Infinity : Buffer.byteLength(encoded) + Buffer.byteLength(key) + 4;
+    const before = bytes;
     const boundedKey = key.slice(0, 128);
-    if (bytes + size > 60_000) {
+    try {
+      bytes += Buffer.byteLength(boundedKey) * 6 + 4;
+      result[boundedKey] = copy(value[key], 0);
+    } catch (error) {
+      if (error !== limit) console.error('[pi-telemetry] invalid custom metadata');
+      bytes = before;
       result[boundedKey] = '[metadata value omitted]';
-      bytes += 200;
-    } else {
-      result[boundedKey] = field;
-      bytes += size;
     }
   }
   return result;
