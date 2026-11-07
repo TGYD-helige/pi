@@ -64,12 +64,12 @@ The `Performance checks` job provides a fixed aggregate status for the three PR 
 Use Node 24, install dependencies, and run `pnpm build` in both checkouts, then:
 
 ```sh
-node tests/performance/runtime.mjs --self-test
-node tests/performance/runtime.mjs /path/to/baseline /path/to/candidate /tmp/pi-performance-runtime runtime
-node tests/performance/runtime.mjs /path/to/baseline /path/to/candidate /tmp/pi-performance-sessions sessions
-node tests/performance/runtime.mjs /path/to/baseline /path/to/candidate /tmp/pi-performance-profiles profiles
+node .github/scripts/performance/runtime.mjs --self-test
+node .github/scripts/performance/runtime.mjs /path/to/baseline /path/to/candidate /tmp/pi-performance-runtime runtime
+node .github/scripts/performance/runtime.mjs /path/to/baseline /path/to/candidate /tmp/pi-performance-sessions sessions
+node .github/scripts/performance/runtime.mjs /path/to/baseline /path/to/candidate /tmp/pi-performance-profiles profiles
 # Short validation of the long-run path: one minute per revision.
-node tests/performance/runtime.mjs /path/to/baseline /path/to/candidate /tmp/pi-performance-soak soak 1
+node .github/scripts/performance/runtime.mjs /path/to/baseline /path/to/candidate /tmp/pi-performance-soak soak 1
 ```
 
 If local `tsup` builds have replaced the TypeScript outputs for the browser/computer packages, regenerate their module files with `pnpm exec tsc -b --force packages/pi-browser-use/tsconfig.json packages/pi-computer-use/tsconfig.json`. CI starts from fresh checkouts.

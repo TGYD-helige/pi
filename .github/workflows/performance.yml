@@ -42,7 +42,7 @@ jobs:
         with:
           build: 'false'
       - name: Check benchmark regression detection
-        run: node tests/performance/runtime.mjs --self-test
+        run: node .github/scripts/performance/runtime.mjs --self-test
       - name: Build baseline
         run: |
           git worktree add --detach "$RUNNER_TEMP/pi-performance-base" "$BASE_SHA"
@@ -52,7 +52,7 @@ jobs:
       - name: Build candidate
         run: pnpm build
       - name: Measure and compare runtime performance
-        run: node tests/performance/runtime.mjs "$RUNNER_TEMP/pi-performance-base" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/performance" "${{ matrix.suite }}"
+        run: node .github/scripts/performance/runtime.mjs "$RUNNER_TEMP/pi-performance-base" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/performance" "${{ matrix.suite }}"
       - name: Publish report
         if: always()
         run: |
@@ -98,7 +98,7 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm build
       - name: Compare sustained engineering load
-        run: node tests/performance/runtime.mjs "$RUNNER_TEMP/pi-performance-base" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/performance-soak" soak "$SOAK_MINUTES"
+        run: node .github/scripts/performance/runtime.mjs "$RUNNER_TEMP/pi-performance-base" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/performance-soak" soak "$SOAK_MINUTES"
       - name: Publish sustained-load report
         if: always()
         run: |
