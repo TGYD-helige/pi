@@ -267,7 +267,7 @@ jobs:
             "providers": {
               "deepseek-integration": {
                 "baseUrl": "${PI_INTEGRATION_BASE_URL}",
-                "api": "openai-completions",
+                "api": "openai-responses",
                 "apiKey": "\$PI_INTEGRATION_API_KEY",
                 "authHeader": true,
                 "models": [
@@ -284,11 +284,6 @@ jobs:
                       "medium": null,
                       "high": "high",
                       "xhigh": "max"
-                    },
-                    "compat": {
-                      "thinkingFormat": "deepseek",
-                      "requiresReasoningContentOnAssistantMessages": true,
-                      "supportsDeveloperRole": false
                     }
                   }
                 ]
@@ -541,7 +536,7 @@ jobs:
             "providers": {
               "deepseek-integration": {
                 "baseUrl": "${PI_INTEGRATION_BASE_URL}",
-                "api": "openai-completions",
+                "api": "openai-responses",
                 "apiKey": "\$PI_INTEGRATION_API_KEY",
                 "authHeader": true,
                 "models": [
@@ -558,11 +553,6 @@ jobs:
                       "medium": null,
                       "high": "high",
                       "xhigh": "max"
-                    },
-                    "compat": {
-                      "thinkingFormat": "deepseek",
-                      "requiresReasoningContentOnAssistantMessages": true,
-                      "supportsDeveloperRole": false
                     }
                   },
                   {
@@ -571,15 +561,7 @@ jobs:
                     "reasoning": true,
                     "input": ["text", "image"],
                     "contextWindow": 1000000,
-                    "maxTokens": 393216,
-                    "compat": {
-                      "supportsStore": false,
-                      "supportsDeveloperRole": false,
-                      "supportsReasoningEffort": false,
-                      "maxTokensField": "max_tokens",
-                      "supportsStrictMode": false,
-                      "thinkingFormat": "deepseek"
-                    }
+                    "maxTokens": 393216
                   }
                 ]
               }

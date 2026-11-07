@@ -5,6 +5,8 @@ import type {
   RuntimeLlmGenerationEvent,
   RuntimeToolEvent,
 } from '@amaster.ai/pi-shared';
+import { serializeTelemetryValue } from '../observations.js';
+import { utf8Prefix } from '../otel/utils.js';
 
 export function langfuseObservationAttributes(input: {
   input?: JsonValue | undefined;
@@ -12,8 +14,9 @@ export function langfuseObservationAttributes(input: {
   level?: 'DEFAULT' | 'WARNING' | 'ERROR';
   type?: 'span' | 'generation' | 'tool';
 }): JsonObject {
-  const serializedInput = input.input === undefined ? undefined : JSON.stringify(input.input);
-  const serializedOutput = input.output === undefined ? undefined : JSON.stringify(input.output);
+  const serializedInput = input.input === undefined ? undefined : serializeObservation(input.input);
+  const serializedOutput =
+    input.output === undefined ? undefined : serializeObservation(input.output);
   return {
     'langfuse.observation.type': input.type ?? 'span',
     ...(input.input !== undefined
@@ -58,14 +61,6 @@ export function toolSpanKey(
   event: Pick<RuntimeToolEvent, 'sessionId' | 'toolCallId' | 'toolName'>,
 ): string {
   return `tool:${event.sessionId}:${event.toolCallId}:${event.toolName}`;
-}
-
-export function subagentSpawnToolSpanKey(
-  event: Pick<RuntimeLifecycleEvent, 'parentSessionId' | 'parentToolCallId'>,
-): string | undefined {
-  return event.parentSessionId && event.parentToolCallId
-    ? `tool:${event.parentSessionId}:${event.parentToolCallId}:sessions_spawn`
-    : undefined;
 }
 
 export function llmGenerationKey(
@@ -180,4 +175,115 @@ export function stringArg(args: JsonObject | undefined, key: string): string | u
 export function truncateObservationSummary(value: string, maxLength = 90): string {
   const normalized = value.replace(/\s+/g, ' ').trim();
   return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1)}…` : normalized;
+}
+
+// Reserve tool definitions and omission markers before retaining recent history.
+function serializeObservation(value: JsonValue): string {
+  if (
+    !Array.isArray(value) ||
+    !value
+      .slice(-100)
+      .every(
+        (item) =>
+          item &&
+          typeof item === 'object' &&
+          !Array.isArray(item) &&
+          (typeof item.role === 'string' ||
+            ['function_call', 'function_call_output', 'reasoning'].includes(String(item.type))),
+      )
+  )
+    return JSON.stringify(value);
+  const tools: JsonValue[] = [];
+  let toolBytes = 0;
+  let omittedTools = false;
+  for (const message of value.slice(0, 100)) {
+    if (
+      !message ||
+      typeof message !== 'object' ||
+      Array.isArray(message) ||
+      !Array.isArray(message.tools)
+    )
+      continue;
+    if (message.tools.length > 100) omittedTools = true;
+    for (const raw of message.tools.slice(0, 100)) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        omittedTools = true;
+        continue;
+      }
+      const declarations = Array.isArray(raw.functionDeclarations)
+        ? raw.functionDeclarations
+        : [raw.function ?? raw];
+      if (declarations.length > 100) omittedTools = true;
+      for (const declaration of declarations.slice(0, 100)) {
+        if (
+          !declaration ||
+          typeof declaration !== 'object' ||
+          Array.isArray(declaration) ||
+          typeof declaration.name !== 'string'
+        ) {
+          omittedTools = true;
+          continue;
+        }
+        const tool: JsonObject = {
+          name: declaration.name,
+          ...(typeof declaration.description === 'string'
+            ? { description: declaration.description }
+            : {}),
+          ...((declaration.parameters ?? declaration.input_schema)
+            ? { parameters: declaration.parameters ?? declaration.input_schema }
+            : {}),
+        };
+        const encoded = serializeTelemetryValue(tool, 100_000 - toolBytes);
+        const size = encoded === undefined ? 100_001 : Buffer.byteLength(encoded) + 1;
+        if (tools.length >= 100 || toolBytes + size > 100_000) {
+          omittedTools = true;
+          break;
+        }
+        tools.push(tool);
+        toolBytes += size;
+      }
+    }
+    break;
+  }
+  const marker: JsonObject = {
+    role: 'system',
+    content: '[Earlier messages or oversized content omitted by telemetry budget]',
+    telemetryTruncated: true,
+  };
+  if (tools.length) marker.tools = tools;
+  if (omittedTools) marker.content = `${marker.content} [Some tool definitions omitted]`;
+  const selected: JsonValue[] = [];
+  let bytes = Buffer.byteLength(JSON.stringify(marker)) + 2;
+  let truncated = omittedTools;
+  for (let index = value.length - 1; index >= 0 && selected.length < 99; index--) {
+    const message = value[index] as JsonObject;
+    const encoded = serializeTelemetryValue(message, 500_000 - bytes - 1, true);
+    let item: JsonObject = encoded === undefined ? {} : JSON.parse(encoded);
+    let size = encoded === undefined ? 500_001 : Buffer.byteLength(encoded) + 1;
+    if (bytes + size > 500_000) {
+      if (selected.length) break;
+      const content =
+        typeof message.content === 'string'
+          ? message.content
+          : (serializeTelemetryValue(message.content ?? null, Math.max(0, 500_000 - bytes)) ??
+            '[structured content omitted]');
+      item = {
+        role: typeof message.role === 'string' ? message.role : 'assistant',
+        content: `${utf8Prefix(content, Math.max(0, Math.floor((500_000 - bytes) / 6) - 100))} [message preview truncated]`,
+      };
+      size = Buffer.byteLength(JSON.stringify(item)) + 1;
+      truncated = true;
+    }
+    selected.unshift(item);
+    bytes += size;
+  }
+  if (selected.length < value.length || truncated) selected.unshift(marker);
+  else if (
+    tools.length &&
+    selected[0] &&
+    typeof selected[0] === 'object' &&
+    !Array.isArray(selected[0])
+  )
+    selected[0] = { ...selected[0], tools };
+  return JSON.stringify(selected);
 }

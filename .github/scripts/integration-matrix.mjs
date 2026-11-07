@@ -156,7 +156,7 @@ export const fullMatrix = [
     // (.github/scripts/telemetry-subagent.sh) which inherits the
     // PI_TELEMETRY_* env the parent extension set on `input`, so its
     // telemetry lands in the same trace as subagent events.
-    prompt: 'Step 1 — use the bash tool exactly once to run: echo ci-langfuse-probe parent. Step 2 — use the bash tool exactly once to run: bash .github/scripts/telemetry-subagent.sh. Then reply with the single word TELEMETRY-E2E-DONE.',
+    prompt: 'Step 1 — use the bash tool exactly once to run: echo ci-langfuse-probe parent. Wait for that tool result before requesting the next tool call; do not run the two calls in parallel. Step 2 — use the bash tool exactly once to run: bash .github/scripts/telemetry-subagent.sh. Then reply with the single word TELEMETRY-E2E-DONE.',
     assert_pattern: 'TELEMETRY-E2E-DONE',
   },
   {

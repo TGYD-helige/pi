@@ -11,13 +11,13 @@
 //   ├─ tool       bash [bash .github/scripts/telemetry-…]          (endTime set)
 //   ├─ generation llm-generation [main] …                          (endTime set)
 //   │  └─ span       llm-stream                                 (endTime set)
-//   └─ span       subagent [ci-probe]                              (endTime set)
+//   │  └─ span   subagent [ci-probe]                              (endTime set)
 //      ├─ tool       bash [echo <codeword> child]                  (endTime set)
 //      └─ generation llm-generation [subagent] …                   (endTime set)
 //         └─ span       llm-stream                                  (endTime set)
 //
 // The hierarchy scenario adds a second nested pi and verifies:
-// chat-turn → subagent [ci-hierarchy] → subagent [ci-probe] → child work.
+// chat-turn → launch tool → subagent [ci-hierarchy] → launch tool → subagent [ci-probe] → child work.
 //
 // The redacted scenario runs with includePayloads: false and verifies the
 // privacy contract (issue #197): the trace is still complete, but no
@@ -135,8 +135,8 @@ export function evaluateTrace(
     if (scenario !== 'redacted') {
       const input = Array.isArray(generation.input) ? generation.input : [];
       need(
-        input.some((message) => message?.role === 'system' && typeof message.content === 'string' && message.content.trim()),
-        `${label} is missing non-empty system input`,
+        input.some((message) => ['system', 'developer'].includes(message?.role) && typeof message.content === 'string' && message.content.trim()),
+        `${label} is missing non-empty system/developer input`,
       );
       let rawInput = generation.metadata?.rawInput;
       if (typeof rawInput === 'string') {
@@ -146,11 +146,11 @@ export function evaluateTrace(
           need(false, `${label} has invalid JSON in raw provider input`);
         }
       }
-      const rawMessages = rawInput?.messages;
+      const rawMessages = rawInput?.messages ?? rawInput?.input;
       if (Array.isArray(rawMessages)) {
-        const systemText = input.filter((message) => message?.role === 'system').map((message) => message.content).join('\n\n');
+        const systemText = input.filter((message) => ['system', 'developer'].includes(message?.role)).map((message) => message.content).join('\n\n');
         for (const message of rawMessages) {
-          if (message?.role === 'system' && typeof message.content === 'string' && message.content.trim()) {
+          if (['system', 'developer'].includes(message?.role) && typeof message.content === 'string' && message.content.trim()) {
             need(systemText.includes(message.content), `${label} is missing complete system content from the provider request`);
           }
         }
@@ -253,12 +253,13 @@ export function evaluateTrace(
     return problems;
   }
 
+  const launchTool = (parent) => tools.find(tool => tool.parentObservationId === parent?.id && tool.name?.includes('telemetry-subagent.sh'));
   if (scenario === 'hierarchy') {
     const outerMatches = spans.filter((o) => o.name === 'subagent [ci-hierarchy]');
     need(outerMatches.length === 1, `expected exactly 1 span "subagent [ci-hierarchy]", found ${outerMatches.length}`);
     const outer = outerMatches[0];
     if (outer) {
-      need(outer.parentObservationId === root.id, '"subagent [ci-hierarchy]" is not parented to the root span');
+      need(outer.parentObservationId === launchTool(root)?.id, '"subagent [ci-hierarchy]" is not parented to its launch tool');
       need(outer.endTime != null, '"subagent [ci-hierarchy]" has no endTime');
     }
 
@@ -266,7 +267,7 @@ export function evaluateTrace(
     need(innerMatches.length === 1, `expected exactly 1 span "subagent [ci-probe]", found ${innerMatches.length}`);
     const inner = innerMatches[0];
     if (inner && outer) {
-      need(inner.parentObservationId === outer.id, `"subagent [ci-probe]" is parented to ${inner.parentObservationId ?? 'null'}, expected ${outer.id}`);
+      need(inner.parentObservationId === launchTool(outer)?.id, `"subagent [ci-probe]" is parented to ${inner.parentObservationId ?? 'null'}, expected ${launchTool(outer)?.id}`);
       need(inner.endTime != null, '"subagent [ci-probe]" has no endTime');
     }
 
@@ -316,8 +317,8 @@ export function evaluateTrace(
   const subagent = subagents[0];
   if (subagent) {
     need(
-      subagent.parentObservationId === root.id,
-      '"subagent [ci-probe]" is not parented to the root span',
+      subagent.parentObservationId === launchTool(root)?.id,
+      '"subagent [ci-probe]" is not parented to its launch tool',
     );
     need(subagent.endTime != null, '"subagent [ci-probe]" has no endTime (never completed)');
   }

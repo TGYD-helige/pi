@@ -1,5 +1,6 @@
 import type { Attributes } from '@opentelemetry/api';
 import type { ReadableSpan, TimedEvent } from '@opentelemetry/sdk-trace-base';
+import { projectMessages } from './messages.js';
 
 export function projectPhoenixSpan(
   span: ReadableSpan,
@@ -26,11 +27,38 @@ export function projectPhoenixSpan(
   mapPayload(attributes, 'input', includePayloads);
   mapPayload(attributes, 'output', includePayloads);
 
+  const metadata = Object.fromEntries(
+    Object.entries(source)
+      .filter(([key]) => key.startsWith('langfuse.observation.metadata.'))
+      .filter(
+        ([key]) =>
+          !['rawInput', 'rawOutput'].includes(key.slice('langfuse.observation.metadata.'.length)),
+      )
+      .map(([key, value]) => [
+        key.slice('langfuse.observation.metadata.'.length),
+        parseJson(String(value)) ?? value,
+      ]),
+  );
+  const usage = jsonRecord(source.usage);
+  if (usage?.costSource !== 'unknown' && usage?.cost) metadata.reportedCost = usage.cost;
+  if (source['langfuse.environment']) metadata.environment = source['langfuse.environment'];
+  if (source['langfuse.release']) metadata.release = source['langfuse.release'];
+  if (Object.keys(metadata).length) attributes.metadata = JSON.stringify(metadata);
+  if (Array.isArray(source['langfuse.trace.tags']))
+    attributes['tag.tags'] = source['langfuse.trace.tags'];
   if (kind === 'LLM') {
     mapLlmAttributes(attributes, source);
+    if (includePayloads)
+      projectMessages(
+        attributes,
+        parseJson(String(source['input.value'])),
+        parseJson(String(source['output.value'])),
+      );
   } else if (kind === 'TOOL') {
     if (typeof source.toolName === 'string') attributes['tool.name'] = source.toolName;
     if (typeof source.toolCallId === 'string') attributes['tool.id'] = source.toolCallId;
+    if (includePayloads && typeof source['input.value'] === 'string')
+      attributes['tool.parameters'] = source['input.value'];
   }
 
   const events = [...span.events];
@@ -38,6 +66,11 @@ export function projectPhoenixSpan(
   if (kind === 'LLM' && typeof completionStartTime === 'string') {
     const timestamp = Date.parse(completionStartTime);
     if (Number.isFinite(timestamp)) {
+      const startMs = span.startTime[0] * 1000 + span.startTime[1] / 1_000_000;
+      if (timestamp >= startMs) {
+        attributes['llm.time_to_first_token_ms'] = Math.round((timestamp - startMs) * 1000) / 1000;
+        attributes['llm.time_to_first_token_seconds'] = (timestamp - startMs) / 1000;
+      }
       events.push({
         name: 'first_token',
         time: millisecondsToHrTime(timestamp),
@@ -46,6 +79,9 @@ export function projectPhoenixSpan(
     }
   }
   return Object.assign(Object.create(Object.getPrototypeOf(span)), span, {
+    ...(span.name === 'chat-turn' && typeof source['langfuse.trace.name'] === 'string'
+      ? { name: source['langfuse.trace.name'] }
+      : {}),
     attributes,
     events,
     resource,
@@ -60,6 +96,8 @@ function mapLlmAttributes(attributes: Attributes, source: Attributes): void {
     attributes['llm.system'] = modelParameters.provider;
     attributes['llm.provider'] = modelParameters.provider;
   }
+
+  if (modelParameters) attributes['llm.invocation_parameters'] = JSON.stringify(modelParameters);
 
   const usage = jsonRecord(source.usage);
   if (!usage) return;

@@ -318,7 +318,7 @@ describe('interrupt flow', () => {
   it.each([
     { rate: 1, total: 0, costSource: undefined, expectedSource: 'model-pricing' },
     { rate: 0, total: 0, costSource: 'provided', expectedSource: 'provided' },
-    { rate: 0, total: 0.01, costSource: undefined, expectedSource: undefined },
+    { rate: 0, total: 0.01, costSource: undefined, expectedSource: 'provided' },
   ])('preserves known costs through the extension ($expectedSource, $total)', async ({
     rate,
     total,
@@ -439,7 +439,7 @@ describe('interrupt flow', () => {
       isError: false,
       result: { content: [] },
     });
-    const usage = exported.find((span) => span.name === 'Tool LLM Usage')!;
+    const usage = exported.find((span) => span.name === 'Tool LLM Usage [#1]')!;
     const tool = exported.find((span) => span.name === 'web')!;
     expect(usage.parentSpanContext?.spanId).toBe(tool.spanContext().spanId);
     expect(usage.attributes['langfuse.observation.model.name']).toBe('unknown');

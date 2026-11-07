@@ -9,13 +9,20 @@ import { isProjectTrusted } from '@amaster.ai/pi-shared/settings';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { loadConfigFromFile, resolveConfig } from './config.js';
 import { NoopRuntimeEventExporter } from './exporters.js';
-import type { RuntimeEventExporter } from './index.js';
+import type {
+  RuntimeEventExporter,
+  RuntimeTelemetryEvent,
+  TelemetryAuxiliaryEvent,
+  TelemetryRequestContext,
+} from './index.js';
 import {
+  captureProviderHeaders,
   displayContent,
   displayMessage,
   hasFirstToken,
   modelParameters,
   providerDisplayInput,
+  serializeTelemetryValue,
   toTelemetryValue,
 } from './observations.js';
 import { createTelemetryExporter } from './otel.js';
@@ -240,6 +247,8 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     'PI_TELEMETRY_SESSION_ID',
     'PI_TELEMETRY_OWNER_PID',
     'PI_TELEMETRY_TRACEPARENT',
+    'PI_TELEMETRY_TOOL_CONTEXTS',
+    'PI_TELEMETRY_PARENT_TOOL_CALL_ID',
   ];
   const inheritedEnvironment = new Map(correlationKeys.map((key) => [key, process.env[key]]));
   function restoreCorrelation(): void {
@@ -255,6 +264,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     nonEmptyEnv('PI_SUBAGENT_CHILD_AGENT') ??
     nonEmptyEnv('PI_TELEMETRY_SUBAGENT_NAME') ??
     nonEmptyEnv('PI_TELEMETRY_SUBAGENT_AGENT');
+  const inheritedParentToolCallId = nonEmptyEnv('PI_TELEMETRY_PARENT_TOOL_CALL_ID');
   const taskRunId = nonEmptyEnv('PI_TELEMETRY_TASK_RUN_ID');
   const runtimeCorrelation = taskRunId ? { taskRunId } : {};
   const isSubagent = Boolean(inheritedTraceId && ownerPid && ownerPid !== String(process.pid));
@@ -269,6 +279,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   let traceStartTime: number | undefined;
   let tracePublished = false;
   let llmGenerationCounter = 0;
+  let auxiliaryCounter = 0;
   let pendingInput: string | undefined;
   let pendingImages: unknown[] = [];
   let systemPrompt: string | undefined;
@@ -282,12 +293,15 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   let streamStartedAt: number | undefined;
   let completionStartTime: string | undefined;
   let requestParameters: JsonObject = {};
+  let providerHeaders: Pick<RuntimeTelemetryEvent, 'requestHeaders' | 'responseHeaders'> = {};
+  let pendingRequestHeaders: Record<string, string> | undefined;
   let modelPricingKnown = false;
   let generationOpen = false;
   let boundaryFailure: { error?: string; outcome?: string } = {};
   let streamEvents: JsonValue[] = [];
   let streamBytes = 0;
   let streamTruncated = false;
+  let hasProviderFrames = false;
   let finalMessages: readonly unknown[] = [];
   let promptNumber = 0;
   let activePromptNumber = 0;
@@ -296,6 +310,10 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   let branchSummaryStartedAt: number | undefined;
   const toolStarts = new Map<string, { startedAt: number; toolName: string }>();
   let supportsSettlement = false;
+  let pendingContext: TelemetryRequestContext | undefined;
+  const subscriptions: Array<() => void> = [];
+  const auxiliaryTraces = new Map<string, { traceId: string; observationName: string }>();
+  const observedAuxiliary = new Set<string>();
   let convertMessages: typeof import('@earendil-works/pi-coding-agent').convertToLlm | undefined;
 
   function observationLineage(traceId: string) {
@@ -406,13 +424,43 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     streamEvents = [];
     streamBytes = 0;
     streamTruncated = false;
+    hasProviderFrames = false;
     completionStartTime = undefined;
+    providerHeaders = {};
+    pendingRequestHeaders = undefined;
     compactionStartedAt = undefined;
     branchSummaryStartedAt = undefined;
     supportsSettlement = false;
     convertMessages = undefined;
     showStatus(ctx);
+    for (const unsubscribe of subscriptions.splice(0)) unsubscribe();
+    pendingContext = undefined;
+    auxiliaryTraces.clear();
+    auxiliaryCounter = 0;
+    observedAuxiliary.clear();
     if (!enabled) return;
+    if (pi.events) {
+      subscriptions.push(
+        pi.events.on('pi-telemetry:request-context', (value) => {
+          if (value && typeof value === 'object' && !Array.isArray(value))
+            pendingContext = value as TelemetryRequestContext;
+        }),
+      );
+      subscriptions.push(
+        pi.events.on('pi-telemetry:tool-context', (value) => {
+          const request = value as { toolCallId?: unknown; respond?: unknown } | undefined;
+          if (typeof request?.toolCallId === 'string' && typeof request.respond === 'function')
+            request.respond(exporter.getToolContext?.(localSessionId, request.toolCallId));
+        }),
+      );
+      subscriptions.push(
+        pi.events.on('pi-telemetry:llm', (value) => {
+          return publishExactAuxiliary(value).catch(() =>
+            console.error('[pi-telemetry] auxiliary observation failed'),
+          );
+        }),
+      );
+    }
     // Keep the runtime peer optional for callers importing programmatic exporters.
     const runtime = await import('@earendil-works/pi-coding-agent');
     const [major = 0, minor = 0, patch = 0] = runtime.VERSION.split('.').map(Number);
@@ -461,6 +509,8 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     }
     if (tracePublished)
       await completeTrace({ error: 'Run superseded by a new input', outcome: 'aborted' });
+    exporter.setContext?.(pendingContext ?? {});
+    pendingContext = undefined;
     promptNumber += 1;
     inputNumbered = true;
     pendingInput = capturePayloads ? event.text : undefined;
@@ -477,6 +527,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     traceStartTime = undefined;
     tracePublished = false;
     llmGenerationCounter = 0;
+    pendingRequestHeaders = undefined;
   });
 
   pi.on('before_agent_start', (event) => {
@@ -521,6 +572,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
       currentTraceId =
         (isSubagent ? inheritedTraceId : undefined) ?? randomUUID().replace(/-/g, '');
       llmGenerationCounter = 0;
+      pendingRequestHeaders = undefined;
       tracePublished = false;
     }
     if (!traceStartTime) {
@@ -528,6 +580,10 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     }
 
     if (!tracePublished) {
+      if (pendingContext) {
+        exporter.setContext?.(pendingContext);
+        pendingContext = undefined;
+      }
       tracePublished = true;
       if (!inputNumbered) promptNumber += 1;
       activePromptNumber = promptNumber;
@@ -557,6 +613,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
           traceId: currentTraceId,
           ...runtimeCorrelation,
           type: 'subagent_started',
+          ...(inheritedParentToolCallId ? { parentToolCallId: inheritedParentToolCallId } : {}),
           sessionId,
           promptNumber: activePromptNumber,
           ...(parentSessionId ? { parentSessionId } : {}),
@@ -693,6 +750,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     inputNumbered = false;
     boundaryFailure = {};
     restoreCorrelation();
+    exporter.setContext?.({});
   }
 
   pi.on('tool_execution_start', async (event) => {
@@ -705,6 +763,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
       id: randomUUID(),
       ...observationLineage(currentTraceId),
       toolCallId: event.toolCallId,
+      ...(event.parentToolCallId ? { parentToolCallId: event.parentToolCallId } : {}),
       toolName: event.toolName,
       status: 'started',
       createdAt: new Date().toISOString(),
@@ -723,6 +782,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
       id: randomUUID(),
       ...observationLineage(currentTraceId),
       toolCallId: event.toolCallId,
+      ...(event.parentToolCallId ? { parentToolCallId: event.parentToolCallId } : {}),
       toolName: event.toolName,
       status: event.isError ? 'failed' : 'completed',
       createdAt: new Date().toISOString(),
@@ -742,13 +802,99 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     });
   });
 
+  function auxiliaryObservationName(
+    source: TelemetryAuxiliaryEvent['source'],
+    name?: string,
+  ): string {
+    auxiliaryCounter = Math.min(auxiliaryCounter + 1, 999_999);
+    const purpose = {
+      compaction: 'Compaction',
+      branch_summary: 'Branch Summary',
+      tool: 'Tool LLM Usage',
+    }[source];
+    return `${purpose}${typeof name === 'string' && name ? ` [${name.slice(0, 40)}]` : ''} [#${auxiliaryCounter}]`;
+  }
+
+  async function publishExactAuxiliary(value: unknown): Promise<void> {
+    if (!enabled || !value || typeof value !== 'object' || Array.isArray(value)) return;
+    const event = value as TelemetryAuxiliaryEvent;
+    if (
+      !['compaction', 'branch_summary', 'tool'].includes(event.source) ||
+      !['started', 'completed', 'failed'].includes(event.status) ||
+      typeof event.llmGenerationId !== 'string' ||
+      !event.llmGenerationId ||
+      event.llmGenerationId.length > 128 ||
+      typeof event.createdAt !== 'string' ||
+      !Number.isFinite(Date.parse(event.createdAt)) ||
+      Date.parse(event.createdAt) > Date.now() + 300_000 ||
+      !event.model ||
+      typeof event.model.model !== 'string' ||
+      typeof event.model.provider !== 'string'
+    ) {
+      console.error('[pi-telemetry] invalid auxiliary observation');
+      return;
+    }
+    const key = `${event.source}:${event.parentToolCallId ?? ''}`;
+    if (observedAuxiliary.size >= 512)
+      observedAuxiliary.delete(observedAuxiliary.values().next().value!);
+    observedAuxiliary.add(key);
+    const previous = auxiliaryTraces.get(event.llmGenerationId);
+    const observationName =
+      previous?.observationName ?? auxiliaryObservationName(event.source, event.observationName);
+    let traceId = previous?.traceId ?? currentTraceId;
+    if (!traceId) traceId = randomUUID().replace(/-/g, '');
+    if (event.status === 'started') {
+      if (auxiliaryTraces.size >= 512) auxiliaryTraces.delete(auxiliaryTraces.keys().next().value!);
+      auxiliaryTraces.set(event.llmGenerationId, { traceId, observationName });
+    } else auxiliaryTraces.delete(event.llmGenerationId);
+    await exporter.publish({
+      id: randomUUID(),
+      ...observationLineage(traceId),
+      llmGenerationId: event.llmGenerationId,
+      source: event.source,
+      status: event.status,
+      model: event.model,
+      createdAt: event.createdAt,
+      ...Object.fromEntries(
+        [
+          'input',
+          'output',
+          'displayInput',
+          'displayOutput',
+          'usage',
+          'completionStartTime',
+          'error',
+          'stopReason',
+          'responseId',
+          'requestedModel',
+          'api',
+          'parentToolCallId',
+          'durationMs',
+        ].flatMap((key) => {
+          const value = (event as unknown as Record<string, unknown>)[key];
+          return value === undefined ? [] : [[key, value]];
+        }),
+      ),
+      ...(event.status === 'failed' && !event.error
+        ? { error: 'Auxiliary model call failed' }
+        : {}),
+      observationName,
+      modelParameters: {
+        ...event.modelParameters,
+        modelAttribution: 'producer',
+        timingAttribution: 'producer',
+      },
+    });
+  }
+
   async function publishAuxiliary(
     source: 'compaction' | 'branch_summary' | 'tool',
     ctx: ExtensionContext,
-    entry: { summary?: string; usage?: unknown; fromHook?: boolean },
+    entry: { summary?: string; usage?: unknown; fromHook?: boolean; error?: string },
     startedAt?: number,
     parentToolCallId?: string,
   ): Promise<void> {
+    if (observedAuxiliary.has(`${source}:${parentToolCallId ?? ''}`)) return;
     const now = Date.now();
     const traceId = currentTraceId ?? randomUUID().replace(/-/g, '');
     const base = {
@@ -756,15 +902,13 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
       ...observationLineage(traceId),
       llmGenerationId: `${source}-${randomUUID()}`,
       source,
-      observationName:
-        source === 'compaction'
-          ? 'Compaction'
-          : source === 'branch_summary'
-            ? 'Branch Summary'
-            : 'Tool LLM Usage',
-      model:
-        source === 'tool' ? { provider: 'unknown', model: 'unknown' } : modelConfigFromCtx(ctx),
-      modelParameters: { modelAttribution: source === 'tool' ? 'unreported' : 'session-config' },
+      observationName: auxiliaryObservationName(source),
+      model: { provider: 'unknown', model: 'unknown' },
+      modelParameters: {
+        modelAttribution: 'unreported',
+        timingAttribution: startedAt === undefined ? 'usage-report' : 'operation',
+        ...(source !== 'tool' ? { sessionModel: modelConfigFromCtx(ctx).model } : {}),
+      },
       ...(parentToolCallId ? { parentToolCallId } : {}),
     };
     await exporter.publish({
@@ -775,7 +919,8 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     await exporter.publish({
       ...base,
       id: randomUUID(),
-      status: 'completed',
+      status: entry.error ? 'failed' : 'completed',
+      ...(entry.error ? { error: entry.error } : {}),
       createdAt: new Date(now).toISOString(),
       ...(capturePayloads && entry.summary !== undefined
         ? { output: entry.summary, displayOutput: { role: 'assistant', content: entry.summary } }
@@ -805,10 +950,23 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
 
   pi.on('session_before_compact', () => {
     if (!enabled) return;
+    observedAuxiliary.delete('compaction:');
     compactionStartedAt = Date.now();
+  });
+  pi.on('session_compact_failed', async (event, ctx) => {
+    if (!enabled) return;
+    const startedAt = compactionStartedAt;
+    compactionStartedAt = undefined;
+    await publishAuxiliary(
+      'compaction',
+      ctx,
+      { error: event.aborted ? 'Compaction cancelled' : event.errorMessage || 'Compaction failed' },
+      startedAt,
+    );
   });
   pi.on('session_before_tree', () => {
     if (!enabled) return;
+    observedAuxiliary.delete('branch_summary:');
     branchSummaryStartedAt = Date.now();
   });
   pi.on('session_tree', async (event, ctx) => {
@@ -854,6 +1012,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
       streamEvents = [];
       streamBytes = 0;
       streamTruncated = false;
+      hasProviderFrames = false;
     }
   }
 
@@ -871,6 +1030,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
       error,
       stopReason,
       modelParameters: requestParameters,
+      ...providerHeaders,
       ...(completionStartTime ? { completionStartTime } : {}),
     });
   }
@@ -884,6 +1044,8 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     lastModelConfig = modelConfigFromCtx(ctx);
     modelPricingKnown = hasModelPricing(ctx);
     requestParameters = modelParameters(event.payload, ctx.thinkingLevel);
+    providerHeaders = pendingRequestHeaders ? { requestHeaders: pendingRequestHeaders } : {};
+    pendingRequestHeaders = undefined;
     if (capturePayloads) systemPrompt = ctx.getSystemPrompt?.() ?? systemPrompt;
     completionStartTime = undefined;
     streamStartedAt = Date.now();
@@ -891,6 +1053,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     streamEvents = [];
     streamBytes = 0;
     streamTruncated = false;
+    hasProviderFrames = false;
 
     const displayInput = capturePayloads
       ? (providerDisplayInput(event.payload) ??
@@ -900,20 +1063,52 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
       id: randomUUID(),
       ...observationLineage(currentTraceId),
       llmGenerationId: `gen-${llmGenerationCounter}`,
+      observationName: `llm-generation [${isSubagent ? 'subagent' : 'main'}] [#${Math.min(llmGenerationCounter, 999_999)}]`,
       source: 'agent',
       status: 'started',
       createdAt: new Date().toISOString(),
       model: lastModelConfig,
       ...(capturePayloads ? { input: event.payload as JsonValue } : {}),
       modelParameters: requestParameters,
+      ...providerHeaders,
       ...(displayInput !== undefined ? { displayInput } : {}),
     });
   });
 
+  pi.on('before_provider_headers', (event) => {
+    if (enabled && capturePayloads && currentTraceId)
+      pendingRequestHeaders = captureProviderHeaders(event.headers);
+  });
+
   pi.on('after_provider_response', async (event) => {
     if (!enabled) return;
+    if (capturePayloads && generationOpen)
+      providerHeaders.responseHeaders = captureProviderHeaders(event.headers);
     if (event.status >= 400) await failOpenGeneration(`HTTP ${event.status}`, 'error');
   });
+
+  pi.on('provider_stream_event', (event) => {
+    if (!enabled || !capturePayloads || !generationOpen || streamTruncated) return;
+    if (!hasProviderFrames) {
+      streamEvents = [];
+      streamBytes = 0;
+      hasProviderFrames = true;
+    }
+    captureFrame(event.data);
+  });
+
+  function captureFrame(frame: unknown): void {
+    if (frame === undefined) return;
+    // Reserve array formatting and a final truncation marker before encoding.
+    const encoded = serializeTelemetryValue(frame, MAX_STREAM_CAPTURE_BYTES - streamBytes - 100);
+    if (encoded !== undefined) {
+      streamEvents.push(JSON.parse(encoded));
+      streamBytes += Buffer.byteLength(encoded) + 1;
+    } else {
+      streamEvents.push({ type: 'truncated', maxBytes: MAX_STREAM_CAPTURE_BYTES });
+      streamTruncated = true;
+    }
+  }
 
   pi.on('message_update', async (event) => {
     if (!enabled) return;
@@ -924,17 +1119,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     }
     if (!capturePayloads || streamTruncated) return;
     const { partial: _partial, message: _message, error: _error, ...frame } = update;
-    const value = toTelemetryValue(frame);
-    if (value === undefined) return;
-    streamStartedAt ??= Date.now();
-    const bytes = Buffer.byteLength(JSON.stringify(value));
-    if (!streamTruncated && streamBytes + bytes <= MAX_STREAM_CAPTURE_BYTES) {
-      streamEvents.push(value);
-      streamBytes += bytes;
-    } else if (!streamTruncated) {
-      streamEvents.push({ type: 'truncated', maxBytes: MAX_STREAM_CAPTURE_BYTES });
-      streamTruncated = true;
-    }
+    if (!hasProviderFrames) captureFrame(frame);
   });
 
   pi.on('message_end', async (event) => {
@@ -962,6 +1147,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
       id: randomUUID(),
       ...observationLineage(currentTraceId),
       llmGenerationId: `gen-${llmGenerationCounter}`,
+      observationName: `llm-generation [${isSubagent ? 'subagent' : 'main'}] [#${Math.min(llmGenerationCounter, 999_999)}]`,
       source: 'agent',
       status: failure.error ? 'failed' : 'completed',
       ...(failure.error ? { error: failure.error } : {}),
@@ -978,6 +1164,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
       },
       requestedModel: lastModelConfig.model,
       modelParameters: requestParameters,
+      ...providerHeaders,
       ...(completionStartTime ? { completionStartTime } : {}),
       ...(typeof msg.api === 'string' ? { api: msg.api } : {}),
       ...(Object.keys(output).length > 0 ? { output } : {}),
@@ -1046,6 +1233,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   });
 
   pi.on('session_shutdown', async () => {
+    for (const unsubscribe of subscriptions.splice(0)) unsubscribe();
     if (pendingFlush) await pendingFlush;
     pendingFlush = undefined;
     await exporter.close?.();

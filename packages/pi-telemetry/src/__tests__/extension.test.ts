@@ -282,6 +282,89 @@ describe('telemetryExtension', () => {
     );
   });
 
+  it.each([
+    true,
+    false,
+  ])('captures bounded redacted headers per request when payloads=%s', async (includePayloads) => {
+    vi.mocked(loadConfigFromFile).mockReturnValue({ includePayloads });
+    telemetryExtension(mockPi as any);
+    await fireEvent('session_start', {});
+    await fireEvent('input', { text: 'headers' });
+    const headers = { Authorization: 'Bearer private', 'x-session-id': 'session-1' };
+    await fireEvent('before_provider_headers', { headers });
+    await fireEvent('before_provider_request', { payload: {} });
+    await fireEvent('after_provider_response', {
+      status: 429,
+      headers: { 'set-cookie': 'private', 'x-request-id': 'request-1' },
+    });
+    const failed = getPublishedEvents().find(
+      (event) => 'status' in event && event.status === 'failed',
+    )!;
+    expect(failed.requestHeaders).toEqual(
+      includePayloads ? { Authorization: '[redacted]', 'x-session-id': 'session-1' } : undefined,
+    );
+    expect(failed.responseHeaders).toEqual(
+      includePayloads ? { 'set-cookie': '[redacted]', 'x-request-id': 'request-1' } : undefined,
+    );
+    expect(headers.Authorization).toBe('Bearer private');
+    await fireEvent('before_provider_request', { payload: {} });
+    await fireEvent('message_end', { message: { role: 'assistant', content: 'done' } });
+    const last = getPublishedEvents().at(-1)!;
+    expect(last.requestHeaders).toBeUndefined();
+    expect(last.responseHeaders).toBeUndefined();
+  });
+
+  it('keeps pending retry headers separate from the generation being superseded', async () => {
+    telemetryExtension(mockPi as any);
+    await fireEvent('session_start', {});
+    await fireEvent('input', { text: 'retry' });
+    await fireEvent('before_provider_headers', { headers: { 'x-request-id': 'first' } });
+    await fireEvent('before_provider_request', { payload: {} });
+    await fireEvent('before_provider_headers', { headers: { 'x-request-id': 'retry' } });
+    await fireEvent('before_provider_request', { payload: {} });
+    await fireEvent('message_end', { message: { role: 'assistant', content: 'done' } });
+    const terminal = getPublishedEvents().filter(
+      (event) => 'status' in event && ['completed', 'failed'].includes(event.status),
+    );
+    expect(terminal.map((event) => event.requestHeaders?.['x-request-id'])).toEqual([
+      'first',
+      'retry',
+    ]);
+  });
+
+  it.each([
+    'bytes',
+    'nodes',
+    'depth',
+  ])('bounds raw provider-frame traversal by %s', async (limit) => {
+    telemetryExtension(mockPi as any);
+    await fireEvent('session_start', {});
+    await fireEvent('input', { text: 'bounded stream' });
+    await fireEvent('before_provider_request', { payload: {} });
+    const readLate = vi.fn(() => 'late');
+    const frame: Record<string, unknown> = {};
+    if (limit === 'bytes') frame.payload = 'x'.repeat(1_000_001);
+    if (limit === 'nodes')
+      frame.payload = Array.from({ length: 20_000 }, () => ({ text: 'entry' }));
+    if (limit === 'depth') {
+      let nested: Record<string, unknown> = frame;
+      for (let index = 0; index < 1000; index++) {
+        const child = {};
+        nested.child = child;
+        nested = child;
+      }
+    }
+    Object.defineProperty(frame, 'late', { enumerable: true, get: readLate });
+    await fireEvent('provider_stream_event', { data: frame });
+    await fireEvent('provider_stream_event', { data: frame });
+    await fireEvent('message_end', { message: { role: 'assistant', content: 'done' } });
+    expect(readLate).not.toHaveBeenCalled();
+    const stream = getPublishedEvents().find((event) => 'streamEvents' in event)!;
+    expect('streamEvents' in stream && stream.streamEvents).toEqual([
+      { type: 'truncated', maxBytes: 1_000_000 },
+    ]);
+  });
+
   it('measures first content latency rather than the stream start and records actual model attribution', async () => {
     vi.useFakeTimers();
     try {
@@ -328,6 +411,140 @@ describe('telemetryExtension', () => {
     }
   });
 
+  it('captures raw provider frames once and gives generations stable ordinals', async () => {
+    telemetryExtension(mockPi as any);
+    await fireEvent('session_start', {});
+    await fireEvent('input', { text: 'hello' });
+    await fireEvent('turn_start', { timestamp: Date.now() });
+    await fireEvent('before_provider_request', { payload: { messages: [] } });
+    await fireEvent('provider_stream_event', {
+      data: { choices: [{ delta: { content: 'hello' } }] },
+    });
+    await fireEvent('message_update', {
+      message: { role: 'assistant', content: [{ type: 'text', text: 'hello' }] },
+      assistantMessageEvent: { type: 'text_delta', delta: 'hello' },
+    });
+    await fireEvent('message_end', { message: { role: 'assistant', content: [] } });
+    const events = getPublishedEvents();
+    expect(events.find((e) => 'streamEvents' in e)).toMatchObject({
+      streamEvents: [{ choices: [{ delta: { content: 'hello' } }] }],
+    });
+    expect(
+      events.find((e) => 'status' in e && e.status === 'started' && 'llmGenerationId' in e),
+    ).toMatchObject({ observationName: 'llm-generation [main] [#1]' });
+  });
+
+  it('uses a request context once and exposes launch context without changing tool arguments', async () => {
+    const listeners = new Map<string, (data: unknown) => unknown>();
+    const exporter = {
+      publish: vi.fn(async () => {}),
+      setContext: vi.fn(),
+      getToolContext: vi.fn(() => ({ PI_TELEMETRY_TRACEPARENT: 'parent' })),
+    };
+    vi.mocked(createTelemetryExporter).mockReturnValueOnce(exporter);
+    telemetryExtension({
+      ...mockPi,
+      events: {
+        on: (name: string, handler: (data: unknown) => unknown) => {
+          listeners.set(name, handler);
+          return () => listeners.delete(name);
+        },
+      },
+    } as any);
+    await fireEvent('session_start', {}, { sessionManager: { getSessionId: () => 's' } });
+    listeners.get('pi-telemetry:request-context')?.({ userId: 'tenant-user' });
+    await fireEvent('input', { text: 'first' });
+    expect(exporter.setContext).toHaveBeenLastCalledWith({ userId: 'tenant-user' });
+    await fireEvent('input', { text: 'next' });
+    expect(exporter.setContext).toHaveBeenLastCalledWith({});
+    const respond = vi.fn();
+    listeners.get('pi-telemetry:tool-context')?.({ toolCallId: 'launch', respond });
+    expect(exporter.getToolContext).toHaveBeenCalledWith('s', 'launch');
+    expect(respond).toHaveBeenCalledWith({ PI_TELEMETRY_TRACEPARENT: 'parent' });
+  });
+
+  it('accepts exact auxiliary observations without also reconstructing summary usage', async () => {
+    const listeners = new Map<string, (data: unknown) => unknown>();
+    telemetryExtension({
+      ...mockPi,
+      events: {
+        on: (name: string, handler: (data: unknown) => unknown) => {
+          listeners.set(name, handler);
+          return () => listeners.delete(name);
+        },
+      },
+    } as any);
+    await fireEvent('session_start', {}, { sessionManager: { getSessionId: () => 's' } });
+    await fireEvent('session_before_compact', {});
+    const actual = {
+      llmGenerationId: 'actual-compact',
+      source: 'compaction',
+      model: { provider: 'openai', model: 'actual-summary' },
+    };
+    await listeners.get('pi-telemetry:llm')?.({
+      ...actual,
+      status: 'started',
+      createdAt: '2026-05-02T00:00:00Z',
+      input: 'summary input',
+    });
+    await listeners.get('pi-telemetry:llm')?.({
+      ...actual,
+      status: 'completed',
+      createdAt: '2026-05-02T00:00:01Z',
+      usage: { input: 1, output: 2 },
+    });
+    await fireEvent(
+      'session_compact',
+      { compactionEntry: { summary: 'done', usage: { input: 1, output: 2 } } },
+      {},
+    );
+    const generations = getPublishedEvents().filter((e) => 'llmGenerationId' in e && 'status' in e);
+    expect(generations).toHaveLength(2);
+    expect(generations[0]).toMatchObject({ model: actual.model, input: 'summary input' });
+    expect(generations[0]!.traceId).toBe(generations[1]!.traceId);
+    expect(generations[0]).toMatchObject({ observationName: 'Compaction [#1]' });
+    expect(generations[1]).toMatchObject({ observationName: 'Compaction [#1]' });
+    await listeners.get('pi-telemetry:llm')?.({
+      ...actual,
+      llmGenerationId: 'failed-compact',
+      status: 'failed',
+      createdAt: '2026-05-02T00:00:02Z',
+      observationName: 'custom'.repeat(100),
+    });
+    expect(getPublishedEvents().at(-1)).toMatchObject({
+      status: 'failed',
+      error: 'Auxiliary model call failed',
+    });
+    const last = getPublishedEvents().at(-1)!;
+    expect('observationName' in last && last.observationName?.length).toBeLessThan(90);
+  });
+
+  it('records failed compaction with honest model and timing attribution', async () => {
+    telemetryExtension(mockPi as any);
+    await fireEvent('session_start', {}, { sessionManager: { getSessionId: () => 's' } });
+    await fireEvent('session_before_compact', {});
+    await fireEvent(
+      'session_compact_failed',
+      { aborted: true, reason: 'manual' },
+      { model: { provider: 'openai', id: 'session-model' } },
+    );
+    const events = getPublishedEvents().filter((e) => 'llmGenerationId' in e && 'status' in e);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: 'failed',
+          source: 'compaction',
+          error: 'Compaction cancelled',
+          model: { provider: 'unknown', model: 'unknown' },
+          modelParameters: expect.objectContaining({
+            modelAttribution: 'unreported',
+            timingAttribution: 'operation',
+          }),
+        }),
+      ]),
+    );
+  });
+
   it('records compaction and branch summary usage even outside an active prompt', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', {}, { sessionManager: { getSessionId: () => 's' } });
@@ -354,6 +571,9 @@ describe('telemetryExtension', () => {
     );
     expect(generations[0]!.traceId).toBe(generations[1]!.traceId);
     expect(generations[2]!.traceId).not.toBe(generations[0]!.traceId);
+    expect(generations.map((event) => 'observationName' in event && event.observationName)).toEqual(
+      ['Compaction [#1]', 'Compaction [#1]', 'Branch Summary [#2]', 'Branch Summary [#2]'],
+    );
   });
 
   it.each([

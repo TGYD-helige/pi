@@ -70,7 +70,7 @@ export interface HarnessConfig {
   modelsPath?: string;
   /** Provider baseUrl (OpenAI-compatible endpoint). Used only when modelsPath is unset. */
   baseUrl: string;
-  /** pi provider `api` shape (default 'openai-completions'). */
+  /** pi provider `api` shape (default 'openai-responses'). */
   api: string;
   /**
    * Name of the env var that holds the API key. Written verbatim into models.json
@@ -408,7 +408,7 @@ export function parseCommonArgs(defaults: { model: string; timeoutMs: number }):
     useDefaultPi: argv.includes('--use-default-pi'),
     modelsPath: get('--models', process.env.PI_MODELS_PATH || ''),
     baseUrl: get('--base-url', process.env.PI_INTEGRATION_BASE_URL || ''),
-    api: get('--api', process.env.PI_EVAL_API || 'openai-completions'),
+    api: get('--api', process.env.PI_EVAL_API || 'openai-responses'),
     apiKeyEnv: get('--api-key-env', process.env.PI_EVAL_API_KEY_ENV || 'PI_INTEGRATION_API_KEY'),
     thinking: get('--thinking', 'high'),
     timeoutMs: Number(get('--timeout', String(defaults.timeoutMs))),

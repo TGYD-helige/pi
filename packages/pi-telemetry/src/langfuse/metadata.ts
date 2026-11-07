@@ -78,7 +78,7 @@ export function llmGenerationMetadata(event: RuntimeLlmGenerationEvent): JsonObj
     ...(event.source ? { source: event.source } : {}),
     ...(event.usage?.cacheWrite1h !== undefined ? { cacheWrite1h: event.usage.cacheWrite1h } : {}),
     ...(event.usage?.reasoning !== undefined ? { reasoning: event.usage.reasoning } : {}),
-    ...(event.usage?.costSource ? { costSource: event.usage.costSource } : {}),
+    costSource: event.usage?.costSource ?? (event.usage?.cost ? 'provided' : 'unknown'),
     ...(event.usage ? { usage: event.usage } : {}),
     ...(event.error ? { error: event.error } : {}),
   };

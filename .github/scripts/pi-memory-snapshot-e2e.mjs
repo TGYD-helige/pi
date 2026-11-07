@@ -18,17 +18,18 @@ const requests = [];
 const server = createServer(async (request, response) => {
   const chunks = [];
   for await (const chunk of request) chunks.push(chunk);
+  assert.equal(request.url, '/v1/responses');
   requests.push(JSON.parse(Buffer.concat(chunks).toString('utf8')));
   response.writeHead(200, { 'content-type': 'text/event-stream' });
-  response.write(`data: ${JSON.stringify({
-    id: 'chatcmpl-memory-test',
-    object: 'chat.completion.chunk',
-    created: 0,
-    model: 'memory-test',
-    choices: [{ index: 0, delta: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
-    usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 },
+  response.end(`event: response.completed
+data: ${JSON.stringify({
+    type: 'response.completed',
+    response: {
+      id: 'resp-memory-test', object: 'response', created_at: 0, status: 'completed', model: 'memory-test',
+      output: [{ id: 'msg-memory-test', type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: 'ok', annotations: [] }] }],
+      usage: { input_tokens: 10, output_tokens: 1, total_tokens: 11 },
+    },
   })}\n\n`);
-  response.end('data: [DONE]\n\n');
 });
 
 try {
@@ -40,7 +41,7 @@ try {
     providers: {
       'memory-test': {
         baseUrl: `http://127.0.0.1:${address.port}/v1`,
-        api: 'openai-completions',
+        api: 'openai-responses',
         apiKey: 'test-key',
         models: [{ id: 'memory-test', name: 'Memory test', contextWindow: 8192, maxTokens: 1024 }],
       },
@@ -69,7 +70,7 @@ try {
   await runPi(['--fork', path.join(sessionDir, sessionFile), ...baseArgs]);
 
   assert.equal(requests.length, 3);
-  const systems = requests.map(({ messages }) => JSON.stringify(messages.filter(({ role }) => role === 'system')));
+  const systems = requests.map(({ input, instructions }) => JSON.stringify({ instructions, input: input.filter(({ role }) => role === 'system' || role === 'developer') }));
   assert.match(systems[0], /cobalt memory/);
   assert.equal(systems[1], systems[0], 'resumed system prompt changed before compaction');
   assert.match(systems[2], /amber memory/, 'fork did not load current memory');

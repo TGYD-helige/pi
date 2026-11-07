@@ -24,7 +24,7 @@ The extension hooks into the following Pi lifecycle events:
 | `turn_start` | Begin the root or subagent span on the first turn |
 | `before_provider_request` | Begin an LLM generation span and record model input |
 | `after_provider_response` | Mark failed provider responses |
-| `message_update` | Record provider stream events beneath the active LLM generation |
+| `provider_stream_event` / `message_update` | Record raw provider frames when supported, falling back to normalized stream events beneath the active LLM generation |
 | `agent_end` | Store the latest result; complete immediately on legacy Pi |
 | `agent_before_settle` | Record the final run outcome when available |
 | `agent_settled` | Complete the root or subagent span and schedule one background flush after retries and queued continuations finish; record cancellation from `aborted` when available |
@@ -33,7 +33,7 @@ The extension hooks into the following Pi lifecycle events:
 | `message_end` | Complete an LLM generation span with output and usage |
 | `model_select` | Record model switch events |
 | `tool_result` | Record reported tool-internal LLM usage under its tool span |
-| `session_before_compact` / `session_compact` | Record compaction duration, summary and reported token/cost usage |
+| `session_before_compact` / `session_compact` / `session_compact_failed` | Record compaction duration, summary, failure/cancellation and reported token/cost usage |
 | `session_before_tree` / `session_tree` | Record branch-summary duration and reported usage |
 | `session_shutdown` | End any spans still open (marked `terminatedBy: session_shutdown`), then flush and shutdown exporters |
 
@@ -98,7 +98,10 @@ Configuration is read from the `"pi-telemetry"` section of, in increasing priori
 | `mediaUploadEnabled` | `boolean` | `false` | Upload prompt/tool images to Langfuse; also requires `includePayloads: true` |
 | `userId` | `string` | — | Standard trace user identifier |
 | `environment` | `string` | — | Langfuse environment label, e.g. `development` or `production` |
-| `release` | `string` | — | Langfuse release label; independent of OTEL serviceVersion |
+| `release` | `string` | — | Release label; independent of OTEL serviceVersion |
+| `tags` | `string[]` | `[]` | Additional trace tags in Langfuse and Phoenix; up to 32 unique trimmed entries of 128 characters, examining the first 256 candidates (strings over 4096 characters are ignored) |
+| `traceName` | `string` | `"chat-turn"` | Langfuse trace and Phoenix root display name, bounded to 90 characters |
+| `redactFields` | `string[]` | `[]` | Case-insensitive field names to mask in captured payloads, JSON-encoded payloads and custom metadata; same list limits as tags |
 
 ### Langfuse Config
 
@@ -140,9 +143,11 @@ When the endpoint does not end with `/v1/traces`, the exporter appends `/v1/trac
 
 For unauthenticated self-hosted Phoenix, use `endpoint: "http://localhost:6006"` and omit `apiKey`. For Phoenix Cloud or an authenticated server, set `apiKey` in user or agent-directory settings with `"${PHOENIX_API_KEY}"` interpolation and use the supplied space URL, for example `https://app.phoenix.arize.com/s/<space>`. A base URL or a full `/v1/traces` URL is accepted; trailing slashes are normalized and path prefixes are preserved without appending the suffix twice. Do not put API keys in trusted project settings: project settings do not expand environment variables.
 
+Phoenix generations expose structured messages, thinking, tool calls and results, tool definitions, invocation parameters, and opted-in image URLs alongside Raw I/O. Environment, release, correlation and cost provenance appear in Metadata; trace tags use OpenInference tags. Additional message/tool attributes are capped at 512 attributes and 250 KB per span. At most 100 messages, parts or tool definitions are projected, favoring output and newest input; `pi.telemetry.projection.truncated` indicates a projection limit. Raw I/O retains its own limits.
+
 The Phoenix adapter projects the same finished spans to OpenInference `AGENT`, `CHAIN`, `LLM`, and `TOOL` kinds. It preserves trace/span IDs and timing, maps the root session to `session.id`, bare model identity and provider, tool name/call ID, and reported token details. Prompt tokens include reported cache read/write tokens; reasoning remains a completion detail rather than being counted twice. Payloads and their MIME types appear only with `includePayloads: true`. Phoenix-specific resource and span attributes are cloned before export, so simultaneous Langfuse and generic OTLP projections remain unchanged and retain matching IDs.
 
-Known Pi cost components are exported as OpenInference cost attributes without inventing a reasoning-cost split. Phoenix normally calculates displayed cost during ingestion from its own model/provider price table, so unknown models require Phoenix custom pricing and displayed cost can differ from the reported amount. A displayed `$0` with `costSource: "unknown"` does not establish that the request was free. A reported first-content timestamp is preserved as a `first_token` span event; Phoenix has no standard OpenInference TTFT attribute or dedicated TTFT display, although normal span latency remains available.
+Known Pi cost components are exported as OpenInference cost attributes without inventing a reasoning-cost split. Phoenix normally calculates displayed cost during ingestion from its own model/provider price table, so unknown models require Phoenix custom pricing and displayed cost can differ from the reported amount. Metadata preserves `reportedCost` separately from Phoenix-calculated prices, alongside `costSource`; inspect it when Phoenix displays a different amount. A displayed `$0` with `costSource: "unknown"` does not establish that the request was free. A reported first-content timestamp is preserved as a `first_token` span event and numeric `llm.time_to_first_token_ms` / `llm.time_to_first_token_seconds` diagnostics. These numeric attributes do not promise a dedicated Phoenix TTFT chart.
 
 Use `phoenix`, not `otel`, for a direct Phoenix endpoint: Phoenix receives gzip-compressed protobuf batches, while generic OTLP intentionally retains its existing JSON wire format. An external collector that translates OTLP/JSON can still receive generic OTLP and forward it to Phoenix.
 
@@ -182,7 +187,9 @@ Runtime events omit user prompts, assistant responses, tool arguments, tool outp
 
 ## Observation details
 
-Generation input/output use readable conversation roles, structured thinking blocks and tool calls when available. Generation input is derived from the provider request captured at `before_provider_request`, preserving system/developer roles, message ordering and tool declarations for Chat Completions, Anthropic, Responses and Gemini payloads. Unrecognized payload formats fall back to the captured `context_with_system` transcript, or the system prompt getter and active tool registry on older runtimes. Each child `llm-stream` pairs the original provider request in its Input with captured streaming events in its Output, including empty streams for attempts that fail before any frames arrive. The original request also remains in generation metadata as `rawInput` for compatibility and convenient inspection alongside the readable input; this intentionally duplicates the request when payload export is enabled. The original assembled output remains in `rawOutput`. Payload suppression, credential masking and application redaction apply to both observations. Later extensions can still alter a request after the telemetry hook. Response model, requested model, API, response ID and stop reason are recorded separately. Tool executions use Langfuse's `TOOL` observation type. The instrumentation scope records the installed package version.
+Generation input/output use readable conversation roles, structured thinking blocks and tool calls when available. Display tool definitions are flattened to Langfuse ChatML `name`/`parameters` form across Chat Completions, Responses, Anthropic and Gemini; original provider schemas remain in raw request inspection. Generation input is derived from the provider request captured at `before_provider_request`, preserving system/developer roles, message ordering and tool declarations for Chat Completions, Anthropic, Responses and Gemini payloads. Unrecognized payload formats fall back to the captured `context_with_system` transcript, or the system prompt getter and active tool registry on older runtimes. Each child `llm-stream` pairs the original provider request in its Input with captured streaming events in its Output, including empty streams for attempts that fail before any frames arrive. The original request also remains in generation metadata as `rawInput` for compatibility and convenient inspection alongside the readable input; this intentionally duplicates the request when payload export is enabled. The original assembled output remains in `rawOutput`. Payload suppression, credential masking and application redaction apply to both observations. Later extensions can still alter a request after the telemetry hook. Response model, requested model, API, response ID and stop reason are recorded separately. Tool executions use Langfuse's `TOOL` observation type. The instrumentation scope records the installed package version.
+
+With `includePayloads: true`, each generation's Metadata contains `requestHeaders` and `responseHeaders` from Pi's `before_provider_headers` and `after_provider_response` events, including HTTP failure responses. Header names containing auth, cookie, key, token, secret, password, credential or signature are masked; configured credential masking, field redaction and `redactEvent` also apply. Capture retains at most 64 headers and 16 KB per direction, with values limited to 2048 characters and explicit omission/truncation markers. These are snapshots of the runtime-provided headers: later extensions or the HTTP SDK may add or change headers after the hook. Older runtimes without these events omit these fields. No request headers are modified.
 
 TTFT starts at `before_provider_request` and ends at the first nonempty text, thinking or tool-call content, rather than the initial stream-start event. Generations carry Langfuse's standard completion-start timestamp even when payload export is disabled.
 
@@ -190,7 +197,7 @@ Cache read/write usage and costs use Langfuse's standard input buckets. Reported
 
 All-zero SDK costs from a model without positive pricing are marked `costSource: "unknown"` and omitted from Langfuse cost details, allowing backend model-price inference. A matching Langfuse model definition is still required for inference. Explicit event or hook costs, including zero, are preserved; producers can set `usage.costSource: "provided"` for a known free request. Costs calculated using configured positive model rates are marked `model-pricing`.
 
-Compaction and branch summaries are generations in the active trace or standalone traces grouped by session when idle. Their model attribution is explicitly `session-config`, since summary entries do not report the served model. Tool-internal usage is nested beneath its tool; its model is `unknown` because a tool need not use the session model. Plain branch navigation without a summary does not create a generation.
+Auxiliary generation names keep their purpose and a session ordinal capped at 999999; producer labels are bounded to 40 characters and preserved across start/end events. Compaction and branch summaries are generations in the active trace or standalone traces grouped by session when idle. Their served model is explicitly `unknown`, since summary entries do not report it; `modelAttribution: unreported` and optional `sessionModel` identify this limit. Tool-internal usage is nested beneath its tool, also with an unknown model. `timingAttribution: operation` means the span covers an enclosing operation, while `usage-report` means only the report time was observed. Plain branch navigation without a summary does not create a generation.
 
 ## Commands and status
 
@@ -205,4 +212,33 @@ Images require both payload and media switches. Prompt and tool images use valid
 
 All configured Langfuse credentials, Phoenix API keys, and sensitive OTLP header values, including those for disabled destinations, and Langfuse key patterns are masked before every destination, including error messages and raw stream inputs. This is credential masking, not general PII removal. The default remains no conversation/tool payload export, and `redactEvent` remains available for application-specific policies.
 
-When export is disabled, event handlers skip telemetry processing. Disabled startup also skips runtime loading and history scans. With `includePayloads: false`, each generation retains an empty `llm-stream` child for timing and hierarchy, while the extension skips context projection and model/tool payload capture while preserving usage, errors, model attribution, and first-token timing. Stream capture stops converting subsequent frames after the existing 1 MB capture ceiling is reached.
+When export is disabled, event handlers skip telemetry processing. Disabled startup also skips runtime loading and history scans. With `includePayloads: false`, each generation retains an empty `llm-stream` child for timing and hierarchy, while the extension skips context projection and model/tool payload capture while preserving usage, errors, model attribution, and first-token timing. Stream capture bounds each frame during traversal by the remaining 1 MB budget, 10,000 values and 32 nesting levels, then stops converting subsequent frames once truncated. Markers and array formatting count toward the capture budget.
+
+## Context and auxiliary calls for extension authors
+
+Emit `pi-telemetry:request-context` on `pi.events` before the next prompt to supply a `TelemetryRequestContext`: optional `userId`, `traceName`, `tags`, `metadata`, and a W3C `traceparent`. Context is consumed once at a new prompt boundary; steering and follow-ups keep the active context. Programmatic exporters expose `setContext(context)` for the same values. Metadata should contain explicit correlation facts rather than conversation content. Custom metadata requires `includePayloads: true` and passes through `redactEvent` as `event.contextMetadata` before export; `userId`, `tags` and `traceName` remain available without payload capture. Custom metadata retains at most 31 entries plus an omission marker within a 60 KB value budget; oversized values are explicitly omitted. Invalid traceparents fall back to a local root. Payload opt-in and credential masking remain in force.
+
+```ts
+pi.events.emit('pi-telemetry:request-context', {
+  userId: 'operator-1',
+  tags: ['batch'],
+  metadata: { jobId: 'job-42' },
+});
+```
+
+A child Pi process automatically inherits the unique active tool as its parent. When multiple tools are active, it falls back to the agent parent rather than guessing. For exact concurrent attribution, ask for the executing tool's context and merge the returned telemetry-only environment overrides into that specific child launch:
+
+```ts
+let telemetryEnv: Record<string, string> = {};
+pi.events.emit('pi-telemetry:tool-context', {
+  toolCallId,
+  respond: (env: Record<string, string> | undefined) => { telemetryEnv = env ?? {}; },
+});
+// Pass { ...process.env, ...telemetryEnv } as the child process environment.
+```
+
+Programmatic exporters expose `getToolContext(sessionId, toolCallId)` for the same purpose. Completed or unknown tools return `undefined`. Existing launcher correlation variables are retained; do not share one launch's overrides with another concurrent launch. Nested runtime tools also preserve a reported `parentToolCallId`.
+
+Extensions that perform their own model calls can emit `pi-telemetry:llm` using the exported `TelemetryAuxiliaryEvent` type. Emit `started`, then `completed` or `failed` with the same `llmGenerationId`, actual `model`, timestamps, `source` (`compaction`, `branch_summary`, or `tool`) and any reported request/response, usage, first-content timestamp and error. For tool calls, include `parentToolCallId`. Source attribution is marked `producer`; events are linked to the active trace or a shared standalone trace for that generation. Keep IDs unique per call. The event belongs inside the corresponding compaction, branch-summary or tool lifecycle; observed calls suppress that operation's reconstructed usage generation, so emit all calls rather than just a subset. The bridge does not intercept uninstrumented third-party model clients.
+
+Field redaction applies to captured payload fields and explicitly supplied custom metadata, not runtime routing IDs. It also masks valid JSON embedded in strings. Invalid JSON and ordinary prose receive credential masking only; field-name redaction is not general PII detection. Oversized JSON requiring field redaction is replaced with an omission marker. Conversation display retains the newest messages within 500 KB / 100 messages before generic attribute truncation; omitted history is explicitly marked. Complete protocol input may itself be truncated at the existing attribute limit.

@@ -5,11 +5,11 @@ import type {
   RuntimeTelemetryEvent,
   RuntimeTelemetryOptions,
 } from '../index.js';
-import { isInlineImage } from '../observations.js';
+import { captureProviderHeaders, isInlineImage } from '../observations.js';
 import { MAX_ATTRIBUTE_VALUE_BYTES } from './types.js';
 
 export function utf8Prefix(value: string, maxBytes: number): string {
-  const bytes = Buffer.from(value, 'utf8');
+  const bytes = Buffer.from(value.slice(0, maxBytes + 1), 'utf8');
   let end = Math.min(maxBytes, bytes.length);
   while (end > 0 && end < bytes.length && (bytes[end]! & 0xc0) === 0x80) {
     end -= 1;
@@ -114,7 +114,7 @@ export function isLlmStreamEvent(event: RuntimeTelemetryEvent): event is Runtime
 export function applyTelemetryRedaction(
   config: Pick<
     RuntimeTelemetryOptions,
-    'includePayloads' | 'redactEvent' | 'mediaUploadEnabled' | 'maskingSecrets'
+    'includePayloads' | 'redactEvent' | 'mediaUploadEnabled' | 'maskingSecrets' | 'redactFields'
   > & {
     langfuse?: { publicKey: string; secretKey: string };
     phoenix?: { apiKey?: string };
@@ -126,11 +126,71 @@ export function applyTelemetryRedaction(
   if (!redacted) {
     return undefined;
   }
-  const stripped = config.includePayloads === false ? stripTelemetryPayloads(redacted) : redacted;
+  const stripped =
+    config.includePayloads === false
+      ? stripTelemetryPayloads(redacted)
+      : {
+          ...redacted,
+          ...(redacted.requestHeaders
+            ? { requestHeaders: captureProviderHeaders(redacted.requestHeaders) }
+            : {}),
+          ...(redacted.responseHeaders
+            ? { responseHeaders: captureProviderHeaders(redacted.responseHeaders) }
+            : {}),
+        };
+  const payloadKeys = [
+    'input',
+    'output',
+    'displayInput',
+    'displayOutput',
+    'args',
+    'details',
+    'streamEvents',
+    'error',
+    'contextMetadata',
+    'requestHeaders',
+    'responseHeaders',
+    'modelParameters',
+  ];
+  const fieldsRedacted = config.redactFields?.length
+    ? Object.fromEntries(
+        Object.entries(stripped).map(([key, value]) => [
+          key,
+          payloadKeys.includes(key) ? redactTelemetryValue(config, value) : value,
+        ]),
+      )
+    : stripped;
+  return redactTelemetryValue(
+    { ...config, redactFields: [] },
+    fieldsRedacted,
+  ) as RuntimeTelemetryEvent;
+}
+
+export function redactTelemetryValue(
+  config: RuntimeTelemetryOptions & {
+    langfuse?: { publicKey: string; secretKey: string };
+    phoenix?: { apiKey?: string };
+    headers?: Record<string, string>;
+  },
+  value: unknown,
+): unknown {
   const secrets = credentialMaskValues(config);
+  const fields = new Set((config.redactFields ?? []).map((field) => field.toLowerCase()));
   let mediaBytes = 0;
-  function clean(value: unknown, ancestors = new Set<object>()): unknown {
+  function clean(value: unknown, ancestors = new Set<object>(), depth = 0): unknown {
+    if (depth > 64) return '[nested value omitted]';
     if (typeof value === 'string') {
+      if (fields.size && /^[\s]*[[{]/.test(value)) {
+        if (Buffer.byteLength(value) > MAX_ATTRIBUTE_VALUE_BYTES)
+          return '[oversized JSON omitted for field redaction]';
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(value);
+        } catch {
+          /* Plain text still receives credential masking. */
+        }
+        if (parsed !== undefined) return JSON.stringify(clean(parsed, ancestors, depth + 1));
+      }
       let text = value;
       for (const secret of secrets) text = text.split(secret).join('[redacted]');
       text = text.replace(/\b[sp]k-lf-[\w-]+\b/g, '[redacted]');
@@ -155,26 +215,35 @@ export function applyTelemetryRedaction(
     if (ancestors.has(value)) return '[circular]';
     ancestors.add(value);
     const result = Array.isArray(value)
-      ? value.map((item) => clean(item, ancestors))
+      ? value.map((item) => clean(item, ancestors, depth + 1))
       : Object.fromEntries(
           Object.entries(value).map(([key, item]) => [
             clean(key, ancestors),
-            key === 'data' &&
-            typeof item === 'string' &&
-            ('mimeType' in value ||
-              'media_type' in value ||
-              (value as { type?: string }).type === 'base64')
-              ? '[image binary omitted]'
-              : clean(item, ancestors),
+            fields.has(key.toLowerCase())
+              ? '[redacted]'
+              : key === 'data' &&
+                  typeof item === 'string' &&
+                  ('mimeType' in value ||
+                    'media_type' in value ||
+                    (value as { type?: string }).type === 'base64')
+                ? '[image binary omitted]'
+                : clean(item, ancestors, depth + 1),
           ]),
         );
     ancestors.delete(value);
     return result;
   }
-  return clean(stripped) as RuntimeTelemetryEvent;
+  return clean(value);
 }
 
 export function stripTelemetryPayloads(event: RuntimeTelemetryEvent): RuntimeTelemetryEvent {
+  const {
+    contextMetadata: _contextMetadata,
+    requestHeaders: _requestHeaders,
+    responseHeaders: _responseHeaders,
+    ...withoutContext
+  } = event;
+  event = withoutContext;
   if (isLlmStreamEvent(event)) {
     const {
       input: _input,

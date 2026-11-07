@@ -8,6 +8,40 @@ import { resolveOtelExporterConfig, resolvePhoenixExporterConfig } from '../otel
 import { parseBoolean } from '../parse.js';
 
 describe('config', () => {
+  it('bounds examined tag candidates and stops after retaining the supported tags', () => {
+    const readLate = vi.fn(() => 'late');
+    const tags = Array.from({ length: 10_000 }, (_, index) => `tag-${index}`);
+    Object.defineProperty(tags, 9999, { get: readLate });
+    expect(resolveOtelExporterConfig({ tags }).tags).toHaveLength(32);
+    const duplicates = Array.from({ length: 10_000 }, () => 'tag');
+    Object.defineProperty(duplicates, 9999, { get: readLate });
+    expect(resolveOtelExporterConfig({ tags: duplicates }).tags).toEqual(['tag']);
+    expect(readLate).not.toHaveBeenCalled();
+  });
+
+  it('validates and forwards optional tags, trace name and field redaction to every backend', () => {
+    const config = {
+      tags: [' batch ', 'batch', '', 1] as any,
+      traceName: ' task ',
+      redactFields: [' password ', 'password'],
+    };
+    for (const resolve of [
+      resolveLangfuseExporterConfig,
+      resolveOtelExporterConfig,
+      resolvePhoenixExporterConfig,
+    ]) {
+      expect(resolve(config)).toMatchObject({
+        tags: ['batch'],
+        traceName: 'task',
+        redactFields: ['password'],
+      });
+      expect(resolve({ tags: 'bad' as any, redactFields: null as any })).toMatchObject({
+        tags: [],
+        redactFields: [],
+      });
+    }
+  });
+
   it('only enables media when content export is explicitly enabled', () => {
     expect(resolveConfig({ mediaUploadEnabled: true })).toMatchObject({
       includePayloads: false,
