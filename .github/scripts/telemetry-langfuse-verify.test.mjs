@@ -17,7 +17,7 @@ function fullTrace() {
     { id: 'b2', traceId: 't1', type: 'TOOL', name: 'bash [bash .github/scripts/telemetry-subagent.sh]', parentObservationId: 'root', startTime: 'a', endTime: 'b' },
     { id: 'g1', traceId: 't1', type: 'GENERATION', name: 'llm-generation [main] [request]', parentObservationId: 'root', startTime: 'a', endTime: 'b' },
     { id: 's1', traceId: 't1', type: 'SPAN', name: 'llm-stream', parentObservationId: 'g1', startTime: 'a', endTime: 'b' },
-    { id: 'sub', traceId: 't1', type: 'SPAN', name: 'subagent [ci-probe]', parentObservationId: 'root', startTime: 'a', endTime: 'b' },
+    { id: 'sub', traceId: 't1', type: 'SPAN', name: 'subagent [ci-probe]', parentObservationId: 'b2', startTime: 'a', endTime: 'b' },
     { id: 'b3', traceId: 't1', type: 'TOOL', name: `bash [echo ${CODEWORD} child]`, parentObservationId: 'sub', startTime: 'a', endTime: 'b' },
     { id: 'g2', traceId: 't1', type: 'GENERATION', name: 'llm-generation [subagent] [request]', parentObservationId: 'sub', startTime: 'a', endTime: 'b' },
     { id: 's2', traceId: 't1', type: 'SPAN', name: 'llm-stream', parentObservationId: 'g2', startTime: 'a', endTime: 'b' },
@@ -30,11 +30,11 @@ function hierarchyTrace() {
     { id: 'launch', traceId: 't2', type: 'TOOL', name: 'bash [bash .github/scripts/telemetry-subagent.sh hierarchy]', parentObservationId: 'root', startTime: 'a', endTime: 'b' },
     { id: 'main-gen', traceId: 't2', type: 'GENERATION', name: 'llm-generation [main] [request]', parentObservationId: 'root', startTime: 'a', endTime: 'b' },
     { id: 'main-stream', traceId: 't2', type: 'SPAN', name: 'llm-stream', parentObservationId: 'main-gen', startTime: 'a', endTime: 'b' },
-    { id: 'outer', traceId: 't2', type: 'SPAN', name: 'subagent [ci-hierarchy]', parentObservationId: 'root', startTime: 'a', endTime: 'b' },
+    { id: 'outer', traceId: 't2', type: 'SPAN', name: 'subagent [ci-hierarchy]', parentObservationId: 'launch', startTime: 'a', endTime: 'b' },
     { id: 'nested-launch', traceId: 't2', type: 'TOOL', name: 'bash [bash .github/scripts/telemetry-subagent.sh]', parentObservationId: 'outer', startTime: 'a', endTime: 'b' },
     { id: 'outer-gen', traceId: 't2', type: 'GENERATION', name: 'llm-generation [subagent] [request]', parentObservationId: 'outer', startTime: 'a', endTime: 'b' },
     { id: 'outer-stream', traceId: 't2', type: 'SPAN', name: 'llm-stream', parentObservationId: 'outer-gen', startTime: 'a', endTime: 'b' },
-    { id: 'inner', traceId: 't2', type: 'SPAN', name: 'subagent [ci-probe]', parentObservationId: 'outer', startTime: 'a', endTime: 'b' },
+    { id: 'inner', traceId: 't2', type: 'SPAN', name: 'subagent [ci-probe]', parentObservationId: 'nested-launch', startTime: 'a', endTime: 'b' },
     { id: 'inner-bash', traceId: 't2', type: 'TOOL', name: `bash [echo ${CODEWORD} child]`, parentObservationId: 'inner', startTime: 'a', endTime: 'b' },
     { id: 'inner-gen', traceId: 't2', type: 'GENERATION', name: 'llm-generation [subagent] [request]', parentObservationId: 'inner', startTime: 'a', endTime: 'b' },
     { id: 'inner-stream', traceId: 't2', type: 'SPAN', name: 'llm-stream', parentObservationId: 'inner-gen', startTime: 'a', endTime: 'b' },
@@ -255,7 +255,7 @@ it('evaluateTrace validates the nested subagent hierarchy scenario', () => {
     observation.id === 'inner' ? { ...observation, parentObservationId: 'root' } : observation,
   );
   const problems = evaluateTrace(broken, CODEWORD, 'hierarchy');
-  assert.ok(problems.some((problem) => problem.includes('subagent [ci-probe]') && problem.includes('expected outer')));
+  assert.ok(problems.some((problem) => problem.includes('subagent [ci-probe]') && problem.includes('expected nested-launch')));
 });
 
 it('evaluateTrace validates the redacted scenario', () => {

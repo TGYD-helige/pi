@@ -79,12 +79,171 @@ function hrTimeToMs([seconds, nanos]: [number, number]): number {
 
 afterEach(() => {
   delete process.env.PI_TELEMETRY_TRACEPARENT;
+  delete process.env.PI_TELEMETRY_TOOL_CONTEXTS;
+  delete process.env.PI_TELEMETRY_PARENT_TOOL_CALL_ID;
   setLangfuseTracerProvider(null);
   delayMock.mockClear();
   vi.restoreAllMocks();
 });
 
 describe('telemetry', () => {
+  it('redacts configured fields inside objects and JSON strings while preserving request context', async () => {
+    const { exporter, inMemory } = makeExporter({
+      redactFields: ['password'],
+      tags: ['batch'],
+      traceName: 'task',
+    });
+    exporter.setContext?.({
+      userId: 'user-2',
+      tags: ['request'],
+      metadata: { tenant: 'team', password: 'hidden-3' },
+    });
+    await exporter.publish({
+      id: 'root',
+      traceId,
+      sessionId: 's',
+      type: 'chat_turn_started',
+      createdAt: new Date().toISOString(),
+      details: { input: '{"password":"hidden-1","text":"ok"}' },
+    });
+    await exporter.publish({
+      id: 'end',
+      traceId,
+      sessionId: 's',
+      type: 'chat_turn_completed',
+      createdAt: new Date().toISOString(),
+      details: { output: { password: 'hidden-2' } },
+    });
+    const root = inMemory.getFinishedSpans().find((span) => span.name === 'chat-turn')!;
+    const serialized = JSON.stringify(root.attributes);
+    expect(serialized).not.toMatch(/hidden-[123]/);
+    expect(root.attributes).toMatchObject({
+      'user.id': 'user-2',
+      'langfuse.trace.name': 'task',
+      'langfuse.trace.metadata.tenant': 'team',
+    });
+    expect(root.attributes['langfuse.trace.tags']).toEqual(
+      expect.arrayContaining(['batch', 'request']),
+    );
+    await exporter.close();
+  });
+
+  it('does not guess a launch parent under concurrency and accepts an explicit context', async () => {
+    const { exporter } = makeExporter();
+    await exporter.publish({
+      id: 'root',
+      traceId,
+      sessionId: 'parent',
+      conversationId: 'parent',
+      type: 'chat_turn_started',
+      createdAt: new Date().toISOString(),
+    });
+    const agentParent = process.env.PI_TELEMETRY_TRACEPARENT!.split('-')[2];
+    for (const toolCallId of ['one', 'two'])
+      await exporter.publish({
+        id: toolCallId,
+        traceId,
+        sessionId: 'parent',
+        conversationId: 'parent',
+        toolName: 'bash',
+        toolCallId,
+        status: 'started',
+        createdAt: new Date().toISOString(),
+      });
+    const context = exporter.getToolContext('parent', 'two')!;
+    const inheritedSnapshot = process.env.PI_TELEMETRY_TOOL_CONTEXTS!;
+    for (const explicit of [false, true]) {
+      process.env.PI_TELEMETRY_TOOL_CONTEXTS = inheritedSnapshot;
+      if (explicit) Object.assign(process.env, context);
+      const child = makeExporter();
+      await child.exporter.publish({
+        id: 'child',
+        traceId,
+        sessionId: 'child',
+        parentSessionId: 'parent',
+        childSessionId: 'child',
+        type: 'subagent_started',
+        createdAt: new Date().toISOString(),
+      });
+      await child.exporter.publish({
+        id: 'done',
+        traceId,
+        sessionId: 'child',
+        parentSessionId: 'parent',
+        childSessionId: 'child',
+        type: 'subagent_completed',
+        createdAt: new Date().toISOString(),
+      });
+      expect(child.inMemory.getFinishedSpans()[0]!.parentSpanContext?.spanId).toBe(
+        explicit ? context.PI_TELEMETRY_TRACEPARENT!.split('-')[2] : agentParent,
+      );
+      await child.exporter.close();
+    }
+    await exporter.close();
+  });
+
+  it('provides explicit launch context and safely inherits a unique active tool', async () => {
+    const { exporter, inMemory } = makeExporter();
+    await exporter.publish({
+      id: 'root',
+      traceId,
+      sessionId: 'parent',
+      conversationId: 'parent',
+      type: 'chat_turn_started',
+      createdAt: new Date().toISOString(),
+    });
+    await exporter.publish({
+      id: 'start',
+      traceId,
+      sessionId: 'parent',
+      conversationId: 'parent',
+      toolName: 'bash',
+      toolCallId: 'launch',
+      status: 'started',
+      createdAt: new Date().toISOString(),
+    });
+    const launch = exporter.getToolContext?.('parent', 'launch');
+    expect(launch?.PI_TELEMETRY_TRACEPARENT).toMatch(/^00-[a-f0-9]{32}-[a-f0-9]{16}-01$/);
+    const child = makeExporter();
+    await child.exporter.publish({
+      id: 'child-start',
+      traceId,
+      sessionId: 'child',
+      parentSessionId: 'parent',
+      childSessionId: 'child',
+      type: 'subagent_started',
+      createdAt: new Date().toISOString(),
+    });
+    await child.exporter.publish({
+      id: 'child-end',
+      traceId,
+      sessionId: 'child',
+      parentSessionId: 'parent',
+      childSessionId: 'child',
+      type: 'subagent_completed',
+      createdAt: new Date().toISOString(),
+    });
+    await exporter.publish({
+      id: 'end',
+      traceId,
+      sessionId: 'parent',
+      conversationId: 'parent',
+      toolName: 'bash',
+      toolCallId: 'launch',
+      status: 'completed',
+      createdAt: new Date().toISOString(),
+    });
+    const tool = inMemory
+      .getFinishedSpans()
+      .find((span) => span.attributes.toolCallId === 'launch')!;
+    expect(child.inMemory.getFinishedSpans()[0]!.parentSpanContext?.spanId).toBe(
+      tool.spanContext().spanId,
+    );
+    expect(exporter.getToolContext?.('parent', 'launch')).toBeUndefined();
+    await child.exporter.close();
+    await exporter.close();
+  });
+
   it('splits reasoning without double counting and preserves cache costs', async () => {
     const { exporter, inMemory } = makeExporter();
     await exporter.publish({

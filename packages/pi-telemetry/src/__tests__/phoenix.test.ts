@@ -23,6 +23,217 @@ afterEach(() => {
 });
 
 describe('Phoenix telemetry export', () => {
+  it('projects readable messages, tools, parameters and context without changing other destinations', async () => {
+    const spans: ReadableSpan[] = [];
+    vi.spyOn(OtlpProtoExporter.prototype, 'export').mockImplementation((batch, callback) => {
+      spans.push(...batch);
+      callback({ code: 0 });
+    });
+    const exporter = createTelemetryExporter({
+      includePayloads: true,
+      serviceName: 'pi-tests',
+      environment: 'test',
+      release: 'release-1',
+      phoenix: { enabled: true, endpoint: 'http://localhost:6006' },
+    });
+    try {
+      await exporter.publish({
+        ...context,
+        id: 'start',
+        llmGenerationId: 'gen-1',
+        status: 'started',
+        model,
+        createdAt: '2026-05-02T00:00:00.100Z',
+        modelParameters: { provider: 'deepseek', temperature: 0.2 },
+        displayInput: [
+          {
+            role: 'system',
+            content: 'System',
+            tools: [
+              { type: 'function', function: { name: 'bash', parameters: { type: 'object' } } },
+            ],
+          },
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [
+              {
+                id: 'call-1',
+                type: 'function',
+                function: { name: 'bash', arguments: '{"command":"echo hi"}' },
+              },
+            ],
+          },
+          { role: 'tool', tool_call_id: 'call-1', content: 'hi' },
+        ],
+      });
+      await exporter.publish({
+        ...context,
+        id: 'end',
+        llmGenerationId: 'gen-1',
+        status: 'completed',
+        model,
+        createdAt: '2026-05-02T00:00:00.500Z',
+        modelParameters: { provider: 'deepseek', temperature: 0.2 },
+        displayOutput: {
+          role: 'assistant',
+          content: 'Done',
+          thinking: [{ type: 'thinking', content: 'Reason' }],
+        },
+        completionStartTime: '2026-05-02T00:00:00.300Z',
+        usage: { input: 1, output: 2, costSource: 'unknown' },
+      });
+      await exporter.flush?.();
+      expect(spans[0]!.attributes).toMatchObject({
+        'llm.input_messages.0.message.role': 'system',
+        'llm.input_messages.0.message.content': 'System',
+        'llm.input_messages.1.message.tool_calls.0.tool_call.function.name': 'bash',
+        'llm.input_messages.2.message.tool_call_id': 'call-1',
+        'llm.output_messages.0.message.role': 'assistant',
+        'llm.output_messages.0.message.content': 'Done',
+        'llm.invocation_parameters': JSON.stringify({ provider: 'deepseek', temperature: 0.2 }),
+        'llm.time_to_first_token_ms': 200,
+        'tag.tags': ['pi-tests'],
+      });
+      expect(
+        JSON.parse(String(spans[0]!.attributes['llm.tools.0.tool.json_schema'])),
+      ).toMatchObject({ name: 'bash' });
+      expect(JSON.parse(String(spans[0]!.attributes.metadata))).toMatchObject({
+        environment: 'test',
+        release: 'release-1',
+        costSource: 'unknown',
+      });
+      expect(spans[0]!.attributes['llm.cost.total']).toBeUndefined();
+    } finally {
+      await exporter.close?.();
+    }
+  });
+
+  it('preserves separate tool results, thinking, images and protocol-specific tools', async () => {
+    const spans: ReadableSpan[] = [];
+    vi.spyOn(OtlpProtoExporter.prototype, 'export').mockImplementation((batch, callback) => {
+      spans.push(...batch);
+      callback({ code: 0 });
+    });
+    const exporter = createTelemetryExporter({
+      includePayloads: true,
+      mediaUploadEnabled: false,
+      phoenix: { enabled: true, endpoint: 'http://localhost:6006' },
+    });
+    try {
+      await exporter.publish({
+        ...context,
+        id: 'protocol-start',
+        llmGenerationId: 'g',
+        status: 'started',
+        model,
+        createdAt: new Date().toISOString(),
+        displayInput: [
+          {
+            role: 'system',
+            content: { parts: [{ text: 'Gemini system' }] },
+            tools: [
+              { functionDeclarations: [{ name: 'first' }, { name: 'second' }] },
+              { type: 'function', function: { name: 'third' } },
+            ],
+          },
+          {
+            role: 'user',
+            content: [
+              { type: 'tool_result', tool_use_id: 'one', content: 'ONE' },
+              { type: 'tool_result', tool_use_id: 'two', content: 'TWO' },
+            ],
+          },
+          { type: 'function_call_output', call_id: 'three', output: 'THREE' },
+        ],
+      });
+      await exporter.publish({
+        ...context,
+        id: 'protocol-end',
+        llmGenerationId: 'g',
+        status: 'completed',
+        model,
+        createdAt: new Date().toISOString(),
+        displayOutput: {
+          role: 'assistant',
+          content: [
+            { type: 'thinking', thinking: 'why' },
+            { type: 'text', text: 'answer' },
+            {
+              type: 'image',
+              source: { type: 'base64', media_type: 'image/png', data: 'aGVsbG8=' },
+            },
+          ],
+        },
+      });
+      await exporter.flush?.();
+      const attrs = spans[0]!.attributes;
+      expect(attrs).toMatchObject({
+        'llm.input_messages.0.message.content': 'Gemini system',
+        'llm.input_messages.1.message.tool_call_id': 'one',
+        'llm.input_messages.1.message.content': 'ONE',
+        'llm.input_messages.2.message.tool_call_id': 'two',
+        'llm.input_messages.2.message.content': 'TWO',
+        'llm.input_messages.3.message.tool_call_id': 'three',
+        'llm.output_messages.0.message.contents.0.message_content.text': 'why',
+      });
+      expect(JSON.stringify(attrs)).not.toContain('data:image/png');
+      expect(Object.values(attrs)).toContain('answer');
+      expect(JSON.parse(String(attrs['llm.tools.1.tool.json_schema'])).name).toBe('second');
+      expect(JSON.parse(String(attrs['llm.tools.2.tool.json_schema'])).name).toBe('third');
+    } finally {
+      await exporter.close?.();
+    }
+  });
+
+  it('bounds semantic attributes and retains the newest input, including with payloads disabled', async () => {
+    const spans: ReadableSpan[] = [];
+    vi.spyOn(OtlpProtoExporter.prototype, 'export').mockImplementation((batch, callback) => {
+      spans.push(...batch);
+      callback({ code: 0 });
+    });
+    for (const includePayloads of [true, false]) {
+      const exporter = createTelemetryExporter({
+        includePayloads,
+        phoenix: { enabled: true, endpoint: 'http://localhost:6006' },
+      });
+      try {
+        await exporter.publish({
+          ...context,
+          id: 'budget-start',
+          llmGenerationId: 'g',
+          status: 'started',
+          model,
+          createdAt: new Date().toISOString(),
+          displayInput: [
+            ...Array.from({ length: 150 }, () => ({ role: 'user', content: '中'.repeat(2000) })),
+            { role: 'user', content: 'LATEST' },
+          ],
+        });
+        await exporter.publish({
+          ...context,
+          id: 'budget-end',
+          llmGenerationId: 'g',
+          status: 'completed',
+          model,
+          createdAt: new Date().toISOString(),
+        });
+        await exporter.flush?.();
+      } finally {
+        await exporter.close?.();
+      }
+    }
+    const semantic = Object.entries(spans[0]!.attributes).filter(([key]) =>
+      key.startsWith('llm.input_messages.'),
+    );
+    expect(semantic.some(([, value]) => value === 'LATEST')).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(semantic))).toBeLessThan(260_000);
+    expect(spans[0]!.attributes['pi.telemetry.projection.truncated']).toBe(true);
+    expect(
+      Object.keys(spans[1]!.attributes).some((key) => key.startsWith('llm.input_messages.')),
+    ).toBe(false);
+  });
+
   it('exports OpenInference protobuf spans alongside unchanged Langfuse and generic OTLP', async () => {
     const phoenixSpans: ReadableSpan[] = [];
     const otherSpans: ReadableSpan[] = [];

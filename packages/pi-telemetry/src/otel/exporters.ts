@@ -28,10 +28,12 @@ import {
   type SpanExporter,
   type SpanProcessor,
 } from '@opentelemetry/sdk-trace-base';
+import { stringList } from '../config.js';
 import type {
   RuntimeEventExporter,
   RuntimeLlmStreamEvent,
   RuntimeTelemetryEvent,
+  TelemetryRequestContext,
 } from '../index.js';
 import {
   chatInputLifecycleOutput,
@@ -42,7 +44,6 @@ import {
   llmGenerationObservationName,
   subagentObservationName,
   subagentSpanKey,
-  subagentSpawnToolSpanKey,
   telemetryEventSubagentSpanKey,
   toolObservationName,
   toolSpanKey,
@@ -72,6 +73,7 @@ import {
   isLlmStreamEvent,
   isToolEvent,
   normalizeOtelTracesEndpoint,
+  redactTelemetryValue,
   requireTraceId,
   shortCorrelationId,
   truncateAttributePayload,
@@ -123,6 +125,7 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
   private rejectedSpans = new Map<string, number | string>();
   private flushFailed = false;
   private state = 'ready';
+  private requestContext: TelemetryRequestContext = {};
 
   constructor(config: OtelExporterConfig, opts?: { provider?: BasicTracerProvider }) {
     this.config = normalizeExporterConfig(config);
@@ -175,6 +178,22 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
     }
   }
 
+  setContext(context: TelemetryRequestContext): void {
+    this.requestContext = redactTelemetryValue(this.config, {
+      ...(typeof context.userId === 'string' ? { userId: context.userId.slice(0, 256) } : {}),
+      ...(typeof context.traceName === 'string'
+        ? { traceName: context.traceName.slice(0, 90) }
+        : {}),
+      tags: stringList(context.tags),
+      ...(context.metadata &&
+      typeof context.metadata === 'object' &&
+      !Array.isArray(context.metadata)
+        ? { metadata: context.metadata }
+        : {}),
+      ...(typeof context.traceparent === 'string' ? { traceparent: context.traceparent } : {}),
+    }) as TelemetryRequestContext;
+  }
+
   getStatus() {
     const failed = this.flushFailed || this.exportFailures.size > 0 || this.rejectedSpans.size > 0;
     return {
@@ -219,6 +238,7 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
       console.error(`[pi-telemetry] ended ${this.openSpans.size} open span(s) at session shutdown`);
     }
     this.openSpans.clear();
+    this.refreshToolContexts();
     const finished = await waitForExport(
       this.provider.shutdown().catch(() => {
         this.flushFailed = true;
@@ -247,6 +267,7 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
         this.trackOpenSpan(chatSpanKey(event), span);
         // A nested pi process parents its subagent span to this root.
         process.env[TRACEPARENT_ENV] = traceparent(span);
+        this.refreshToolContexts();
         // The root span exports only when the turn ends; an instant child
         // span carries the input up front so the query reaches Langfuse even
         // if the root span is lost to an interrupt or a process kill.
@@ -346,6 +367,7 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
         this.trackOpenSpan(key, span);
         // Grandchildren (pi processes spawned by this subagent) parent here.
         process.env[TRACEPARENT_ENV] = traceparent(span);
+        this.refreshToolContexts();
         return;
       }
       case 'subagent_completed':
@@ -378,6 +400,27 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
     }
   }
 
+  getToolContext(sessionId: string, toolCallId: string): Record<string, string> | undefined {
+    const span = [...this.openSpans.entries()].find(([key]) =>
+      key.startsWith(`tool:${sessionId}:${toolCallId}:`),
+    )?.[1];
+    return span
+      ? {
+          PI_TELEMETRY_TRACEPARENT: traceparent(span),
+          PI_TELEMETRY_PARENT_TOOL_CALL_ID: toolCallId,
+        }
+      : undefined;
+  }
+
+  private refreshToolContexts(): void {
+    const contexts: Record<string, string> = {};
+    for (const [key, span] of this.openSpans) {
+      if (key.startsWith('tool:')) contexts[key] = traceparent(span);
+      if (Object.keys(contexts).length === 2) break;
+    }
+    process.env.PI_TELEMETRY_TOOL_CONTEXTS = JSON.stringify(contexts);
+  }
+
   private publishToolEvent(event: RuntimeToolEvent, createdAtMs: number): void {
     const key = toolSpanKey(event);
     if (event.status === 'started') {
@@ -396,6 +439,7 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
         this.telemetryParentContext(event),
       );
       this.trackOpenSpan(key, span);
+      this.refreshToolContexts();
       return;
     }
     const attributes = this.enrichSpanAttributes(
@@ -420,6 +464,7 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
         this.telemetryParentContext(event),
       );
     }
+    this.refreshToolContexts();
   }
 
   private publishLlmGenerationEvent(event: RuntimeLlmGenerationEvent, createdAtMs: number): void {
@@ -519,7 +564,7 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
     const otelSpan = this.tracer.startSpan(
       name,
       { startTime: startMs, attributes },
-      parentContext ?? ROOT_CONTEXT,
+      parentContext ?? contextFromTraceparent(this.requestContext.traceparent) ?? ROOT_CONTEXT,
     );
     const observation = new LangfuseSpan({ otelSpan });
     // The generic wrapper marks its span type as "span"; restore explicit
@@ -590,10 +635,12 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
   }
 
   private subagentParentContext(event: RuntimeLifecycleEvent): Context | undefined {
-    const spawnToolKey = subagentSpawnToolSpanKey(event);
     const local =
-      (spawnToolKey ? this.openSpans.get(spawnToolKey) : undefined) ??
-      this.openSpans.get(chatSpanKey(event));
+      (event.parentSessionId && event.parentToolCallId
+        ? [...this.openSpans.entries()].find(([key]) =>
+            key.startsWith(`tool:${event.parentSessionId}:${event.parentToolCallId}:`),
+          )?.[1]
+        : undefined) ?? this.openSpans.get(chatSpanKey(event));
     // In a subagent (child) process there is no local root span — parent to
     // the main process's span advertised through the environment instead.
     return parentContextOf(local) ?? remoteParentContext();
@@ -619,16 +666,32 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
   // catch-all and are not. Set them on every span because Langfuse reads
   // trace-level attributes from any span in the trace.
   private enrichSpanAttributes(base: JsonObject, event: RuntimeTelemetryEvent): Attributes {
-    const enriched: JsonObject = { ...base, 'langfuse.trace.name': 'chat-turn' };
-    const userId = 'userId' in event ? event.userId : this.config.userId;
+    const enriched: JsonObject = {
+      ...base,
+      'langfuse.trace.name': this.requestContext.traceName || this.config.traceName || 'chat-turn',
+    };
+    const contextMetadata = this.requestContext.metadata ?? {};
+    for (const [key, value] of Object.entries(contextMetadata).slice(0, 32)) {
+      if (value === undefined) continue;
+      enriched[`langfuse.trace.metadata.${key.slice(0, 128)}`] = value;
+      enriched[`langfuse.observation.metadata.${key.slice(0, 128)}`] = value;
+    }
+    const userId =
+      ('userId' in event ? event.userId : undefined) ??
+      this.requestContext.userId ??
+      this.config.userId;
     if (userId) enriched['user.id'] = userId;
     if (this.config.environment) enriched['langfuse.environment'] = this.config.environment;
     if (this.config.release) enriched['langfuse.release'] = this.config.release;
     if (this.config.serviceName) {
       enriched['langfuse.trace.metadata.serviceName'] = this.config.serviceName;
       enriched['langfuse.observation.metadata.serviceName'] = this.config.serviceName;
-      enriched['langfuse.trace.tags'] = [this.config.serviceName];
     }
+    enriched['langfuse.trace.tags'] = stringList([
+      this.config.serviceName,
+      ...(this.config.tags ?? []),
+      ...(this.requestContext.tags ?? []),
+    ]);
     const taskRunId = event.taskRunId ?? shortCorrelationId(event.runId);
     if (taskRunId) {
       enriched['langfuse.trace.metadata.taskRunId'] = taskRunId;
@@ -645,7 +708,7 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
             : JSON.stringify(value);
       }
     }
-    return toOtelAttributes(enriched);
+    return toOtelAttributes(redactTelemetryValue(this.config, enriched) as JsonObject);
   }
 }
 
@@ -771,6 +834,8 @@ function buildTracerProvider(
 function normalizeExporterConfig(config: OtelExporterConfig): OtelExporterConfig {
   return {
     ...config,
+    tags: stringList(config.tags),
+    redactFields: stringList(config.redactFields),
     includePayloads: config.includePayloads === true,
     mediaUploadEnabled: config.includePayloads === true && config.mediaUploadEnabled === true,
     flushAt: parsePositiveInteger(config.flushAt, DEFAULT_FLUSH_AT),
@@ -809,7 +874,24 @@ function parentContextOf(span: LangfuseSpan | undefined): Context | undefined {
 
 // Parses the W3C traceparent a parent pi process published for us.
 function remoteParentContext(): Context | undefined {
-  const value = process.env[TRACEPARENT_ENV];
+  let value = process.env[TRACEPARENT_ENV];
+  // A launch can pin its exact parent. Otherwise inherit only an unambiguous tool snapshot.
+  if (!process.env.PI_TELEMETRY_PARENT_TOOL_CALL_ID) {
+    try {
+      const contexts = JSON.parse(process.env.PI_TELEMETRY_TOOL_CONTEXTS ?? '{}');
+      const parents =
+        contexts && typeof contexts === 'object' && !Array.isArray(contexts)
+          ? Object.values(contexts)
+          : [];
+      if (parents.length === 1 && typeof parents[0] === 'string') value = parents[0];
+    } catch {
+      /* Invalid inherited context falls back to the agent parent. */
+    }
+  }
+  return contextFromTraceparent(value);
+}
+
+function contextFromTraceparent(value: string | undefined): Context | undefined {
   const match = value
     ? /^[0-9a-f]{2}-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$/i.exec(value)
     : null;

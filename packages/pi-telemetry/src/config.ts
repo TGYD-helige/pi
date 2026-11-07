@@ -36,6 +36,9 @@ export interface TelemetryConfig {
   userId?: string;
   environment?: string;
   release?: string;
+  tags?: string[];
+  traceName?: string;
+  redactFields?: string[];
 
   langfuse?: LangfuseConfig;
   otel?: OtelConfig;
@@ -93,7 +96,14 @@ export function credentialMaskValues(config: {
 export function runtimeTelemetryOptions(
   config: Pick<
     TelemetryConfig,
-    'includePayloads' | 'mediaUploadEnabled' | 'userId' | 'environment' | 'release'
+    | 'includePayloads'
+    | 'mediaUploadEnabled'
+    | 'userId'
+    | 'environment'
+    | 'release'
+    | 'tags'
+    | 'traceName'
+    | 'redactFields'
   > & {
     maskingSecrets?: readonly string[];
     langfuse?: LangfuseConfig;
@@ -102,6 +112,11 @@ export function runtimeTelemetryOptions(
   },
 ): RuntimeTelemetryOptions {
   return {
+    tags: stringList(config.tags),
+    redactFields: stringList(config.redactFields),
+    ...(typeof config.traceName === 'string' && config.traceName.trim()
+      ? { traceName: config.traceName.trim().slice(0, 90) }
+      : {}),
     maskingSecrets: credentialMaskValues(config),
     includePayloads: parseBoolean(config.includePayloads),
     mediaUploadEnabled:
@@ -134,4 +149,16 @@ export function configurationWarnings(config: TelemetryConfig): string[] {
   )
     warnings.push('Phoenix endpoint is blank');
   return warnings;
+}
+
+export function stringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? [
+        ...new Set(
+          value
+            .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+            .map((item) => item.trim().slice(0, 128)),
+        ),
+      ].slice(0, 32)
+    : [];
 }

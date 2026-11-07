@@ -8,6 +8,29 @@ import { resolveOtelExporterConfig, resolvePhoenixExporterConfig } from '../otel
 import { parseBoolean } from '../parse.js';
 
 describe('config', () => {
+  it('validates and forwards optional tags, trace name and field redaction to every backend', () => {
+    const config = {
+      tags: [' batch ', 'batch', '', 1] as any,
+      traceName: ' task ',
+      redactFields: [' password ', 'password'],
+    };
+    for (const resolve of [
+      resolveLangfuseExporterConfig,
+      resolveOtelExporterConfig,
+      resolvePhoenixExporterConfig,
+    ]) {
+      expect(resolve(config)).toMatchObject({
+        tags: ['batch'],
+        traceName: 'task',
+        redactFields: ['password'],
+      });
+      expect(resolve({ tags: 'bad' as any, redactFields: null as any })).toMatchObject({
+        tags: [],
+        redactFields: [],
+      });
+    }
+  });
+
   it('only enables media when content export is explicitly enabled', () => {
     expect(resolveConfig({ mediaUploadEnabled: true })).toMatchObject({
       includePayloads: false,

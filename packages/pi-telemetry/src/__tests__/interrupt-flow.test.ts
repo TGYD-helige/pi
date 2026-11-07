@@ -318,7 +318,7 @@ describe('interrupt flow', () => {
   it.each([
     { rate: 1, total: 0, costSource: undefined, expectedSource: 'model-pricing' },
     { rate: 0, total: 0, costSource: 'provided', expectedSource: 'provided' },
-    { rate: 0, total: 0.01, costSource: undefined, expectedSource: undefined },
+    { rate: 0, total: 0.01, costSource: undefined, expectedSource: 'provided' },
   ])('preserves known costs through the extension ($expectedSource, $total)', async ({
     rate,
     total,

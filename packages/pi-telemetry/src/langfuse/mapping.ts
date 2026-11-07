@@ -12,8 +12,9 @@ export function langfuseObservationAttributes(input: {
   level?: 'DEFAULT' | 'WARNING' | 'ERROR';
   type?: 'span' | 'generation' | 'tool';
 }): JsonObject {
-  const serializedInput = input.input === undefined ? undefined : JSON.stringify(input.input);
-  const serializedOutput = input.output === undefined ? undefined : JSON.stringify(input.output);
+  const serializedInput = input.input === undefined ? undefined : serializeObservation(input.input);
+  const serializedOutput =
+    input.output === undefined ? undefined : serializeObservation(input.output);
   return {
     'langfuse.observation.type': input.type ?? 'span',
     ...(input.input !== undefined
@@ -58,14 +59,6 @@ export function toolSpanKey(
   event: Pick<RuntimeToolEvent, 'sessionId' | 'toolCallId' | 'toolName'>,
 ): string {
   return `tool:${event.sessionId}:${event.toolCallId}:${event.toolName}`;
-}
-
-export function subagentSpawnToolSpanKey(
-  event: Pick<RuntimeLifecycleEvent, 'parentSessionId' | 'parentToolCallId'>,
-): string | undefined {
-  return event.parentSessionId && event.parentToolCallId
-    ? `tool:${event.parentSessionId}:${event.parentToolCallId}:sessions_spawn`
-    : undefined;
 }
 
 export function llmGenerationKey(
@@ -180,4 +173,31 @@ export function stringArg(args: JsonObject | undefined, key: string): string | u
 export function truncateObservationSummary(value: string, maxLength = 90): string {
   const normalized = value.replace(/\s+/g, ' ').trim();
   return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1)}…` : normalized;
+}
+
+// Preserve the newest conversation messages before generic attribute truncation.
+function serializeObservation(value: JsonValue): string {
+  if (
+    !Array.isArray(value) ||
+    !value.every(
+      (item) =>
+        item && typeof item === 'object' && !Array.isArray(item) && typeof item.role === 'string',
+    )
+  )
+    return JSON.stringify(value);
+  const selected: JsonValue[] = [];
+  let bytes = 2;
+  for (let index = value.length - 1; index >= 0 && selected.length < 100; index--) {
+    const item = value[index]!;
+    const size = Buffer.byteLength(JSON.stringify(item)) + 1;
+    if (bytes + size > 500_000) break;
+    selected.unshift(item);
+    bytes += size;
+  }
+  if (selected.length < value.length)
+    selected.unshift({
+      role: 'system',
+      content: '[Earlier or oversized messages omitted by telemetry budget]',
+    });
+  return JSON.stringify(selected);
 }

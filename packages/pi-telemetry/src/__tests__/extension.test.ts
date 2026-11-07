@@ -328,6 +328,125 @@ describe('telemetryExtension', () => {
     }
   });
 
+  it('captures raw provider frames once and gives generations stable ordinals', async () => {
+    telemetryExtension(mockPi as any);
+    await fireEvent('session_start', {});
+    await fireEvent('input', { text: 'hello' });
+    await fireEvent('turn_start', { timestamp: Date.now() });
+    await fireEvent('before_provider_request', { payload: { messages: [] } });
+    await fireEvent('provider_stream_event', {
+      data: { choices: [{ delta: { content: 'hello' } }] },
+    });
+    await fireEvent('message_update', {
+      message: { role: 'assistant', content: [{ type: 'text', text: 'hello' }] },
+      assistantMessageEvent: { type: 'text_delta', delta: 'hello' },
+    });
+    await fireEvent('message_end', { message: { role: 'assistant', content: [] } });
+    const events = getPublishedEvents();
+    expect(events.find((e) => 'streamEvents' in e)).toMatchObject({
+      streamEvents: [{ choices: [{ delta: { content: 'hello' } }] }],
+    });
+    expect(
+      events.find((e) => 'status' in e && e.status === 'started' && 'llmGenerationId' in e),
+    ).toMatchObject({ observationName: 'llm-generation [main] [#1]' });
+  });
+
+  it('uses a request context once and exposes launch context without changing tool arguments', async () => {
+    const listeners = new Map<string, (data: unknown) => unknown>();
+    const exporter = {
+      publish: vi.fn(async () => {}),
+      setContext: vi.fn(),
+      getToolContext: vi.fn(() => ({ PI_TELEMETRY_TRACEPARENT: 'parent' })),
+    };
+    vi.mocked(createTelemetryExporter).mockReturnValueOnce(exporter);
+    telemetryExtension({
+      ...mockPi,
+      events: {
+        on: (name: string, handler: (data: unknown) => unknown) => {
+          listeners.set(name, handler);
+          return () => listeners.delete(name);
+        },
+      },
+    } as any);
+    await fireEvent('session_start', {}, { sessionManager: { getSessionId: () => 's' } });
+    listeners.get('pi-telemetry:request-context')?.({ userId: 'tenant-user' });
+    await fireEvent('input', { text: 'first' });
+    expect(exporter.setContext).toHaveBeenLastCalledWith({ userId: 'tenant-user' });
+    await fireEvent('input', { text: 'next' });
+    expect(exporter.setContext).toHaveBeenLastCalledWith({});
+    const respond = vi.fn();
+    listeners.get('pi-telemetry:tool-context')?.({ toolCallId: 'launch', respond });
+    expect(exporter.getToolContext).toHaveBeenCalledWith('s', 'launch');
+    expect(respond).toHaveBeenCalledWith({ PI_TELEMETRY_TRACEPARENT: 'parent' });
+  });
+
+  it('accepts exact auxiliary observations without also reconstructing summary usage', async () => {
+    const listeners = new Map<string, (data: unknown) => unknown>();
+    telemetryExtension({
+      ...mockPi,
+      events: {
+        on: (name: string, handler: (data: unknown) => unknown) => {
+          listeners.set(name, handler);
+          return () => listeners.delete(name);
+        },
+      },
+    } as any);
+    await fireEvent('session_start', {}, { sessionManager: { getSessionId: () => 's' } });
+    await fireEvent('session_before_compact', {});
+    const actual = {
+      llmGenerationId: 'actual-compact',
+      source: 'compaction',
+      model: { provider: 'openai', model: 'actual-summary' },
+    };
+    await listeners.get('pi-telemetry:llm')?.({
+      ...actual,
+      status: 'started',
+      createdAt: '2026-05-02T00:00:00Z',
+      input: 'summary input',
+    });
+    await listeners.get('pi-telemetry:llm')?.({
+      ...actual,
+      status: 'completed',
+      createdAt: '2026-05-02T00:00:01Z',
+      usage: { input: 1, output: 2 },
+    });
+    await fireEvent(
+      'session_compact',
+      { compactionEntry: { summary: 'done', usage: { input: 1, output: 2 } } },
+      {},
+    );
+    const generations = getPublishedEvents().filter((e) => 'llmGenerationId' in e && 'status' in e);
+    expect(generations).toHaveLength(2);
+    expect(generations[0]).toMatchObject({ model: actual.model, input: 'summary input' });
+    expect(generations[0]!.traceId).toBe(generations[1]!.traceId);
+  });
+
+  it('records failed compaction with honest model and timing attribution', async () => {
+    telemetryExtension(mockPi as any);
+    await fireEvent('session_start', {}, { sessionManager: { getSessionId: () => 's' } });
+    await fireEvent('session_before_compact', {});
+    await fireEvent(
+      'session_compact_failed',
+      { aborted: true, reason: 'manual' },
+      { model: { provider: 'openai', id: 'session-model' } },
+    );
+    const events = getPublishedEvents().filter((e) => 'llmGenerationId' in e && 'status' in e);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: 'failed',
+          source: 'compaction',
+          error: 'Compaction cancelled',
+          model: { provider: 'unknown', model: 'unknown' },
+          modelParameters: expect.objectContaining({
+            modelAttribution: 'unreported',
+            timingAttribution: 'operation',
+          }),
+        }),
+      ]),
+    );
+  });
+
   it('records compaction and branch summary usage even outside an active prompt', async () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', {}, { sessionManager: { getSessionId: () => 's' } });
