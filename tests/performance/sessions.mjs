@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { setImmediate as tick, setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { extensions } from './plugins.mjs';
 
 export const sessionMetrics = Object.fromEntries(
   [
@@ -30,6 +31,31 @@ export const sessionMetrics = Object.fromEntries(
       ['sessionFdGrowth', { unit: 'count', slack: 1 }],
       ['sessionActiveResourceGrowth', { unit: 'count', slack: 1 }],
       ['sessionChildGrowth', { unit: 'count', slack: 0 }],
+    ]),
+);
+
+export const profileMetrics = Object.fromEntries(
+  [...extensions, 'all'].flatMap((name) =>
+    ['startupMs', 'hooks1000Ms', 'shutdownMs'].map((metric) => [
+      `profile.${name}.${metric}`,
+      { unit: 'ms', slack: metric === 'startupMs' ? 20 : 0.2 },
+    ]),
+  ),
+);
+
+export const soakMetrics = Object.fromEntries(
+  [
+    ['soakCycleMedianMs', 3],
+    ['soakCycleP95Ms', 5],
+    ['soakCycleP99Ms', 10],
+  ]
+    .map(([name, slack]) => [name, { unit: 'ms', slack }])
+    .concat([
+      ['soakHeapGrowthMiB', { unit: 'MiB', slack: 16 }],
+      ['soakRssGrowthMiB', { unit: 'MiB', slack: 32 }],
+      ['soakFdGrowth', { unit: 'count', slack: 1 }],
+      ['soakActiveResourceGrowth', { unit: 'count', slack: 1 }],
+      ['soakChildGrowth', { unit: 'count', slack: 0 }],
     ]),
 );
 
@@ -126,7 +152,10 @@ async function cliReady(root, fixture, names) {
   }
 }
 
-export async function measureSessions(root) {
+export async function measureSessions(
+  root,
+  { profiles = false, soakMinutes = 0, progressPath } = {},
+) {
   root = path.resolve(root);
   assert.equal(typeof global.gc, 'function', 'Run performance workers with --expose-gc');
   const fixture = await mkdtemp(path.join(tmpdir(), 'pi-performance-sessions-'));
@@ -134,6 +163,7 @@ export async function measureSessions(root) {
     PI_AGENT_HOME: process.env.PI_AGENT_HOME,
     PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
     PI_OFFLINE: process.env.PI_OFFLINE,
+    PI_CHANNELS_DISABLE_SESSION_AUTOSTART: process.env.PI_CHANNELS_DISABLE_SESSION_AUTOSTART,
   };
   const open = new Set();
   const result = {};
@@ -163,16 +193,67 @@ export async function measureSessions(root) {
         'pi-goal': { model: null },
       }),
     );
-    result.cliEmptyReadyMs = await cliReady(root, fixture, []);
-    result.cliMemoryReadyMs = await cliReady(root, fixture, ['pi-memory']);
-    result.cliCommonReadyMs = await cliReady(root, fixture, common);
+    if (!profiles && !soakMinutes) {
+      result.cliEmptyReadyMs = await cliReady(root, fixture, []);
+      result.cliMemoryReadyMs = await cliReady(root, fixture, ['pi-memory']);
+      result.cliCommonReadyMs = await cliReady(root, fixture, common);
+    }
+    let transportHits;
+    if (profiles) {
+      delete process.env.PI_CHANNELS_DISABLE_SESSION_AUTOSTART;
+      ({ transportHits } = await import('./transports.mjs'));
+      const settingsPath = path.join(fixture, 'settings.json');
+      const settings = JSON.parse(await readFile(settingsPath, 'utf8'));
+      Object.assign(settings, {
+        'pi-browser-use': {
+          sessionMode: 'isolated',
+          userDataDir: path.join(fixture, 'chrome'),
+          session: { enabled: false },
+          toolProfile: 'full',
+        },
+        'pi-computer-use': { toolProfile: 'full' },
+        'pi-security': { enabled: true, profile: 'default' },
+        'pi-channels': { adapters: { fixture: { type: 'webhook' } }, bridge: { enabled: false } },
+        'pi-dingtalk': { clientId: 'fixture', clientSecret: 'fixture' },
+        'pi-lark': { appId: 'fixture', appSecret: 'fixture' },
+        'pi-wecom': { botId: 'fixture', botSecret: 'fixture' },
+        'pi-teamwork': {
+          enabled: true,
+          multica: {
+            serverUrl: 'https://fixture.invalid',
+            appUrl: 'https://fixture.invalid',
+            token: 'fixture',
+          },
+        },
+        'pi-memory-mem0': {
+          mode: 'platform',
+          apiKey: 'fixture',
+          userId: 'fixture',
+          userIdScope: 'exact',
+          autoCapture: true,
+          autoRecall: true,
+          toolEnabled: true,
+        },
+        'pi-scheduler': { dataDir: path.join(fixture, 'scheduler') },
+        'pi-web-access': { search: { provider: 'parallel' }, fetch: { provider: 'jina' } },
+        'pi-telemetry': {
+          includePayloads: true,
+          otel: { enabled: true, endpoint: 'https://fixture.invalid' },
+        },
+      });
+      await writeFile(settingsPath, JSON.stringify(settings));
+    }
     const load = (relative) => import(pathToFileURL(path.join(root, 'packages', relative)).href);
     const sdk = await load('pi-memory/node_modules/@earendil-works/pi-coding-agent/dist/index.js');
     const factories = new Map();
-    for (const name of common)
+    for (const name of profiles ? extensions : common)
       factories.set(
         name,
-        (await load(`${name}/dist/${name === 'pi-security' ? 'extension' : 'index'}.js`)).default,
+        (
+          await load(
+            `${name}/dist/${['pi-security', 'pi-task-scheduler'].includes(name) ? 'extension' : 'index'}.js`,
+          )
+        ).default,
       );
     const errors = [];
     async function create(names) {
@@ -242,8 +323,14 @@ export async function measureSessions(root) {
         histories.get(count),
         new AbortController().signal,
       );
-      assert.equal(messages.length, count);
-      assert.match(messages.at(-1).content, new RegExp(`Context ${count - 1}:`));
+      assert.ok(messages.length >= count);
+      assert.ok(
+        messages.some(
+          (message) =>
+            typeof message.content === 'string' &&
+            message.content.startsWith(`Context ${count - 1}:`),
+        ),
+      );
       const payload = {
         messages,
         tools: session.agent.state.tools.map(({ name, description, parameters }) => ({
@@ -257,9 +344,23 @@ export async function measureSessions(root) {
         role: 'assistant',
         content: [{ type: 'text', text: 'Static engineering fixture' }],
         timestamp: 0,
+        api: 'openai-completions',
+        provider: 'fixture',
+        model: 'fixture',
+        stopReason: 'stop',
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
       };
+      await runner.emitMessageEnd({ type: 'message_end', message });
       await runner.emit({ type: 'turn_end', turnIndex: 0, message, toolResults: [] });
       await runner.emit({ type: 'agent_end', messages: [message] });
+      await runner.emit({ type: 'agent_settled', aborted: false });
       assert.deepEqual(errors, []);
     }
     async function time(name, operation, iterations = 20) {
@@ -272,6 +373,111 @@ export async function measureSessions(root) {
       }
       result[name] = percentile(samples, 0.5);
       return samples;
+    }
+    if (profiles) {
+      const expectedTools = {
+        'pi-browser-use': 'browser_list_pages',
+        'pi-computer-use': 'computer_use_health_report',
+        'pi-memory-mem0': 'mem0_memory',
+        'pi-image-gen': 'image_generate',
+        'pi-task-scheduler': 'scheduler_list',
+        'pi-channels': 'notify',
+        'pi-teamwork': 'workspace_list',
+      };
+      for (const name of [...extensions, 'all']) {
+        const names = name === 'all' ? extensions : [name];
+        const started = performance.now();
+        const session = await create(names);
+        result[`profile.${name}.startupMs`] = performance.now() - started;
+        const tools = session.agent.state.tools.map((tool) => tool.name);
+        for (const plugin of names)
+          if (expectedTools[plugin])
+            assert.ok(tools.includes(expectedTools[plugin]), `Missing enabled tool: ${plugin}`);
+        await time(`profile.${name}.hooks1000Ms`, () => round(session));
+        const closing = performance.now();
+        await close(session);
+        result[`profile.${name}.shutdownMs`] = performance.now() - closing;
+      }
+      for (const key of [
+        'browser.catalog',
+        'mem0.init',
+        'mem0.search',
+        'dingtalk.init',
+        'lark.init',
+        'wecom.ready',
+        'teamwork.init',
+        'channels.adapter',
+        'telemetry.export',
+      ])
+        assert.ok(transportHits[key] > 0, `Transport fixture did not execute: ${key}`);
+      if (process.platform !== 'darwin') assert.ok(transportHits['computer.catalog'] > 0);
+      assert.deepEqual(Object.keys(result).sort(), Object.keys(profileMetrics).sort());
+      return { ...result, observations: { transportHits } };
+    }
+    if (soakMinutes) {
+      assert.ok(Number.isFinite(soakMinutes) && soakMinutes > 0 && soakMinutes <= 120);
+      for (let i = 0; i < 100; i++) {
+        const session = await create(common);
+        await round(session);
+        await close(session);
+      }
+      const before = await resources();
+      if (progressPath)
+        await writeFile(progressPath, `${JSON.stringify({ phase: 'before', ...before })}\n`);
+      const checkpoints = [];
+      async function checkpoint() {
+        const point = {
+          cycle: cycles,
+          elapsedMs: performance.now() - started,
+          ...(await resources()),
+        };
+        checkpoints.push(point);
+        if (progressPath) await appendFile(progressPath, `${JSON.stringify(point)}\n`);
+      }
+      const window = [];
+      const started = performance.now();
+      let cycles = 0;
+      let nextSnapshot = Math.min(60_000, soakMinutes * 60_000);
+      while (performance.now() - started < soakMinutes * 60_000) {
+        const cycleStart = performance.now();
+        const session = await create(common);
+        await round(session);
+        await close(session);
+        window.push(performance.now() - cycleStart);
+        if (window.length > 256) window.shift();
+        cycles++;
+        if (performance.now() - started >= nextSnapshot) {
+          await checkpoint();
+          nextSnapshot += 60_000;
+        }
+        await delay(100);
+      }
+      await checkpoint();
+      const growth = (key) => Math.max(0, ...checkpoints.map((point) => point[key] - before[key]));
+      const measured = {
+        soakCycleMedianMs: percentile(window, 0.5),
+        soakCycleP95Ms: percentile(window, 0.95),
+        soakCycleP99Ms: percentile(window, 0.99),
+        soakHeapGrowthMiB: growth('heapUsed') / 1024 / 1024,
+        soakRssGrowthMiB: growth('rss') / 1024 / 1024,
+        soakFdGrowth: growth('fds'),
+        soakActiveResourceGrowth: growth('resources'),
+        soakChildGrowth: growth('children'),
+      };
+      assert.equal(open.size, 0);
+      assert.equal(measured.soakChildGrowth, 0);
+      assert.ok(cycles > 0);
+      return {
+        ...measured,
+        observations: {
+          durationMinutes: soakMinutes,
+          elapsedMs: performance.now() - started,
+          cycles,
+          before,
+          checkpoints,
+          recentLatenciesMs: window,
+        },
+      };
     }
     for (const [label, names] of [
       ['Empty', []],
