@@ -184,9 +184,8 @@ jobs:
               const requestBody = {
                 model: 'deepseek-v4-flash',
                 temperature: 0,
-                max_output_tokens: 256,
-                store: false,
-                input: [
+                max_tokens: 256,
+                messages: [
                   {
                     role: 'system',
                     content: [
@@ -208,7 +207,7 @@ jobs:
 
               let proposal = null;
               try {
-                const res = await fetch(`${baseUrl}/responses`, {
+                const res = await fetch(`${baseUrl}/chat/completions`, {
                   method: 'POST',
                   headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
                   body: JSON.stringify(requestBody),
@@ -216,9 +215,7 @@ jobs:
                 });
                 if (!res.ok) throw new Error(`gateway returned ${res.status}`);
                 const data = await res.json();
-                const text = (data.output ?? []).filter((item) => item.type === 'message')
-                  .flatMap((item) => item.content ?? []).filter((part) => part.type === 'output_text')
-                  .map((part) => part.text).join('');
+                const text = data.choices?.[0]?.message?.content ?? '';
                 const jsonMatch = text.match(/\{[\s\S]*\}/);
                 const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : null;
                 if (parsed && PRIORITY_RE.test(parsed.priority))

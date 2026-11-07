@@ -75,7 +75,7 @@ jobs:
             "providers": {
               "deepseek-integration": {
                 "baseUrl": "${PI_INTEGRATION_BASE_URL}",
-                "api": "openai-responses",
+                "api": "openai-completions",
                 "apiKey": "${PI_INTEGRATION_API_KEY}"
               }
             }
