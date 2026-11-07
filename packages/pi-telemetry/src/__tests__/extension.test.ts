@@ -290,9 +290,9 @@ describe('telemetryExtension', () => {
     telemetryExtension(mockPi as any);
     await fireEvent('session_start', {});
     await fireEvent('input', { text: 'headers' });
-    await fireEvent('before_provider_request', { payload: {} });
     const headers = { Authorization: 'Bearer private', 'x-session-id': 'session-1' };
     await fireEvent('before_provider_headers', { headers });
+    await fireEvent('before_provider_request', { payload: {} });
     await fireEvent('after_provider_response', {
       status: 429,
       headers: { 'set-cookie': 'private', 'x-request-id': 'request-1' },
@@ -312,6 +312,24 @@ describe('telemetryExtension', () => {
     const last = getPublishedEvents().at(-1)!;
     expect(last.requestHeaders).toBeUndefined();
     expect(last.responseHeaders).toBeUndefined();
+  });
+
+  it('keeps pending retry headers separate from the generation being superseded', async () => {
+    telemetryExtension(mockPi as any);
+    await fireEvent('session_start', {});
+    await fireEvent('input', { text: 'retry' });
+    await fireEvent('before_provider_headers', { headers: { 'x-request-id': 'first' } });
+    await fireEvent('before_provider_request', { payload: {} });
+    await fireEvent('before_provider_headers', { headers: { 'x-request-id': 'retry' } });
+    await fireEvent('before_provider_request', { payload: {} });
+    await fireEvent('message_end', { message: { role: 'assistant', content: 'done' } });
+    const terminal = getPublishedEvents().filter(
+      (event) => 'status' in event && ['completed', 'failed'].includes(event.status),
+    );
+    expect(terminal.map((event) => event.requestHeaders?.['x-request-id'])).toEqual([
+      'first',
+      'retry',
+    ]);
   });
 
   it('measures first content latency rather than the stream start and records actual model attribution', async () => {

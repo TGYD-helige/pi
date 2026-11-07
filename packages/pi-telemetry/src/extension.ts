@@ -293,6 +293,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   let completionStartTime: string | undefined;
   let requestParameters: JsonObject = {};
   let providerHeaders: Pick<RuntimeTelemetryEvent, 'requestHeaders' | 'responseHeaders'> = {};
+  let pendingRequestHeaders: Record<string, string> | undefined;
   let modelPricingKnown = false;
   let generationOpen = false;
   let boundaryFailure: { error?: string; outcome?: string } = {};
@@ -425,6 +426,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     hasProviderFrames = false;
     completionStartTime = undefined;
     providerHeaders = {};
+    pendingRequestHeaders = undefined;
     compactionStartedAt = undefined;
     branchSummaryStartedAt = undefined;
     supportsSettlement = false;
@@ -524,6 +526,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     traceStartTime = undefined;
     tracePublished = false;
     llmGenerationCounter = 0;
+    pendingRequestHeaders = undefined;
   });
 
   pi.on('before_agent_start', (event) => {
@@ -568,6 +571,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
       currentTraceId =
         (isSubagent ? inheritedTraceId : undefined) ?? randomUUID().replace(/-/g, '');
       llmGenerationCounter = 0;
+      pendingRequestHeaders = undefined;
       tracePublished = false;
     }
     if (!traceStartTime) {
@@ -1039,7 +1043,8 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     lastModelConfig = modelConfigFromCtx(ctx);
     modelPricingKnown = hasModelPricing(ctx);
     requestParameters = modelParameters(event.payload, ctx.thinkingLevel);
-    providerHeaders = {};
+    providerHeaders = pendingRequestHeaders ? { requestHeaders: pendingRequestHeaders } : {};
+    pendingRequestHeaders = undefined;
     if (capturePayloads) systemPrompt = ctx.getSystemPrompt?.() ?? systemPrompt;
     completionStartTime = undefined;
     streamStartedAt = Date.now();
@@ -1070,8 +1075,8 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   });
 
   pi.on('before_provider_headers', (event) => {
-    if (enabled && capturePayloads && generationOpen)
-      providerHeaders.requestHeaders = captureProviderHeaders(event.headers);
+    if (enabled && capturePayloads && currentTraceId)
+      pendingRequestHeaders = captureProviderHeaders(event.headers);
   });
 
   pi.on('after_provider_response', async (event) => {
