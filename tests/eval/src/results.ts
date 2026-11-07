@@ -50,7 +50,8 @@ export function summarize(rows: TrialRow[]) {
     avgToolCalls: avg(rows.map((row) => row.toolCalls)),
     avgDurationMs: avg(rows.map((row) => row.durationMs)),
     avgTokens:
-      rows.length && rows.every((row) => row.totalTokens !== undefined)
+      rows.length &&
+      rows.every((row) => row.failureMode !== 'crash' && row.totalTokens !== undefined)
         ? avg(rows.map((row) => row.totalTokens!))
         : null,
     failureMix,

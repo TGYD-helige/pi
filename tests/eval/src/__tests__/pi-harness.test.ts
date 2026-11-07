@@ -190,4 +190,53 @@ process.stdout.write(JSON.stringify({type:'message_end',message:{role:'assistant
     const result = await drivePrompt({ cfgDir: dir, cleanup() {} }, config, 'task', '');
     expect(result).toMatchObject({ failureMode: 'ok', answer: 'Done' });
   });
+  it('retains completed work and reported usage when Pi exits unsuccessfully', async () => {
+    await cli(
+      [
+        { type: 'turn_start' },
+        {
+          type: 'tool_execution_end',
+          toolName: 'browser_click',
+          result: { content: [{ type: 'text', text: 'clicked' }] },
+        },
+        {
+          type: 'message_end',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'Done' }],
+            usage: { totalTokens: 15 },
+          },
+        },
+      ],
+      1,
+    );
+    const result = await drivePrompt({ cfgDir: dir, cleanup() {} }, config, 'task', '');
+    expect(result).toMatchObject({
+      failureMode: 'crash',
+      answer: '',
+      turns: 1,
+      toolCalls: 1,
+      totalTokens: 15,
+    });
+    expect(result.toolResults?.[0]).toMatchObject({ toolName: 'browser_click', text: 'clicked' });
+    expect(result.observed).toContain('clicked');
+  });
+
+  it('retains completed tool events when the invocation hits its deadline', async () => {
+    await writeFile(
+      path.join(dir, 'pi'),
+      `#!/usr/bin/env node
+process.stdout.write(JSON.stringify({type:'tool_execution_end',toolName:'browser_click',result:{content:[{type:'text',text:'clicked'}]}})+String.fromCharCode(10),()=>setInterval(()=>{},1000));`,
+    );
+    await chmod(path.join(dir, 'pi'), 0o755);
+    const result = await drivePrompt(
+      { cfgDir: dir, cleanup() {} },
+      { ...config, timeoutMs: 1500 },
+      'task',
+      '',
+    );
+    expect(result).toMatchObject({ failureMode: 'crash', toolCalls: 1 });
+    expect(result.error).toMatch(/deadline/);
+    expect(result.toolResults?.[0]?.text).toBe('clicked');
+  });
 });

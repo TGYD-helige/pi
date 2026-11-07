@@ -65,4 +65,7 @@ describe('evaluation results', () => {
     });
     expect(summarize([])).toMatchObject({ successRate: null, consistentTaskRate: null });
   });
+  it('does not present partial usage from crashed trials as a complete token average', () => {
+    expect(summarize([row('read', 1, 1), row('read', 2, 0, 'crash')]).avgTokens).toBeNull();
+  });
 });

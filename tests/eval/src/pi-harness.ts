@@ -171,13 +171,19 @@ export async function setupHarness(hcfg: HarnessConfig, ext: ExtensionSetup): Pr
   }
 }
 
-/** Spawn `pi` with the isolated config dir. Resolves with {stdout, code}. */
+interface PiProcessResult {
+  stdout: string;
+  code: number;
+  error?: string;
+}
+
+/** Spawn Pi and retain bounded diagnostics even when the invocation fails. */
 function runPi(
   cfgDir: string,
   args: string[],
   timeoutMs: number,
   credentialEnv: readonly string[] = [],
-): Promise<{ stdout: string; code: number }> {
+): Promise<PiProcessResult> {
   return new Promise((resolve, reject) => {
     // Strip env vars that would hijack pi's provider selection. Claude Code (and
     // some shells) inject ANTHROPIC_*/OPENAI_* etc.; pi picks those up over its
@@ -276,15 +282,11 @@ function runPi(
     child.on('close', (code) => {
       clearTimeout(timer);
       if (!failure && pending) keepLine(pending);
-      if (failure) {
-        reject(new Error(failure));
+      if (args[0] === 'install' && (failure || code !== 0)) {
+        reject(new Error(failure ?? `pi install failed (exit ${code})`));
         return;
       }
-      if (code !== 0 && args[0] === 'install') {
-        reject(new Error(`pi install failed (exit ${code})`));
-        return;
-      }
-      resolve({ stdout, code: code ?? 1 });
+      resolve({ stdout, code: code ?? 1, ...(failure ? { error: failure } : {}) });
     });
   });
 }
@@ -336,7 +338,7 @@ export async function drivePrompt(
   tools: string,
 ): Promise<DriveResult> {
   const started = Date.now();
-  let out: { stdout: string; code: number };
+  let out: PiProcessResult;
   const credentialEnv = [hcfg.apiKeyEnv];
   if (hcfg.modelsPath) {
     for (const match of readFileSync(hcfg.modelsPath, 'utf8').matchAll(
@@ -385,7 +387,7 @@ export async function drivePrompt(
   // pi can exit 0 while printing a plain-text fatal (e.g. "No API key found
   // for provider X") and emitting ZERO events. Without this, the run reads as
   // a silent check-failed instead of the crash it is.
-  if (events.length === 0 || out.code !== 0) {
+  if (events.length === 0) {
     return {
       durationMs: Date.now() - started,
       answer: '',
@@ -394,7 +396,7 @@ export async function drivePrompt(
       toolCalls: 0,
       sawToolError: false,
       failureMode: 'crash',
-      error: `Pi failed (exit ${out.code}, events ${events.length}).`,
+      error: out.error ?? `Pi failed (exit ${out.code}, events ${events.length}).`,
     };
   }
   let answer = '';
@@ -447,30 +449,23 @@ export async function drivePrompt(
     }
   }
 
-  // A failed final generation cannot be rescued by an earlier success claim.
-  if (providerError || !answer) {
-    return {
-      answer: '',
-      durationMs: Date.now() - started,
-      observed: truncate(observedParts.join('\n'), MAX_OBSERVED),
-      turns,
-      toolCalls,
-      sawToolError,
-      failureMode: 'crash',
-      error: providerError ?? 'Pi produced no final answer.',
-    };
-  }
+  const error =
+    out.error ??
+    (out.code !== 0
+      ? `Pi failed (exit ${out.code}).`
+      : (providerError ?? (!answer ? 'Pi produced no final answer.' : undefined)));
 
   return {
     durationMs: Date.now() - started,
     ...(usageKnown && generations ? { totalTokens } : {}),
     toolResults,
-    answer: truncate(answer, MAX_ANSWER),
+    answer: error ? '' : truncate(answer, MAX_ANSWER),
     observed: truncate(observedParts.join('\n'), MAX_OBSERVED),
     turns,
     toolCalls,
     sawToolError,
-    failureMode: 'ok',
+    failureMode: error ? 'crash' : 'ok',
+    ...(error ? { error } : {}),
   };
 }
 

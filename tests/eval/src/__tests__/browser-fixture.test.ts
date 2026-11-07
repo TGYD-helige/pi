@@ -29,7 +29,7 @@ describe('browser task environment', () => {
       const cancel = fixture.tasks.find((task) => task.id === 'form-cancel')!;
       await fetch(`${fixture.url}/saved`);
       expect(save.check({ answer: save.gold, observed: save.gold })).toBe(false);
-      expect(cancel.check({ answer: cancel.gold, observed: '' })).toBe(true);
+      expect(cancel.check({ answer: cancel.gold, observed: '' })).toBe(false);
       await fetch(`${fixture.url}/save`, {
         method: 'POST',
         body: new URLSearchParams({ note: save.gold }),
@@ -62,7 +62,11 @@ describe('browser task environment', () => {
     const fixture = await startBrowserFixture();
     try {
       const task = fixture.tasks.find((task) => task.id === 'form-cancel')!;
-      await fetch(`${fixture.url}/saved`);
+      const replacement = fixture.tasks.find((task) => task.id === 'form-save')!.gold;
+      await fetch(`${fixture.url}/cancel`, {
+        method: 'POST',
+        body: new URLSearchParams({ note: replacement }),
+      });
       await fetch(`${fixture.url}/editor`);
       expect(task.check({ answer: task.gold, observed: '' })).toBe(true);
     } finally {
@@ -80,6 +84,28 @@ describe('browser task environment', () => {
       });
       const html = await (await fetch(`${fixture.url}/editor`)).text();
       expect(html).toContain(`value="${task.gold}"`);
+    } finally {
+      await fixture.close();
+    }
+  });
+  it('requires cancelling the edited value without persisting it', async () => {
+    const fixture = await startBrowserFixture();
+    try {
+      const task = fixture.tasks.find((task) => task.id === 'form-cancel')!;
+      const replacement = fixture.tasks.find((task) => task.id === 'form-save')!.gold;
+      await fetch(`${fixture.url}/saved`);
+      expect(task.check({ answer: task.gold, observed: '' })).toBe(false);
+      await fetch(`${fixture.url}/cancel`, {
+        method: 'POST',
+        body: new URLSearchParams({ note: task.gold }),
+      });
+      expect(task.check({ answer: task.gold, observed: '' })).toBe(false);
+      await fetch(`${fixture.url}/cancel`, {
+        method: 'POST',
+        body: new URLSearchParams({ note: replacement }),
+      });
+      expect(task.check({ answer: task.gold, observed: '' })).toBe(true);
+      expect(fixture.state().saved).toBe(task.gold);
     } finally {
       await fixture.close();
     }

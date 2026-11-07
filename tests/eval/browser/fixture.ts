@@ -10,12 +10,13 @@ export async function startBrowserFixture() {
   const replacement = `Saved-${nonce}`;
   let saved = original;
   let loggedIn = false;
+  let cancelled = false;
   let lastPage = '';
   const visited = new Set<string>();
   const server = createServer(async (req, res) => {
     try {
       const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
-      if (req.method === 'POST' && ['/login', '/save'].includes(pathname)) {
+      if (req.method === 'POST' && ['/login', '/save', '/cancel'].includes(pathname)) {
         let body = '';
         for await (const chunk of req) {
           body += chunk;
@@ -36,7 +37,8 @@ export async function startBrowserFixture() {
             res.writeHead(400).end('Invalid note');
             return;
           }
-          saved = replacement;
+          if (pathname === '/cancel') cancelled = true;
+          else saved = replacement;
         }
         res.writeHead(303, { Location: pathname === '/login' ? '/secure' : '/saved' }).end();
         return;
@@ -49,7 +51,7 @@ export async function startBrowserFixture() {
         '/ab': `<h1>A/B Test ${nonce}</h1>`,
         '/login':
           '<h1>Login</h1><form method="post" action="/login"><label>Username<input name="username"></label><label>Password<input type="password" name="password"></label><button>Login</button></form>',
-        '/editor': `<h1>Note editor</h1><form method="post" action="/save"><label>Note<input name="note" value="${saved}"></label><button>Save</button><a href="/saved">Cancel</a></form>`,
+        '/editor': `<h1>Note editor</h1><form method="post" action="/save"><label>Note<input name="note" value="${saved}"></label><button>Save</button><button formaction="/cancel">Cancel</button></form>`,
         '/saved': `<h1>Saved note</h1><p>${saved}</p>`,
       };
       if (loggedIn) pages['/secure'] = `<h1>Secure Area ${nonce}</h1>`;
@@ -109,7 +111,7 @@ export async function startBrowserFixture() {
         visited.has(destination) &&
         (task.id !== 'login-form-submit' || loggedIn) &&
         (task.id !== 'form-save' || saved === replacement) &&
-        (task.id !== 'form-cancel' || saved === original),
+        (task.id !== 'form-cancel' || (cancelled && saved === original)),
     };
   });
   return {
@@ -117,7 +119,7 @@ export async function startBrowserFixture() {
     username,
     password,
     tasks,
-    state: () => ({ lastPage, visited: [...visited], loggedIn, saved }),
+    state: () => ({ lastPage, visited: [...visited], loggedIn, saved, cancelled }),
     close: () =>
       new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));

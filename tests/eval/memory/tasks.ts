@@ -8,9 +8,10 @@ export interface MemoryTask {
   sessions: string[];
   question: string;
   expected: Record<string, string | null>;
-  required?: string[];
+  required?: Partial<MemoryState>;
   forbidden?: string[];
-  unchanged?: boolean;
+  unchanged?: (keyof MemoryState)[];
+  empty?: (keyof MemoryState)[];
   memoryCharLimit?: number;
 }
 
@@ -21,7 +22,7 @@ export const MEMORY_TASKS: MemoryTask[] = [
     sessions: [],
     question: 'Which response language does the user prefer? Set language to its English name.',
     expected: { language: 'Spanish' },
-    required: ['Spanish'],
+    required: { user: ['Spanish'] },
   },
   {
     id: 'correct-preference',
@@ -32,7 +33,7 @@ export const MEMORY_TASKS: MemoryTask[] = [
     question:
       'Which response language does the user currently prefer? Set language to its English name.',
     expected: { language: 'French' },
-    required: ['French'],
+    required: { user: ['French'] },
     forbidden: ['Spanish'],
   },
   {
@@ -43,7 +44,7 @@ export const MEMORY_TASKS: MemoryTask[] = [
     ],
     question: 'What shipping label is remembered? Use address as the key.',
     expected: { address: null },
-    forbidden: ['Dock-17'],
+    empty: ['memory', 'user'],
   },
   {
     id: 'project-scope',
@@ -51,7 +52,7 @@ export const MEMORY_TASKS: MemoryTask[] = [
     sessions: [],
     question: 'Give the exact test command for each project, using Alpha and Beta as keys.',
     expected: { Alpha: 'npm test', Beta: 'pnpm test' },
-    unchanged: true,
+    unchanged: ['memory', 'user'],
   },
   {
     id: 'unknown-project',
@@ -59,7 +60,7 @@ export const MEMORY_TASKS: MemoryTask[] = [
     sessions: [],
     question: 'What is the known test command for project Gamma? Use command as the key.',
     expected: { command: null },
-    unchanged: true,
+    unchanged: ['memory', 'user'],
   },
   {
     id: 'preserve-qualifiers',
@@ -70,7 +71,7 @@ export const MEMORY_TASKS: MemoryTask[] = [
     question:
       'Give the exact test command and deployment region for project Alpha, using command and region as keys.',
     expected: { command: 'pnpm test', region: 'eu-west-1' },
-    required: ['Alpha', 'pnpm test', 'eu-west-1'],
+    required: { memory: ['Alpha', 'pnpm test', 'eu-west-1'] },
     forbidden: ['uses npm test'],
   },
   {
@@ -79,7 +80,7 @@ export const MEMORY_TASKS: MemoryTask[] = [
     sessions: ['Remember that my lasting response-language preference is Spanish.'],
     question: 'Which response language does the user prefer? Set language to its English name.',
     expected: { language: 'Spanish' },
-    unchanged: true,
+    unchanged: ['memory', 'user'],
   },
   {
     id: 'skip-task-progress',
@@ -89,7 +90,7 @@ export const MEMORY_TASKS: MemoryTask[] = [
     ],
     question: 'Give the exact test command for project Alpha, using command as the key.',
     expected: { command: 'pnpm test' },
-    unchanged: true,
+    unchanged: ['memory', 'user'],
   },
   {
     id: 'avoid-inferred-preference',
@@ -100,7 +101,7 @@ export const MEMORY_TASKS: MemoryTask[] = [
     question:
       'Which programming language is established as the user preference? Use language as the key.',
     expected: { language: null },
-    forbidden: ['prefers Rust', 'preferred language is Rust'],
+    empty: ['memory', 'user'],
   },
   {
     id: 'capacity-preserves-facts',
@@ -115,7 +116,8 @@ export const MEMORY_TASKS: MemoryTask[] = [
     question:
       'Give the deployment regions for projects Alpha and Beta, using Alpha and Beta as keys.',
     expected: { Alpha: 'eu-west-1', Beta: 'ap-south-1' },
-    required: ['Alpha', 'eu-west-1', 'Beta', 'ap-south-1'],
+    required: { memory: ['Alpha', 'eu-west-1', 'Beta', 'ap-south-1'] },
+    unchanged: ['user'],
   },
   {
     id: 'save-new-preference',
@@ -123,7 +125,7 @@ export const MEMORY_TASKS: MemoryTask[] = [
     sessions: ['Remember my lasting editor preference: Neovim.'],
     question: 'Which editor does the user prefer? Use editor as the key.',
     expected: { editor: 'Neovim' },
-    required: ['Neovim'],
+    required: { user: ['Neovim'] },
   },
   {
     id: 'selective-forgetting',
@@ -133,7 +135,7 @@ export const MEMORY_TASKS: MemoryTask[] = [
     ],
     question: 'Give the known test commands for Alpha and Beta, using those names as keys.',
     expected: { Alpha: null, Beta: 'pnpm test' },
-    required: ['Beta', 'pnpm test'],
+    required: { memory: ['Beta', 'pnpm test'] },
     forbidden: ['Alpha'],
   },
 ];
@@ -162,11 +164,21 @@ export function gradeMemoryTask(
   )
     return false;
   if (!memoryEnabled) return true;
-  const text = [...state.memory, ...state.user].join('\n').toLowerCase();
   if (
-    task.required?.some((fact) => !text.includes(fact.toLowerCase())) ||
-    task.forbidden?.some((fact) => text.includes(fact.toLowerCase()))
+    task.memoryCharLimit !== undefined &&
+    state.memory.join('\n§\n').length > task.memoryCharLimit
   )
     return false;
-  return !task.unchanged || JSON.stringify(state) === JSON.stringify(task.seed);
+  for (const target of ['memory', 'user'] as const) {
+    if (task.empty?.includes(target) && state[target].length > 0) return false;
+    const text = state[target].join('\n').toLowerCase();
+    if (task.required?.[target]?.some((fact) => !text.includes(fact.toLowerCase()))) return false;
+    if (
+      task.unchanged?.includes(target) &&
+      JSON.stringify(state[target]) !== JSON.stringify(task.seed[target])
+    )
+      return false;
+  }
+  const text = [...state.memory, ...state.user].join('\n').toLowerCase();
+  return !task.forbidden?.some((fact) => text.includes(fact.toLowerCase()));
 }
