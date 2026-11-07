@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { measurePlugins, pluginMetrics } from './plugins.mjs';
+import { availableMetrics, discoverExtensions, measurePlugins, pluginMetrics } from './plugins.mjs';
 
 export const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
 
@@ -36,8 +36,19 @@ export const metrics = Object.fromEntries(
     ['telemetryPublish100EventsMs', 5],
     ['telemetryLifecycleMs', 3],
   ]
-    .map(([name, slack]) => [name, { unit: 'ms', slack }])
-    .concat([['telemetryRetainedHeapMiB', { unit: 'MiB', slack: 8 }]]),
+    .map(([name, slack]) => [
+      name,
+      {
+        unit: 'ms',
+        slack,
+        ...(name.startsWith('memory')
+          ? { plugin: 'pi-memory' }
+          : name.startsWith('telemetry')
+            ? { plugin: 'pi-telemetry' }
+            : {}),
+      },
+    ])
+    .concat([['telemetryRetainedHeapMiB', { unit: 'MiB', slack: 8, plugin: 'pi-telemetry' }]]),
 );
 
 Object.assign(metrics, pluginMetrics);
@@ -45,28 +56,13 @@ Object.assign(metrics, pluginMetrics);
 export async function measure(root) {
   const load = (relative) => import(pathToFileURL(path.resolve(root, 'packages', relative)).href);
   const result = {};
+  const available = await discoverExtensions(root);
   const start = performance.now();
   const { boundStructuredContent } = await load('shared/dist/index.js');
   const { scanForThreats } = await load('shared/dist/threat-patterns.js');
   result.coldImportMs = performance.now() - start;
-  const { default: telemetryExtension } = await load('pi-telemetry/dist/index.js');
   const { loadPiSettings, loadPiSettingsAsync, loadPiPolicyProfilesAsync } =
     await load('shared/dist/settings.js');
-  const { MemoryStore } = await load('pi-memory/dist/store.js');
-  const { captureProviderHeaders, providerDisplayInput, serializeTelemetryValue } = await load(
-    'pi-telemetry/dist/observations.js',
-  );
-  const { redactTelemetryValue, truncateAttributePayload } = await load(
-    'pi-telemetry/dist/otel/utils.js',
-  );
-  const { MAX_ATTRIBUTE_VALUE_BYTES } = await load('pi-telemetry/dist/otel/types.js');
-  const { OtelRuntimeEventExporter } = await load('pi-telemetry/dist/otel/exporters.js');
-  const require = createRequire(path.resolve(root, 'packages/pi-telemetry/package.json'));
-  const {
-    BasicTracerProvider,
-    InMemorySpanExporter,
-    SimpleSpanProcessor,
-  } = require('@opentelemetry/sdk-trace-base');
 
   function sync(name, operation, iterations = 50) {
     for (let i = 0; i < 5; i++) operation();
@@ -168,170 +164,204 @@ export async function measure(root) {
     sync('boundOutputMs', () => boundStructuredContent(payload), 10);
     sync('boundLargeOutputMs', () => boundStructuredContent(largePayload), 3);
 
-    const memoryDir = path.join(fixture, 'memory');
-    const store = new MemoryStore({ dir: memoryDir });
-    await store.loadFromDisk();
-    for (let i = 0; i < 12; i++)
-      assert.equal(
-        (await store.add('memory', `Project ${i} uses TypeScript and pnpm.`)).success,
-        true,
-      );
-    await store.loadFromDisk();
-    assert.equal(store.getEntries('memory').length, 12);
-    assert.match(store.formatAllForSystemPrompt(), /Project 11/);
-    await asyncTime('memoryLoadMs', () => new MemoryStore({ dir: memoryDir }).loadFromDisk());
-    await asyncTime('memoryReadMs', () => store.read('memory'));
-    sync('memoryPromptMs', () => store.formatAllForSystemPrompt());
-    await asyncTime(
-      'memoryWriteRoundtripMs',
-      async () => {
-        assert.equal((await store.add('memory', 'Temporary performance record')).success, true);
-        assert.equal((await store.remove('memory', 'Temporary performance record')).success, true);
-      },
-      2,
-    );
-    await asyncTime(
-      'memoryConcurrent4Ms',
-      async () => {
-        const added = await Promise.all(
-          Array.from({ length: 4 }, (_, i) =>
-            store.add('memory', `Concurrent performance record ${i}`),
-          ),
+    if (available.includes('pi-memory')) {
+      const { MemoryStore } = await load('pi-memory/dist/store.js');
+      const memoryDir = path.join(fixture, 'memory');
+      const store = new MemoryStore({ dir: memoryDir });
+      await store.loadFromDisk();
+      for (let i = 0; i < 12; i++)
+        assert.equal(
+          (await store.add('memory', `Project ${i} uses TypeScript and pnpm.`)).success,
+          true,
         );
-        assert.ok(added.every((entry) => entry.success));
-        assert.equal((await store.read('memory')).entryCount, 16);
-        for (let i = 0; i < 4; i++)
+      await store.loadFromDisk();
+      assert.equal(store.getEntries('memory').length, 12);
+      assert.match(store.formatAllForSystemPrompt(), /Project 11/);
+      await asyncTime('memoryLoadMs', () => new MemoryStore({ dir: memoryDir }).loadFromDisk());
+      await asyncTime('memoryReadMs', () => store.read('memory'));
+      sync('memoryPromptMs', () => store.formatAllForSystemPrompt());
+      await asyncTime(
+        'memoryWriteRoundtripMs',
+        async () => {
+          assert.equal((await store.add('memory', 'Temporary performance record')).success, true);
           assert.equal(
-            (await store.remove('memory', `Concurrent performance record ${i}`)).success,
+            (await store.remove('memory', 'Temporary performance record')).success,
             true,
           );
-      },
-      1,
-    );
-    assert.equal((await store.read('memory')).entryCount, 12);
-    assert.ok(!(await readdir(memoryDir)).some((name) => /\.lock|\.tmp/.test(name)));
-
-    const handlers = new Map();
-    telemetryExtension({
-      on: (name, handler) => handlers.set(name, handler),
-      registerCommand() {},
-    });
-    let historyReads = 0;
-    const ctx = {
-      cwd: project,
-      hasUI: false,
-      isProjectTrusted: () => true,
-      sessionManager: {
-        getSessionId: () => 'performance',
-        getEntries: () => {
-          historyReads++;
-          return [];
         },
-      },
-    };
-    await asyncTime('telemetryDisabledSessionMs', async () => {
-      await handlers.get('session_start')({}, ctx);
-      await handlers.get('session_shutdown')({}, ctx);
-    });
-    sync('telemetryDisabledPromptMs', () => {
-      handlers.get('before_agent_start')({ prompt: context, systemPrompt: context }, ctx);
-      handlers.get('agent_start')({}, ctx);
-      handlers.get('context')({ messages: [] }, ctx);
-    });
-    assert.equal(historyReads, 0);
-
-    const request = {
-      instructions: 'Performance fixture',
-      input: Array.from({ length: 100 }, (_, i) => ({
-        role: i % 2 ? 'assistant' : 'user',
-        content: `Message ${i}: ${'text '.repeat(100)}`,
-      })),
-    };
-    assert.equal(providerDisplayInput(request).length, 101);
-    assert.deepEqual(JSON.parse(serializeTelemetryValue(request, 128 * 1024)), request);
-    const oversized = { input: 'x'.repeat(2 * 1024 * 1024) };
-    assert.equal(serializeTelemetryValue(oversized, 128 * 1024), undefined);
-    const headers = {
-      Authorization: 'fixture-secret',
-      ...Object.fromEntries(
-        Array.from({ length: 100 }, (_, i) => [`x-header-${i}`, 'x'.repeat(1000)]),
-      ),
-    };
-    assert.equal(captureProviderHeaders(headers).Authorization, '[redacted]');
-    const redactionConfig = { maskingSecrets: ['fixture-secret'], redactFields: ['password'] };
-    const privateRequest = { ...request, password: 'fixture-password', note: 'fixture-secret' };
-    const masked = JSON.stringify(redactTelemetryValue(redactionConfig, privateRequest));
-    assert.ok(!masked.includes('fixture-secret') && !masked.includes('fixture-password'));
-    const multibyte = '中文'.repeat(175_000);
-    assert.ok(Buffer.byteLength(truncateAttributePayload(multibyte)) <= MAX_ATTRIBUTE_VALUE_BYTES);
-    sync('telemetryProject100MessagesMs', () => providerDisplayInput(request));
-    sync('telemetrySerialize100MessagesMs', () => serializeTelemetryValue(request, 128 * 1024), 10);
-    sync('telemetryRejectOversizedMs', () => serializeTelemetryValue(oversized, 128 * 1024));
-    sync('telemetryMaskHeadersMs', () => captureProviderHeaders(headers));
-    sync('telemetryRedactMs', () => redactTelemetryValue(redactionConfig, privateRequest), 10);
-    sync('telemetryTruncate1MiBMs', () => truncateAttributePayload(multibyte), 10);
-
-    function exporterFixture() {
-      const sink = new InMemorySpanExporter();
-      const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(sink)] });
-      const exporter = new OtelRuntimeEventExporter(
-        {
-          enabled: true,
-          endpoint: '',
-          includePayloads: true,
-          flushAt: 100,
-          flushIntervalMs: 60_000,
-        },
-        { provider },
+        2,
       );
-      return { exporter, sink };
-    }
-    let counter = 0;
-    const event = () => ({
-      id: `event-${counter++}`,
-      traceId: '11111111111111111111111111111111',
-      type: 'chat_turn_completed',
-      sessionId: 'performance',
-      createdAt: new Date().toISOString(),
-      details: { input: 'Performance fixture' },
-    });
-    const active = exporterFixture();
-    try {
       await asyncTime(
-        'telemetryPublish100EventsMs',
+        'memoryConcurrent4Ms',
         async () => {
-          active.sink.reset();
-          await Promise.all(Array.from({ length: 100 }, () => active.exporter.publish(event())));
-          await active.exporter.flush();
-          assert.equal(active.sink.getFinishedSpans().length, 100);
+          const added = await Promise.all(
+            Array.from({ length: 4 }, (_, i) =>
+              store.add('memory', `Concurrent performance record ${i}`),
+            ),
+          );
+          assert.ok(added.every((entry) => entry.success));
+          assert.equal((await store.read('memory')).entryCount, 16);
+          for (let i = 0; i < 4; i++)
+            assert.equal(
+              (await store.remove('memory', `Concurrent performance record ${i}`)).success,
+              true,
+            );
         },
         1,
       );
-    } finally {
-      await active.exporter.close();
+      assert.equal((await store.read('memory')).entryCount, 12);
+      assert.ok(!(await readdir(memoryDir)).some((name) => /\.lock|\.tmp/.test(name)));
     }
-    const lifecycle = async () => {
-      const { exporter, sink } = exporterFixture();
-      try {
-        await exporter.publish(event());
-        await exporter.flush();
-        assert.equal(sink.getFinishedSpans().length, 1);
-      } finally {
-        await exporter.close();
+
+    if (available.includes('pi-telemetry')) {
+      const { default: telemetryExtension } = await load('pi-telemetry/dist/index.js');
+      const { captureProviderHeaders, providerDisplayInput, serializeTelemetryValue } = await load(
+        'pi-telemetry/dist/observations.js',
+      );
+      const { redactTelemetryValue, truncateAttributePayload } = await load(
+        'pi-telemetry/dist/otel/utils.js',
+      );
+      const { MAX_ATTRIBUTE_VALUE_BYTES } = await load('pi-telemetry/dist/otel/types.js');
+      const { OtelRuntimeEventExporter } = await load('pi-telemetry/dist/otel/exporters.js');
+      const require = createRequire(path.resolve(root, 'packages/pi-telemetry/package.json'));
+      const {
+        BasicTracerProvider,
+        InMemorySpanExporter,
+        SimpleSpanProcessor,
+      } = require('@opentelemetry/sdk-trace-base');
+      const handlers = new Map();
+      telemetryExtension({
+        on: (name, handler) => handlers.set(name, handler),
+        registerCommand() {},
+      });
+      let historyReads = 0;
+      const ctx = {
+        cwd: project,
+        hasUI: false,
+        isProjectTrusted: () => true,
+        sessionManager: {
+          getSessionId: () => 'performance',
+          getEntries: () => {
+            historyReads++;
+            return [];
+          },
+        },
+      };
+      await asyncTime('telemetryDisabledSessionMs', async () => {
+        await handlers.get('session_start')({}, ctx);
+        await handlers.get('session_shutdown')({}, ctx);
+      });
+      sync('telemetryDisabledPromptMs', () => {
+        handlers.get('before_agent_start')({ prompt: context, systemPrompt: context }, ctx);
+        handlers.get('agent_start')({}, ctx);
+        handlers.get('context')({ messages: [] }, ctx);
+      });
+      assert.equal(historyReads, 0);
+
+      const request = {
+        instructions: 'Performance fixture',
+        input: Array.from({ length: 100 }, (_, i) => ({
+          role: i % 2 ? 'assistant' : 'user',
+          content: `Message ${i}: ${'text '.repeat(100)}`,
+        })),
+      };
+      assert.equal(providerDisplayInput(request).length, 101);
+      assert.deepEqual(JSON.parse(serializeTelemetryValue(request, 128 * 1024)), request);
+      const oversized = { input: 'x'.repeat(2 * 1024 * 1024) };
+      assert.equal(serializeTelemetryValue(oversized, 128 * 1024), undefined);
+      const headers = {
+        Authorization: 'fixture-secret',
+        ...Object.fromEntries(
+          Array.from({ length: 100 }, (_, i) => [`x-header-${i}`, 'x'.repeat(1000)]),
+        ),
+      };
+      assert.equal(captureProviderHeaders(headers).Authorization, '[redacted]');
+      const redactionConfig = { maskingSecrets: ['fixture-secret'], redactFields: ['password'] };
+      const privateRequest = { ...request, password: 'fixture-password', note: 'fixture-secret' };
+      const masked = JSON.stringify(redactTelemetryValue(redactionConfig, privateRequest));
+      assert.ok(!masked.includes('fixture-secret') && !masked.includes('fixture-password'));
+      const multibyte = '中文'.repeat(175_000);
+      assert.ok(
+        Buffer.byteLength(truncateAttributePayload(multibyte)) <= MAX_ATTRIBUTE_VALUE_BYTES,
+      );
+      sync('telemetryProject100MessagesMs', () => providerDisplayInput(request));
+      sync(
+        'telemetrySerialize100MessagesMs',
+        () => serializeTelemetryValue(request, 128 * 1024),
+        10,
+      );
+      sync('telemetryRejectOversizedMs', () => serializeTelemetryValue(oversized, 128 * 1024));
+      sync('telemetryMaskHeadersMs', () => captureProviderHeaders(headers));
+      sync('telemetryRedactMs', () => redactTelemetryValue(redactionConfig, privateRequest), 10);
+      sync('telemetryTruncate1MiBMs', () => truncateAttributePayload(multibyte), 10);
+
+      function exporterFixture() {
+        const sink = new InMemorySpanExporter();
+        const provider = new BasicTracerProvider({
+          spanProcessors: [new SimpleSpanProcessor(sink)],
+        });
+        const exporter = new OtelRuntimeEventExporter(
+          {
+            enabled: true,
+            endpoint: '',
+            includePayloads: true,
+            flushAt: 100,
+            flushIntervalMs: 60_000,
+          },
+          { provider },
+        );
+        return { exporter, sink };
       }
-      assert.equal(exporter.getStatus().state, 'closed');
-    };
-    await asyncTime('telemetryLifecycleMs', lifecycle);
-    assert.equal(typeof global.gc, 'function', 'Run the worker with --expose-gc');
-    for (let i = 0; i < 10; i++) await lifecycle();
-    global.gc();
-    const heapBefore = process.memoryUsage().heapUsed;
-    for (let i = 0; i < 100; i++) await lifecycle();
-    global.gc();
-    result.telemetryRetainedHeapMiB =
-      Math.max(0, process.memoryUsage().heapUsed - heapBefore) / 1024 / 1024;
+      let counter = 0;
+      const event = () => ({
+        id: `event-${counter++}`,
+        traceId: '11111111111111111111111111111111',
+        type: 'chat_turn_completed',
+        sessionId: 'performance',
+        createdAt: new Date().toISOString(),
+        details: { input: 'Performance fixture' },
+      });
+      const active = exporterFixture();
+      try {
+        await asyncTime(
+          'telemetryPublish100EventsMs',
+          async () => {
+            active.sink.reset();
+            await Promise.all(Array.from({ length: 100 }, () => active.exporter.publish(event())));
+            await active.exporter.flush();
+            assert.equal(active.sink.getFinishedSpans().length, 100);
+          },
+          1,
+        );
+      } finally {
+        await active.exporter.close();
+      }
+      const lifecycle = async () => {
+        const { exporter, sink } = exporterFixture();
+        try {
+          await exporter.publish(event());
+          await exporter.flush();
+          assert.equal(sink.getFinishedSpans().length, 1);
+        } finally {
+          await exporter.close();
+        }
+        assert.equal(exporter.getStatus().state, 'closed');
+      };
+      await asyncTime('telemetryLifecycleMs', lifecycle);
+      assert.equal(typeof global.gc, 'function', 'Run the worker with --expose-gc');
+      for (let i = 0; i < 10; i++) await lifecycle();
+      global.gc();
+      const heapBefore = process.memoryUsage().heapUsed;
+      for (let i = 0; i < 100; i++) await lifecycle();
+      global.gc();
+      result.telemetryRetainedHeapMiB =
+        Math.max(0, process.memoryUsage().heapUsed - heapBefore) / 1024 / 1024;
+    }
     await measurePlugins({ root, load, sync, asyncTime, fixture, project, result });
-    assert.deepEqual(Object.keys(result).sort(), Object.keys(metrics).sort());
+    assert.deepEqual(
+      Object.keys(result).sort(),
+      Object.keys(availableMetrics(metrics, available)).sort(),
+    );
     return result;
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;

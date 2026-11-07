@@ -1,11 +1,20 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { appendFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { setImmediate as tick, setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { extensions } from './plugins.mjs';
+import { availableMetrics, discoverExtensions, extensions } from './plugins.mjs';
+
+const common = ['pi-memory', 'pi-attachments', 'pi-security', 'pi-goal', 'pi-telemetry'];
+function sessionDependencies(name) {
+  if (name.includes('Empty')) return [];
+  if (name.includes('Memory')) return ['pi-memory'];
+  if (['cancel32PrefetchMs', 'uncancellableSingleFlightMs', 'captureDrain16Ms'].includes(name))
+    return ['pi-memory-mem0'];
+  return common;
+}
 
 export const sessionMetrics = Object.fromEntries(
   [
@@ -24,13 +33,13 @@ export const sessionMetrics = Object.fromEntries(
     ['captureDrain16Ms', 3],
     ['sessionLifecycle500Ms', 50],
   ]
-    .map(([name, slack]) => [name, { unit: 'ms', slack }])
+    .map(([name, slack]) => [name, { unit: 'ms', slack, requires: sessionDependencies(name) }])
     .concat([
-      ['sessionRetainedHeapMiB', { unit: 'MiB', slack: 8 }],
-      ['sessionRssGrowthMiB', { unit: 'MiB', slack: 16 }],
-      ['sessionFdGrowth', { unit: 'count', slack: 1 }],
-      ['sessionActiveResourceGrowth', { unit: 'count', slack: 1 }],
-      ['sessionChildGrowth', { unit: 'count', slack: 0 }],
+      ['sessionRetainedHeapMiB', { unit: 'MiB', slack: 8, requires: common }],
+      ['sessionRssGrowthMiB', { unit: 'MiB', slack: 16, requires: common }],
+      ['sessionFdGrowth', { unit: 'count', slack: 1, requires: common }],
+      ['sessionActiveResourceGrowth', { unit: 'count', slack: 1, requires: common }],
+      ['sessionChildGrowth', { unit: 'count', slack: 0, requires: common }],
     ]),
 );
 
@@ -38,7 +47,11 @@ export const profileMetrics = Object.fromEntries(
   [...extensions, 'all'].flatMap((name) =>
     ['startupMs', 'hooks1000Ms', 'shutdownMs'].map((metric) => [
       `profile.${name}.${metric}`,
-      { unit: 'ms', slack: metric === 'startupMs' ? 20 : 0.2 },
+      {
+        unit: 'ms',
+        slack: metric === 'startupMs' ? 20 : 0.2,
+        requires: name === 'all' ? [] : [name],
+      },
     ]),
   ),
 );
@@ -59,14 +72,13 @@ export const soakMetrics = Object.fromEntries(
     ]),
 );
 
-const common = ['pi-memory', 'pi-attachments', 'pi-security', 'pi-goal', 'pi-telemetry'];
 export const percentile = (values, fraction) =>
   [...values].sort((a, b) => a - b)[Math.ceil(values.length * fraction) - 1];
 
-async function cliReady(root, fixture, names) {
+async function cliReady(root, fixture, names, sdkPackage) {
   const sdkRoot = path.join(
     root,
-    'packages/pi-memory/node_modules/@earendil-works/pi-coding-agent',
+    `packages/${sdkPackage}/node_modules/@earendil-works/pi-coding-agent`,
   );
   const args = [
     '--import',
@@ -157,6 +169,10 @@ export async function measureSessions(
   { profiles = false, soakMinutes = 0, progressPath } = {},
 ) {
   root = path.resolve(root);
+  const available = await discoverExtensions(root);
+  const supported = extensions.filter((name) => available.includes(name));
+  const hasCommon = common.every((name) => available.includes(name));
+  const sdkPackage = available.includes('pi-memory') ? 'pi-memory' : supported[0];
   assert.equal(typeof global.gc, 'function', 'Run performance workers with --expose-gc');
   const fixture = await mkdtemp(path.join(tmpdir(), 'pi-performance-sessions-'));
   const previous = {
@@ -194,9 +210,10 @@ export async function measureSessions(
       }),
     );
     if (!profiles && !soakMinutes) {
-      result.cliEmptyReadyMs = await cliReady(root, fixture, []);
-      result.cliMemoryReadyMs = await cliReady(root, fixture, ['pi-memory']);
-      result.cliCommonReadyMs = await cliReady(root, fixture, common);
+      result.cliEmptyReadyMs = await cliReady(root, fixture, [], sdkPackage);
+      if (available.includes('pi-memory'))
+        result.cliMemoryReadyMs = await cliReady(root, fixture, ['pi-memory'], sdkPackage);
+      if (hasCommon) result.cliCommonReadyMs = await cliReady(root, fixture, common, sdkPackage);
     }
     let transportHits;
     const fixtureTransports = profiles || soakMinutes > 0;
@@ -245,9 +262,13 @@ export async function measureSessions(
       await writeFile(settingsPath, JSON.stringify(settings));
     }
     const load = (relative) => import(pathToFileURL(path.join(root, 'packages', relative)).href);
-    const sdk = await load('pi-memory/node_modules/@earendil-works/pi-coding-agent/dist/index.js');
+    const sdk = await load(
+      `${sdkPackage}/node_modules/@earendil-works/pi-coding-agent/dist/index.js`,
+    );
     const factories = new Map();
-    for (const name of fixtureTransports ? extensions : common)
+    for (const name of fixtureTransports
+      ? supported
+      : common.filter((name) => available.includes(name)))
       factories.set(
         name,
         (
@@ -385,8 +406,8 @@ export async function measureSessions(
         'pi-channels': 'notify',
         'pi-teamwork': 'workspace_list',
       };
-      for (const name of [...extensions, 'all']) {
-        const names = name === 'all' ? extensions : [name];
+      for (const name of [...supported, 'all']) {
+        const names = name === 'all' ? supported : [name];
         const started = performance.now();
         const session = await create(names);
         result[`profile.${name}.startupMs`] = performance.now() - started;
@@ -399,26 +420,31 @@ export async function measureSessions(
         await close(session);
         result[`profile.${name}.shutdownMs`] = performance.now() - closing;
       }
-      for (const key of [
-        'browser.catalog',
-        'mem0.init',
-        'mem0.search',
-        'dingtalk.init',
-        'lark.init',
-        'wecom.ready',
-        'teamwork.init',
-        'channels.adapter',
-        'telemetry.export',
+      for (const [plugin, key] of [
+        ['pi-browser-use', 'browser.catalog'],
+        ['pi-memory-mem0', 'mem0.init'],
+        ['pi-memory-mem0', 'mem0.search'],
+        ['pi-dingtalk', 'dingtalk.init'],
+        ['pi-lark', 'lark.init'],
+        ['pi-wecom', 'wecom.ready'],
+        ['pi-teamwork', 'teamwork.init'],
+        ['pi-channels', 'channels.adapter'],
+        ['pi-telemetry', 'telemetry.export'],
       ])
-        assert.ok(transportHits[key] > 0, `Transport fixture did not execute: ${key}`);
-      if (process.platform !== 'darwin') assert.ok(transportHits['computer.catalog'] > 0);
-      assert.deepEqual(Object.keys(result).sort(), Object.keys(profileMetrics).sort());
+        if (available.includes(plugin))
+          assert.ok(transportHits[key] > 0, `Transport fixture did not execute: ${key}`);
+      if (available.includes('pi-computer-use') && process.platform !== 'darwin')
+        assert.ok(transportHits['computer.catalog'] > 0);
+      assert.deepEqual(
+        Object.keys(result).sort(),
+        Object.keys(availableMetrics(profileMetrics, available)).sort(),
+      );
       return { ...result, observations: { transportHits } };
     }
     if (soakMinutes) {
       assert.ok(Number.isFinite(soakMinutes) && soakMinutes > 0 && soakMinutes <= 120);
       for (let i = 0; i < 100; i++) {
-        const session = await create(extensions);
+        const session = await create(supported);
         await round(session);
         await close(session);
       }
@@ -441,7 +467,7 @@ export async function measureSessions(
       let nextSnapshot = Math.min(60_000, soakMinutes * 60_000);
       while (performance.now() - started < soakMinutes * 60_000) {
         const cycleStart = performance.now();
-        const session = await create(extensions);
+        const session = await create(supported);
         await round(session);
         await close(session);
         window.push(performance.now() - cycleStart);
@@ -472,7 +498,7 @@ export async function measureSessions(
         ...measured,
         observations: {
           durationMinutes: soakMinutes,
-          extensions,
+          extensions: supported,
           transportHits,
           elapsedMs: performance.now() - started,
           cycles,
@@ -487,152 +513,165 @@ export async function measureSessions(
       ['Memory', ['pi-memory']],
       ['Common', common],
     ]) {
+      if (!names.every((name) => available.includes(name))) continue;
       const session = await create(names);
       await time(`hooks${label}1000Ms`, () => round(session));
       if (label === 'Common') await time('hooksCommon10000Ms', () => round(session, 10000));
       await close(session);
     }
-    const sessions = await Promise.all(Array.from({ length: 4 }, () => create(common)));
     const latencies = [];
-    try {
-      await time(
-        'concurrentHooks4BatchMs',
-        () =>
-          Promise.all(
-            sessions.map(async (session) => {
-              const started = performance.now();
-              await round(session);
-              latencies.push(performance.now() - started);
-            }),
-          ),
-        30,
-      );
-      latencies.splice(0, 12);
-      assert.equal(latencies.length, 120);
-      result.concurrentHooks4P95Ms = percentile(latencies, 0.95);
-      result.concurrentHooks4P99Ms = percentile(latencies, 0.99);
-    } finally {
-      for (const session of sessions) await close(session);
+    if (hasCommon) {
+      const sessions = await Promise.all(Array.from({ length: 4 }, () => create(common)));
+      try {
+        await time(
+          'concurrentHooks4BatchMs',
+          () =>
+            Promise.all(
+              sessions.map(async (session) => {
+                const started = performance.now();
+                await round(session);
+                latencies.push(performance.now() - started);
+              }),
+            ),
+          30,
+        );
+        latencies.splice(0, 12);
+        assert.equal(latencies.length, 120);
+        result.concurrentHooks4P95Ms = percentile(latencies, 0.95);
+        result.concurrentHooks4P99Ms = percentile(latencies, 0.99);
+      } finally {
+        for (const session of sessions) await close(session);
+      }
     }
 
-    const { Prefetch } = await load('pi-memory-mem0/dist/prefetch.js');
-    await time('cancel32PrefetchMs', async () => {
-      let cancelled = 0;
-      const calls = Array.from({ length: 32 }, () => {
+    if (available.includes('pi-memory-mem0')) {
+      const { Prefetch } = await load('pi-memory-mem0/dist/prefetch.js');
+      await time('cancel32PrefetchMs', async () => {
+        let cancelled = 0;
+        let active = 0;
+        const prefetches = [];
+        const calls = Array.from({ length: 32 }, () => {
+          const prefetch = new Prefetch(
+            {
+              supportsSearchCancellation: true,
+              search: (_query, { signal }) =>
+                new Promise((_resolve, reject) => {
+                  active++;
+                  signal.addEventListener(
+                    'abort',
+                    () => {
+                      cancelled++;
+                      active--;
+                      reject(signal.reason);
+                    },
+                    { once: true },
+                  );
+                }),
+            },
+            'fixture',
+            { topK: 5 },
+          );
+          assert.equal(prefetch.queue('fixture'), true);
+          const pending = prefetch.consume();
+          prefetches.push(prefetch);
+          return pending.then((value) => {
+            assert.equal(value, undefined);
+            assert.equal(prefetch.hasPending, false);
+          });
+        });
+        assert.equal(active, 32);
+        for (const prefetch of prefetches) prefetch.cancel();
+        await Promise.all(calls);
+        assert.equal(cancelled, 32);
+        assert.equal(active, 0);
+      });
+      await time('uncancellableSingleFlightMs', async () => {
+        let finish;
+        let calls = 0;
         const prefetch = new Prefetch(
           {
-            supportsSearchCancellation: true,
-            search: (_query, { signal }) =>
-              new Promise((_resolve, reject) =>
-                signal.addEventListener(
-                  'abort',
-                  () => {
-                    cancelled++;
-                    reject(signal.reason);
-                  },
-                  { once: true },
-                ),
-              ),
+            supportsSearchCancellation: false,
+            search: () => {
+              calls++;
+              return new Promise((resolve) => {
+                finish = resolve;
+              });
+            },
           },
           'fixture',
           { topK: 5 },
         );
-        assert.equal(prefetch.queue('fixture'), true);
+        prefetch.queue('fixture');
         const pending = prefetch.consume();
         prefetch.cancel();
-        return pending.then((value) => {
-          assert.equal(value, undefined);
-          assert.equal(prefetch.hasPending, false);
-        });
+        await pending;
+        assert.equal(prefetch.queue('blocked'), false);
+        assert.equal(calls, 1);
+        finish([]);
+        await tick();
+        assert.equal(prefetch.queue('recovered'), true);
+        finish([]);
+        await prefetch.consume();
       });
-      await Promise.all(calls);
-      assert.equal(cancelled, 32);
-    });
-    await time('uncancellableSingleFlightMs', async () => {
-      let finish;
-      let calls = 0;
-      const prefetch = new Prefetch(
-        {
-          supportsSearchCancellation: false,
-          search: () => {
-            calls++;
-            return new Promise((resolve) => {
-              finish = resolve;
-            });
-          },
-        },
-        'fixture',
-        { topK: 5 },
-      );
-      prefetch.queue('fixture');
-      const pending = prefetch.consume();
-      prefetch.cancel();
-      await pending;
-      assert.equal(prefetch.queue('blocked'), false);
-      assert.equal(calls, 1);
-      finish([]);
-      await tick();
-      assert.equal(prefetch.queue('recovered'), true);
-      finish([]);
-      await prefetch.consume();
-    });
-    const { CaptureQueue } = await load('pi-memory-mem0/dist/capture.js');
-    await time(
-      'captureDrain16Ms',
-      async () => {
-        let release;
-        let calls = 0;
-        let active = 0;
-        let maximum = 0;
-        let saved = [];
-        const state = {};
-        const queue = new CaptureQueue(
-          {
-            supportsObservationDates: true,
-            add: async () => {
-              calls++;
-              maximum = Math.max(maximum, ++active);
-              if (calls === 1)
-                await new Promise((resolve) => {
-                  release = resolve;
-                });
-              else await tick();
-              active--;
-              return { results: [] };
+      const { CaptureQueue } = await load('pi-memory-mem0/dist/capture.js');
+      await time(
+        'captureDrain16Ms',
+        async () => {
+          let release;
+          let calls = 0;
+          let active = 0;
+          let maximum = 0;
+          let saved = [];
+          const state = {};
+          const queue = new CaptureQueue(
+            {
+              supportsObservationDates: true,
+              add: async () => {
+                calls++;
+                maximum = Math.max(maximum, ++active);
+                if (calls === 1)
+                  await new Promise((resolve) => {
+                    release = resolve;
+                  });
+                else await tick();
+                active--;
+                return { results: [] };
+              },
             },
-          },
-          { userId: 'fixture' },
-          state,
-          (value) => {
-            saved = value;
-          },
-        );
-        try {
-          const turn = {
-            observedAt: new Date().toISOString(),
-            messages: [
-              { role: 'user', content: 'fixture' },
-              { role: 'assistant', content: 'fixture' },
-            ],
-          };
-          for (let i = 0; i < 16; i++) assert.equal(queue.enqueue(turn), true);
-          assert.equal(queue.enqueue(turn), false);
-          assert.equal(saved.length, 16);
-          release();
-          const deadline = performance.now() + 2000;
-          while (saved.length) {
-            assert.ok(performance.now() < deadline, 'Capture drain exceeded deadline');
-            await tick();
+            { userId: 'fixture' },
+            state,
+            (value) => {
+              saved = value;
+            },
+          );
+          try {
+            const turn = {
+              observedAt: new Date().toISOString(),
+              messages: [
+                { role: 'user', content: 'fixture' },
+                { role: 'assistant', content: 'fixture' },
+              ],
+            };
+            for (let i = 0; i < 16; i++) assert.equal(queue.enqueue(turn), true);
+            assert.equal(queue.enqueue(turn), false);
+            assert.equal(saved.length, 16);
+            release();
+            const deadline = performance.now() + 2000;
+            while (saved.length) {
+              assert.ok(performance.now() < deadline, 'Capture drain exceeded deadline');
+              await tick();
+            }
+            assert.equal(calls, 16);
+            assert.equal(maximum, 1);
+          } finally {
+            release?.();
+            queue.close();
+            if (state.active) await state.active;
           }
-          assert.equal(calls, 16);
-          assert.equal(maximum, 1);
-        } finally {
-          queue.close();
-          if (state.active) await state.active;
-        }
-      },
-      5,
-    );
+        },
+        5,
+      );
+    }
 
     async function resources() {
       await delay(25);
@@ -657,33 +696,40 @@ export async function measureSessions(
         children,
       };
     }
-    for (let i = 0; i < 10; i++) {
-      const session = await create(common);
-      await round(session);
-      await close(session);
+    let observations = { concurrentLatenciesMs: latencies };
+    if (hasCommon) {
+      for (let i = 0; i < 10; i++) {
+        const session = await create(common);
+        await round(session);
+        await close(session);
+      }
+      const before = await resources();
+      const checkpoints = [];
+      let lifecycleMs = 0;
+      for (let i = 0; i < 500; i++) {
+        const started = performance.now();
+        const session = await create(common);
+        await round(session);
+        await close(session);
+        lifecycleMs += performance.now() - started;
+        if ((i + 1) % 100 === 0) checkpoints.push({ cycle: i + 1, ...(await resources()) });
+      }
+      result.sessionLifecycle500Ms = lifecycleMs;
+      const growth = (key) => Math.max(0, ...checkpoints.map((point) => point[key] - before[key]));
+      result.sessionRetainedHeapMiB = growth('heapUsed') / 1024 / 1024;
+      result.sessionRssGrowthMiB = growth('rss') / 1024 / 1024;
+      result.sessionFdGrowth = growth('fds');
+      result.sessionActiveResourceGrowth = growth('resources');
+      result.sessionChildGrowth = growth('children');
+      assert.equal(open.size, 0);
+      assert.equal(result.sessionChildGrowth, 0);
+      observations = { ...observations, before, checkpoints };
     }
-    const before = await resources();
-    const checkpoints = [];
-    let lifecycleMs = 0;
-    for (let i = 0; i < 500; i++) {
-      const started = performance.now();
-      const session = await create(common);
-      await round(session);
-      await close(session);
-      lifecycleMs += performance.now() - started;
-      if ((i + 1) % 100 === 0) checkpoints.push({ cycle: i + 1, ...(await resources()) });
-    }
-    result.sessionLifecycle500Ms = lifecycleMs;
-    const growth = (key) => Math.max(0, ...checkpoints.map((point) => point[key] - before[key]));
-    result.sessionRetainedHeapMiB = growth('heapUsed') / 1024 / 1024;
-    result.sessionRssGrowthMiB = growth('rss') / 1024 / 1024;
-    result.sessionFdGrowth = growth('fds');
-    result.sessionActiveResourceGrowth = growth('resources');
-    result.sessionChildGrowth = growth('children');
-    assert.equal(open.size, 0);
-    assert.equal(result.sessionChildGrowth, 0);
-    assert.deepEqual(Object.keys(result).sort(), Object.keys(sessionMetrics).sort());
-    return { ...result, observations: { before, checkpoints, concurrentLatenciesMs: latencies } };
+    assert.deepEqual(
+      Object.keys(result).sort(),
+      Object.keys(availableMetrics(sessionMetrics, available)).sort(),
+    );
+    return { ...result, observations };
   } finally {
     for (const session of open) {
       await session.abort();

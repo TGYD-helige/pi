@@ -13,6 +13,7 @@ import {
 } from './sessions.mjs';
 import { OFFLINE_MESSAGE } from './no-network.mjs';
 import { connect } from 'node:net';
+import { availableMetrics, discoverExtensions, extensions } from './plugins.mjs';
 
 const script = fileURLToPath(import.meta.url);
 const dispersion = (values) => {
@@ -20,6 +21,55 @@ const dispersion = (values) => {
   return median(values.map((value) => Math.abs(value - center)));
 };
 const regressed = (base, head, slack) => head > base * 1.3 + slack;
+
+function compare(metrics, base, head, baselineExtensions, candidateExtensions) {
+  const baselineMetrics = availableMetrics(metrics, baselineExtensions);
+  const candidateMetrics = availableMetrics(metrics, candidateExtensions);
+  const inventoryChanged =
+    JSON.stringify(baselineExtensions) !== JSON.stringify(candidateExtensions);
+  return Object.entries(metrics).flatMap(([metric, { unit, slack }]) => {
+    const hasBase = metric in baselineMetrics;
+    const hasHead = metric in candidateMetrics;
+    if (!hasBase && !hasHead) return [];
+    for (const row of hasBase ? base : [])
+      assert.ok(
+        Number.isFinite(row[metric]) && row[metric] >= 0,
+        `Invalid baseline metric: ${metric}`,
+      );
+    for (const row of hasHead ? head : [])
+      assert.ok(
+        Number.isFinite(row[metric]) && row[metric] >= 0,
+        `Invalid candidate metric: ${metric}`,
+      );
+    const baseline = hasBase ? median(base.map((row) => row[metric])) : null;
+    const current = hasHead ? median(head.map((row) => row[metric])) : null;
+    const baselineMad = hasBase ? dispersion(base.map((row) => row[metric])) : null;
+    const effectiveSlack = hasBase ? Math.max(slack, 3 * baselineMad) : null;
+    const status = !hasBase
+      ? 'ADDED'
+      : !hasHead
+        ? 'REMOVED'
+        : inventoryChanged && (metric.startsWith('profile.all.') || metric.startsWith('soak'))
+          ? 'NOT_COMPARABLE'
+          : 'COMPARED';
+    const failed = status === 'COMPARED' && regressed(baseline, current, effectiveSlack);
+    return [
+      {
+        metric,
+        unit,
+        configuredSlack: slack,
+        slack: effectiveSlack,
+        baselineMad,
+        baseline,
+        current,
+        limit: status === 'COMPARED' ? baseline * 1.3 + effectiveSlack : null,
+        status,
+        failed,
+      },
+    ];
+  });
+}
+const display = (value) => (value === null ? '—' : value.toFixed(3));
 
 function sample(root, label) {
   return JSON.parse(
@@ -66,6 +116,40 @@ if (mode === '--self-test') {
   assert.equal(regressed(0, 9, runtimeMetrics.telemetryRetainedHeapMiB.slack), true);
   for (const { slack } of Object.values(metrics)) assert.ok(slack >= 0);
   for (const { slack } of Object.values(sessionMetrics)) assert.ok(slack >= 0);
+  const coverageMetrics = {
+    shared: { unit: 'ms', slack: 1 },
+    added: { unit: 'ms', slack: 1, plugin: 'new' },
+    removed: { unit: 'ms', slack: 1, plugin: 'old' },
+    'profile.all.startupMs': { unit: 'ms', slack: 1 },
+    soakCycleMedianMs: { unit: 'ms', slack: 1 },
+  };
+  const baseSample = { shared: 10, removed: 3, 'profile.all.startupMs': 4, soakCycleMedianMs: 2 };
+  const headSample = { shared: 20, added: 5, 'profile.all.startupMs': 8, soakCycleMedianMs: 7 };
+  const coverage = compare(coverageMetrics, [baseSample], [headSample], ['old'], ['new']);
+  assert.deepEqual(
+    coverage.map(({ status }) => status),
+    ['COMPARED', 'ADDED', 'REMOVED', 'NOT_COMPARABLE', 'NOT_COMPARABLE'],
+  );
+  assert.equal(coverage[0].failed, true);
+  assert.equal(coverage[1].baseline, null);
+  assert.equal(coverage[2].current, null);
+  assert.equal(coverage[3].limit, null);
+  assert.deepEqual(availableMetrics({ combo: { requires: ['old', 'new'] } }, ['old']), {});
+  const combinationMetrics = {
+    'profile.all.startupMs': { unit: 'ms', slack: 1 },
+    soakCycleMedianMs: { unit: 'ms', slack: 1 },
+  };
+  const sameInventory = compare(combinationMetrics, [baseSample], [headSample], [], []);
+  assert.ok(sameInventory.every(({ status, failed }) => status === 'COMPARED' && failed));
+
+  assert.throws(
+    () => compare(coverageMetrics, [baseSample], [{}], ['old'], ['new']),
+    /Invalid candidate metric/,
+  );
+  assert.throws(
+    () => compare(coverageMetrics, [{}], [headSample], ['old'], ['new']),
+    /Invalid baseline metric/,
+  );
   assert.throws(() => connect({ host: '127.0.0.1', port: 9 }), { message: OFFLINE_MESSAGE });
   await assert.rejects(fetch('https://example.invalid'), { message: OFFLINE_MESSAGE });
   const ordered = Array.from({ length: 100 }, (_, i) => i + 1);
@@ -96,6 +180,17 @@ if (mode === '--self-test') {
     mode && candidate && output,
     'Usage: runtime.mjs <baseline-root> <candidate-root> <output-dir> [runtime|sessions|profiles|soak] [soak-minutes]',
   );
+  const baselineExtensions = await discoverExtensions(mode);
+  const candidateExtensions = await discoverExtensions(candidate);
+  assert.deepEqual(
+    candidateExtensions,
+    [...extensions].sort(),
+    'Update performance coverage when adding or removing an extension',
+  );
+  const addedExtensions = candidateExtensions.filter((name) => !baselineExtensions.includes(name));
+  const removedExtensions = baselineExtensions.filter(
+    (name) => !candidateExtensions.includes(name),
+  );
   mkdirSync(output, { recursive: true });
   const base = [];
   const head = [];
@@ -109,31 +204,13 @@ if (mode === '--self-test') {
       base.push(sample(mode, `base-${i}`));
     }
   }
-  const results = Object.entries(metrics).map(([metric, { unit, slack }]) => {
-    const baselineValues = base.map((row) => row[metric]);
-    const baseline = median(baselineValues);
-    const baselineMad = dispersion(baselineValues);
-    const effectiveSlack = Math.max(slack, 3 * baselineMad);
-    const current = median(head.map((row) => row[metric]));
-    assert.ok(
-      Number.isFinite(baseline) && baseline >= 0 && Number.isFinite(current) && current >= 0,
-    );
-    return {
-      metric,
-      unit,
-      configuredSlack: slack,
-      slack: effectiveSlack,
-      baselineMad,
-      baseline,
-      current,
-      limit: baseline * 1.3 + effectiveSlack,
-      failed: regressed(baseline, current, effectiveSlack),
-    };
-  });
+  const results = compare(metrics, base, head, baselineExtensions, candidateExtensions);
   const report = [
     `## ${suite} performance`,
     '',
     `Same-runner comparison, ${pairs} fresh process(es) per revision. Values are medians per operation (or per named batch). TCP connections and fetch requests are forbidden; model tasks and service validation belong in Integration.`,
+    '',
+    `Added extensions: ${addedExtensions.join(', ') || 'none'}. Removed extensions: ${removedExtensions.join(', ') || 'none'}. ADDED/REMOVED metrics have no two-sided comparison. All-extension profile and soak metrics are NOT_COMPARABLE when extension inventories differ; their measurements and assertions still run.`,
     '',
     ...(suite === 'profiles'
       ? [
@@ -160,7 +237,7 @@ if (mode === '--self-test') {
     '| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |',
     ...results.map(
       (row) =>
-        `| ${row.metric} | ${row.unit} | ${row.baseline.toFixed(3)} | ${row.current.toFixed(3)} | ${row.baselineMad.toFixed(3)} | ${row.slack.toFixed(3)} | ${row.limit.toFixed(3)} | ${row.failed ? 'FAIL' : 'PASS'} |`,
+        `| ${row.metric} | ${row.unit} | ${display(row.baseline)} | ${display(row.current)} | ${display(row.baselineMad)} | ${display(row.slack)} | ${display(row.limit)} | ${row.status === 'COMPARED' ? (row.failed ? 'FAIL' : 'PASS') : row.status} |`,
     ),
     '',
   ].join('\n');
@@ -177,6 +254,7 @@ if (mode === '--self-test') {
         base,
         head,
         results,
+        coverage: { baselineExtensions, candidateExtensions, addedExtensions, removedExtensions },
       },
       null,
       2,
