@@ -199,7 +199,8 @@ export async function measureSessions(
       result.cliCommonReadyMs = await cliReady(root, fixture, common);
     }
     let transportHits;
-    if (profiles) {
+    const fixtureTransports = profiles || soakMinutes > 0;
+    if (fixtureTransports) {
       delete process.env.PI_CHANNELS_DISABLE_SESSION_AUTOSTART;
       ({ transportHits } = await import('./transports.mjs'));
       const settingsPath = path.join(fixture, 'settings.json');
@@ -246,7 +247,7 @@ export async function measureSessions(
     const load = (relative) => import(pathToFileURL(path.join(root, 'packages', relative)).href);
     const sdk = await load('pi-memory/node_modules/@earendil-works/pi-coding-agent/dist/index.js');
     const factories = new Map();
-    for (const name of profiles ? extensions : common)
+    for (const name of fixtureTransports ? extensions : common)
       factories.set(
         name,
         (
@@ -417,7 +418,7 @@ export async function measureSessions(
     if (soakMinutes) {
       assert.ok(Number.isFinite(soakMinutes) && soakMinutes > 0 && soakMinutes <= 120);
       for (let i = 0; i < 100; i++) {
-        const session = await create(common);
+        const session = await create(extensions);
         await round(session);
         await close(session);
       }
@@ -440,7 +441,7 @@ export async function measureSessions(
       let nextSnapshot = Math.min(60_000, soakMinutes * 60_000);
       while (performance.now() - started < soakMinutes * 60_000) {
         const cycleStart = performance.now();
-        const session = await create(common);
+        const session = await create(extensions);
         await round(session);
         await close(session);
         window.push(performance.now() - cycleStart);
@@ -471,6 +472,8 @@ export async function measureSessions(
         ...measured,
         observations: {
           durationMinutes: soakMinutes,
+          extensions,
+          transportHits,
           elapsedMs: performance.now() - started,
           cycles,
           before,

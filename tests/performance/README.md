@@ -53,7 +53,7 @@ These are enabled local-extension measurements, not external-service or business
 
 ## Sustained resource load
 
-A separate weekly job runs 60 minutes per revision; manual dispatch accepts `soak_minutes=60` or `120` (default `0`, which skips the long job). Baseline and candidate run sequentially on one runner, so the default long job lasts approximately two hours plus setup. It runs the common five-extension configuration with no external transports or model requests. PR jobs keep their bounded 500-cycle probe.
+A separate weekly job runs 60 minutes per revision; manual dispatch accepts `soak_minutes=60` or `120` (default `0`, which skips the long job). Baseline and candidate run sequentially on one runner, so the default long job lasts approximately two hours plus setup. It runs all 17 extensions together using the same fixed transport fixtures as the enabled-profile suite, with no external transports or model requests. PR jobs keep their bounded 500-cycle probe.
 
 After 100 warmup cycles, the long worker continuously creates a session, processes static hook events, and shuts down, with a 100 ms duty-cycle pause. It snapshots heap, RSS, descriptors, active resources, and child processes every minute, persists those checkpoints incrementally to per-revision JSONL files (also uploaded if measurement fails), retaining at most the latest 256 cycle latencies for median/P95/P99 reporting. Reports compare maximum growth against each revision's warmed process. Child-process growth always fails. The long job uses one long-lived process per revision rather than seven short samples; its configured noise floors apply. Existing baseline memory growth can still exist and must be assessed from the checkpoints.
 
