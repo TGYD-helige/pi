@@ -1,0 +1,63 @@
+name: Effect Eval Comparison
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Evaluation suite (no paid media generation)
+        type: choice
+        options: [browser, memory]
+        default: memory
+      base_ref:
+        description: Baseline revision in this repository
+        type: string
+        default: master
+      model:
+        description: Model override (empty uses PI_INTEGRATION_MODEL)
+        type: string
+        default: ''
+      trials:
+        description: Independent trials per task (1-20)
+        type: string
+        default: '3'
+      tasks:
+        description: First N tasks (0 = all)
+        type: string
+        default: '0'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: effect-eval-${{ github.ref }}-${{ inputs.target }}
+  cancel-in-progress: true
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      PI_INTEGRATION_BASE_URL: ${{ secrets.PI_INTEGRATION_BASE_URL }}
+      PI_INTEGRATION_API_KEY: ${{ secrets.PI_INTEGRATION_API_KEY }}
+      PI_EVAL_MODEL: ${{ inputs.model || vars.PI_INTEGRATION_MODEL || secrets.PI_INTEGRATION_MODEL || 'deepseek-v4-flash' }}
+      TARGET: ${{ inputs.target }}
+      TRIALS: ${{ inputs.trials }}
+      TASKS: ${{ inputs.tasks }}
+      BASE_REF: ${{ inputs.base_ref }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build candidate and install Pi
+        uses: ./.github/actions/setup-pi-build
+        with:
+          install-pi-cli: 'true'
+          set-pi-agent-dir: 'true'
+      - name: Evaluate and compare revisions
+        run: bash .github/scripts/effect-eval.sh
+      - name: Upload results and diagnostic traces
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: effect-eval-${{ inputs.target }}
+          path: tests/eval/results/
+          retention-days: 14
+          if-no-files-found: warn

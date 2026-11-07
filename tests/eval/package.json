@@ -13,7 +13,9 @@
     "eval:computer": "tsx computer/run-computer.ts",
     "eval:video": "tsx video/run-video.ts",
     "judge:llm": "tsx scripts/judge-llm.ts",
-    "judge:video": "tsx scripts/judge-video.ts"
+    "judge:video": "tsx scripts/judge-video.ts",
+    "eval:memory:product": "tsx memory/run-product.ts",
+    "compare": "tsx ../../.github/scripts/effect-eval-compare.ts"
   },
   "dependencies": {
     "@amaster.ai/pi-memory": "workspace:*",
