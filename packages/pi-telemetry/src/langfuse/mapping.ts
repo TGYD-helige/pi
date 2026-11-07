@@ -201,14 +201,43 @@ function serializeObservation(value: JsonValue): string {
       !Array.isArray(message.tools)
     )
       continue;
-    for (const tool of message.tools) {
-      const size = Buffer.byteLength(JSON.stringify(tool)) + 1;
-      if (tools.length >= 100 || toolBytes + size > 100_000) {
+    if (message.tools.length > 100) omittedTools = true;
+    for (const raw of message.tools.slice(0, 100)) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
         omittedTools = true;
-        break;
+        continue;
       }
-      tools.push(tool);
-      toolBytes += size;
+      const declarations = Array.isArray(raw.functionDeclarations)
+        ? raw.functionDeclarations
+        : [raw.function ?? raw];
+      if (declarations.length > 100) omittedTools = true;
+      for (const declaration of declarations.slice(0, 100)) {
+        if (
+          !declaration ||
+          typeof declaration !== 'object' ||
+          Array.isArray(declaration) ||
+          typeof declaration.name !== 'string'
+        ) {
+          omittedTools = true;
+          continue;
+        }
+        const tool: JsonObject = {
+          name: declaration.name,
+          ...(typeof declaration.description === 'string'
+            ? { description: declaration.description }
+            : {}),
+          ...((declaration.parameters ?? declaration.input_schema)
+            ? { parameters: declaration.parameters ?? declaration.input_schema }
+            : {}),
+        };
+        const size = Buffer.byteLength(JSON.stringify(tool)) + 1;
+        if (tools.length >= 100 || toolBytes + size > 100_000) {
+          omittedTools = true;
+          break;
+        }
+        tools.push(tool);
+        toolBytes += size;
+      }
     }
     break;
   }

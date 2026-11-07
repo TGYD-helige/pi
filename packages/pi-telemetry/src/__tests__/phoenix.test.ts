@@ -98,6 +98,9 @@ describe('Phoenix telemetry export', () => {
       expect(
         JSON.parse(String(spans[0]!.attributes['llm.tools.0.tool.json_schema'])),
       ).toMatchObject({ name: 'bash' });
+      expect(JSON.parse(String(spans[0]!.attributes['input.value']))[0].tools[0]).toMatchObject({
+        name: 'bash',
+      });
       expect(JSON.parse(String(spans[0]!.attributes.metadata))).toMatchObject({
         environment: 'test',
         release: 'release-1',
@@ -272,7 +275,7 @@ describe('Phoenix telemetry export', () => {
             tools: [{ type: 'function', function: { name: 'bash', parameters: {} } }],
           },
           ...Array.from({ length: 100 }, () => ({ role: 'user', content: 'old' })),
-          { role: 'user', content: 'LATEST' + '中'.repeat(200_000) },
+          { role: 'user', content: `LATEST${'中'.repeat(200_000)}` },
         ],
       });
       await exporter.publish({
