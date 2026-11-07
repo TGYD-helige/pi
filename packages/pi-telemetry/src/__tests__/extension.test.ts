@@ -332,6 +332,39 @@ describe('telemetryExtension', () => {
     ]);
   });
 
+  it.each([
+    'bytes',
+    'nodes',
+    'depth',
+  ])('bounds raw provider-frame traversal by %s', async (limit) => {
+    telemetryExtension(mockPi as any);
+    await fireEvent('session_start', {});
+    await fireEvent('input', { text: 'bounded stream' });
+    await fireEvent('before_provider_request', { payload: {} });
+    const readLate = vi.fn(() => 'late');
+    const frame: Record<string, unknown> = {};
+    if (limit === 'bytes') frame.payload = 'x'.repeat(1_000_001);
+    if (limit === 'nodes')
+      frame.payload = Array.from({ length: 20_000 }, () => ({ text: 'entry' }));
+    if (limit === 'depth') {
+      let nested: Record<string, unknown> = frame;
+      for (let index = 0; index < 1000; index++) {
+        const child = {};
+        nested.child = child;
+        nested = child;
+      }
+    }
+    Object.defineProperty(frame, 'late', { enumerable: true, get: readLate });
+    await fireEvent('provider_stream_event', { data: frame });
+    await fireEvent('provider_stream_event', { data: frame });
+    await fireEvent('message_end', { message: { role: 'assistant', content: 'done' } });
+    expect(readLate).not.toHaveBeenCalled();
+    const stream = getPublishedEvents().find((event) => 'streamEvents' in event)!;
+    expect('streamEvents' in stream && stream.streamEvents).toEqual([
+      { type: 'truncated', maxBytes: 1_000_000 },
+    ]);
+  });
+
   it('measures first content latency rather than the stream start and records actual model attribution', async () => {
     vi.useFakeTimers();
     try {

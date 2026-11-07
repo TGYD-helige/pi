@@ -5,6 +5,7 @@ import type {
   RuntimeLlmGenerationEvent,
   RuntimeToolEvent,
 } from '@amaster.ai/pi-shared';
+import { serializeTelemetryValue } from '../observations.js';
 import { utf8Prefix } from '../otel/utils.js';
 
 export function langfuseObservationAttributes(input: {
@@ -232,7 +233,7 @@ function serializeObservation(value: JsonValue): string {
             ? { parameters: declaration.parameters ?? declaration.input_schema }
             : {}),
         };
-        const encoded = boundedJson(tool, 100_000 - toolBytes);
+        const encoded = serializeTelemetryValue(tool, 100_000 - toolBytes);
         const size = encoded === undefined ? 100_001 : Buffer.byteLength(encoded) + 1;
         if (tools.length >= 100 || toolBytes + size > 100_000) {
           omittedTools = true;
@@ -256,7 +257,7 @@ function serializeObservation(value: JsonValue): string {
   let truncated = omittedTools;
   for (let index = value.length - 1; index >= 0 && selected.length < 99; index--) {
     const message = value[index] as JsonObject;
-    const encoded = boundedJson(message, 500_000 - bytes - 1, true);
+    const encoded = serializeTelemetryValue(message, 500_000 - bytes - 1, true);
     let item: JsonObject = encoded === undefined ? {} : JSON.parse(encoded);
     let size = encoded === undefined ? 500_001 : Buffer.byteLength(encoded) + 1;
     if (bytes + size > 500_000) {
@@ -264,7 +265,7 @@ function serializeObservation(value: JsonValue): string {
       const content =
         typeof message.content === 'string'
           ? message.content
-          : (boundedJson(message.content ?? null, Math.max(0, 500_000 - bytes)) ??
+          : (serializeTelemetryValue(message.content ?? null, Math.max(0, 500_000 - bytes)) ??
             '[structured content omitted]');
       item = {
         role: typeof message.role === 'string' ? message.role : 'assistant',
@@ -285,55 +286,4 @@ function serializeObservation(value: JsonValue): string {
   )
     selected[0] = { ...selected[0], tools };
   return JSON.stringify(selected);
-}
-
-// Stop walking before allocating a serialized oversized message or tool schema.
-function boundedJson(value: JsonValue, maxBytes: number, skipTools = false): string | undefined {
-  const limit = new Error('Display budget exceeded');
-  const ancestors = new Set<object>();
-  let remaining = maxBytes;
-  let nodes = 0;
-  function token(value: JsonValue): string {
-    if (typeof value === 'string' && value.length > remaining) throw limit;
-    const encoded = JSON.stringify(value);
-    remaining -= Buffer.byteLength(encoded);
-    if (remaining < 0) throw limit;
-    return encoded;
-  }
-  function encode(value: JsonValue | undefined, depth: number): string {
-    if (++nodes > 10_000 || depth > 32) throw limit;
-    if (!value || typeof value !== 'object') return token(value ?? null);
-    if (ancestors.has(value)) throw limit;
-    ancestors.add(value);
-    remaining -= 2;
-    if (remaining < 0) throw limit;
-    try {
-      const parts: string[] = [];
-      if (Array.isArray(value)) {
-        for (const item of value) {
-          if (parts.length) remaining--;
-          parts.push(encode(item, depth + 1));
-        }
-        return `[${parts.join(',')}]`;
-      }
-      for (const key in value) {
-        if (!Object.hasOwn(value, key) || (skipTools && depth === 0 && key === 'tools')) continue;
-        const field = value[key];
-        if (field === undefined) continue;
-        if (parts.length) remaining--;
-        const name = token(key);
-        remaining--;
-        parts.push(`${name}:${encode(field, depth + 1)}`);
-      }
-      return `{${parts.join(',')}}`;
-    } finally {
-      ancestors.delete(value);
-    }
-  }
-  try {
-    return encode(value, 0);
-  } catch (error) {
-    if (error !== limit) throw error;
-    return undefined;
-  }
 }

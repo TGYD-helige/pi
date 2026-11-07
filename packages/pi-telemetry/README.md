@@ -99,7 +99,7 @@ Configuration is read from the `"pi-telemetry"` section of, in increasing priori
 | `userId` | `string` | — | Standard trace user identifier |
 | `environment` | `string` | — | Langfuse environment label, e.g. `development` or `production` |
 | `release` | `string` | — | Release label; independent of OTEL serviceVersion |
-| `tags` | `string[]` | `[]` | Additional trace tags in Langfuse and Phoenix; up to 32 unique trimmed entries of 128 characters |
+| `tags` | `string[]` | `[]` | Additional trace tags in Langfuse and Phoenix; up to 32 unique trimmed entries of 128 characters, examining the first 256 candidates (strings over 4096 characters are ignored) |
 | `traceName` | `string` | `"chat-turn"` | Langfuse trace and Phoenix root display name, bounded to 90 characters |
 | `redactFields` | `string[]` | `[]` | Case-insensitive field names to mask in captured payloads, JSON-encoded payloads and custom metadata; same list limits as tags |
 
@@ -212,7 +212,7 @@ Images require both payload and media switches. Prompt and tool images use valid
 
 All configured Langfuse credentials, Phoenix API keys, and sensitive OTLP header values, including those for disabled destinations, and Langfuse key patterns are masked before every destination, including error messages and raw stream inputs. This is credential masking, not general PII removal. The default remains no conversation/tool payload export, and `redactEvent` remains available for application-specific policies.
 
-When export is disabled, event handlers skip telemetry processing. Disabled startup also skips runtime loading and history scans. With `includePayloads: false`, each generation retains an empty `llm-stream` child for timing and hierarchy, while the extension skips context projection and model/tool payload capture while preserving usage, errors, model attribution, and first-token timing. Stream capture stops converting subsequent frames after the existing 1 MB capture ceiling is reached.
+When export is disabled, event handlers skip telemetry processing. Disabled startup also skips runtime loading and history scans. With `includePayloads: false`, each generation retains an empty `llm-stream` child for timing and hierarchy, while the extension skips context projection and model/tool payload capture while preserving usage, errors, model attribution, and first-token timing. Stream capture bounds each frame during traversal by the remaining 1 MB budget, 10,000 values and 32 nesting levels, then stops converting subsequent frames once truncated. Markers and array formatting count toward the capture budget.
 
 ## Context and auxiliary calls for extension authors
 

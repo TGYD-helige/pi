@@ -281,3 +281,60 @@ export function captureProviderHeaders(headers: unknown): Record<string, string>
   }
   return result;
 }
+
+// Stop before allocating oversized telemetry; callers receive undefined and add their omission marker.
+export function serializeTelemetryValue(
+  value: unknown,
+  maxBytes: number,
+  skipTools = false,
+): string | undefined {
+  const limit = {};
+  const ancestors = new Set<object>();
+  let remaining = maxBytes;
+  let nodes = 0;
+  function token(value: unknown): string {
+    const type = typeof value;
+    if (type === 'bigint' || type === 'symbol' || type === 'function') value = String(value);
+    if (typeof value === 'string' && value.length > remaining) throw limit;
+    const encoded = JSON.stringify(value ?? null);
+    remaining -= Buffer.byteLength(encoded);
+    if (remaining < 0) throw limit;
+    return encoded;
+  }
+  function encode(value: unknown, depth: number): string {
+    if (++nodes > 10_000 || depth > 32) throw limit;
+    if (!value || typeof value !== 'object') return token(value ?? null);
+    if (ancestors.has(value)) throw limit;
+    ancestors.add(value);
+    remaining -= 2;
+    if (remaining < 0) throw limit;
+    try {
+      const parts: string[] = [];
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          if (parts.length) remaining--;
+          parts.push(encode(item, depth + 1));
+        }
+        return `[${parts.join(',')}]`;
+      }
+      for (const key in value) {
+        if (!Object.hasOwn(value, key) || (skipTools && depth === 0 && key === 'tools')) continue;
+        const field = (value as Record<string, unknown>)[key];
+        if (field === undefined) continue;
+        if (parts.length) remaining--;
+        const name = token(key);
+        remaining--;
+        parts.push(`${name}:${encode(field, depth + 1)}`);
+      }
+      return `{${parts.join(',')}}`;
+    } finally {
+      ancestors.delete(value);
+    }
+  }
+  try {
+    return encode(value, 0);
+  } catch (error) {
+    if (error !== limit) throw error;
+    return undefined;
+  }
+}

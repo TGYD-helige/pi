@@ -22,6 +22,7 @@ import {
   hasFirstToken,
   modelParameters,
   providerDisplayInput,
+  serializeTelemetryValue,
   toTelemetryValue,
 } from './observations.js';
 import { createTelemetryExporter } from './otel.js';
@@ -1097,12 +1098,12 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   });
 
   function captureFrame(frame: unknown): void {
-    const value = toTelemetryValue(frame);
-    if (value === undefined) return;
-    const bytes = Buffer.byteLength(JSON.stringify(value));
-    if (streamBytes + bytes <= MAX_STREAM_CAPTURE_BYTES) {
-      streamEvents.push(value);
-      streamBytes += bytes;
+    if (frame === undefined) return;
+    // Reserve array formatting and a final truncation marker before encoding.
+    const encoded = serializeTelemetryValue(frame, MAX_STREAM_CAPTURE_BYTES - streamBytes - 100);
+    if (encoded !== undefined) {
+      streamEvents.push(JSON.parse(encoded));
+      streamBytes += Buffer.byteLength(encoded) + 1;
     } else {
       streamEvents.push({ type: 'truncated', maxBytes: MAX_STREAM_CAPTURE_BYTES });
       streamTruncated = true;

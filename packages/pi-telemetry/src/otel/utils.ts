@@ -150,6 +150,7 @@ export function applyTelemetryRedaction(
     'contextMetadata',
     'requestHeaders',
     'responseHeaders',
+    'modelParameters',
   ];
   const fieldsRedacted = config.redactFields?.length
     ? Object.fromEntries(

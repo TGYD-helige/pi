@@ -129,6 +129,28 @@ describe('telemetry', () => {
     await exporter.close();
   });
 
+  it.each([
+    true,
+    false,
+  ])('redacts configured auxiliary invocation fields with payloads=%s', async (includePayloads) => {
+    const { exporter, inMemory } = makeExporter({ includePayloads, redactFields: ['password'] });
+    await exporter.publish({
+      ...completedTurnEvent('auxiliary-privacy'),
+      llmGenerationId: 'aux',
+      status: 'completed',
+      source: 'compaction',
+      model: { provider: 'provider', model: 'actual' },
+      modelParameters: { temperature: 0.2, password: 'PRIVATE_SENTINEL' },
+    });
+    const attrs = inMemory.getFinishedSpans()[0]!.attributes;
+    expect(JSON.parse(String(attrs['langfuse.observation.model.parameters']))).toMatchObject({
+      temperature: 0.2,
+      password: '[redacted]',
+    });
+    expect(JSON.stringify(attrs)).not.toContain('PRIVATE_SENTINEL');
+    await exporter.close();
+  });
+
   it('does not fully serialize oversized nested display messages', async () => {
     const stringify = vi.spyOn(JSON, 'stringify');
     const { exporter, inMemory } = makeExporter();

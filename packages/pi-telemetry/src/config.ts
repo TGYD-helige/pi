@@ -152,13 +152,13 @@ export function configurationWarnings(config: TelemetryConfig): string[] {
 }
 
 export function stringList(value: unknown): string[] {
-  return Array.isArray(value)
-    ? [
-        ...new Set(
-          value
-            .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
-            .map((item) => item.trim().slice(0, 128)),
-        ),
-      ].slice(0, 32)
-    : [];
+  const result = new Set<string>();
+  if (!Array.isArray(value)) return [];
+  for (let index = 0; index < Math.min(value.length, 256) && result.size < 32; index++) {
+    const item = value[index];
+    if (typeof item !== 'string' || item.length > 4096) continue;
+    const text = item.trim().slice(0, 128);
+    if (text) result.add(text);
+  }
+  return [...result];
 }
