@@ -1,0 +1,55 @@
+name: Performance
+
+on:
+  pull_request:
+    branches: [master, main]
+  push:
+    branches: [master, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: performance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  performance:
+    name: Performance regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || format('{0}^', github.sha) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-pi-build
+        with:
+          build: 'false'
+      - name: Check benchmark regression detection
+        run: node tests/performance/runtime.mjs --self-test
+      - name: Build baseline
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/pi-performance-base" "$BASE_SHA"
+          cd "$RUNNER_TEMP/pi-performance-base"
+          pnpm install --frozen-lockfile
+          pnpm build
+      - name: Build candidate
+        run: pnpm build
+      - name: Measure and compare runtime performance
+        run: node tests/performance/runtime.mjs "$RUNNER_TEMP/pi-performance-base" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/performance"
+      - name: Publish report
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/performance/report.md" ]; then
+            cat "$RUNNER_TEMP/performance/report.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: performance-results
+          path: ${{ runner.temp }}/performance/
+          if-no-files-found: warn
+          retention-days: 14
