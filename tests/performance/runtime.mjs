@@ -3,14 +3,17 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { measure, median, metrics } from './workloads.mjs';
+import { measure, median, metrics as runtimeMetrics } from './workloads.mjs';
+import { measureSessions, percentile, sessionMetrics } from './sessions.mjs';
+import { OFFLINE_MESSAGE } from './no-network.mjs';
+import { connect } from 'node:net';
 
 const script = fileURLToPath(import.meta.url);
 const regressed = (base, head, slack) => head > base * 1.3 + slack;
 
 function sample(root) {
   return JSON.parse(
-    execFileSync(process.execPath, ['--expose-gc', script, '--sample', root], {
+    execFileSync(process.execPath, ['--expose-gc', script, '--sample', root, '', suite], {
       encoding: 'utf8',
       timeout: 240_000,
       maxBuffer: 64 * 1024,
@@ -18,15 +21,23 @@ function sample(root) {
   );
 }
 
-const [mode, candidate, output] = process.argv.slice(2);
+const [mode, candidate, output, suite = 'runtime'] = process.argv.slice(2);
+assert.ok(['runtime', 'sessions'].includes(suite));
+const metrics = suite === 'sessions' ? sessionMetrics : runtimeMetrics;
 if (mode === '--self-test') {
   assert.equal(regressed(10, 12, 0.2), false);
   assert.equal(regressed(10, 14, 0.2), true);
   assert.equal(regressed(0.01, 0.1, 0.2), false);
   assert.equal(median([9, 1, 3, 2, 4]), 3);
-  assert.equal(regressed(0, 7, metrics.telemetryRetainedHeapMiB.slack), false);
-  assert.equal(regressed(0, 9, metrics.telemetryRetainedHeapMiB.slack), true);
-  for (const { slack } of Object.values(metrics)) assert.ok(slack > 0);
+  assert.equal(regressed(0, 7, runtimeMetrics.telemetryRetainedHeapMiB.slack), false);
+  assert.equal(regressed(0, 9, runtimeMetrics.telemetryRetainedHeapMiB.slack), true);
+  for (const { slack } of Object.values(metrics)) assert.ok(slack >= 0);
+  for (const { slack } of Object.values(sessionMetrics)) assert.ok(slack >= 0);
+  assert.throws(() => connect({ host: '127.0.0.1', port: 9 }), { message: OFFLINE_MESSAGE });
+  await assert.rejects(fetch('https://example.invalid'), { message: OFFLINE_MESSAGE });
+  const ordered = Array.from({ length: 100 }, (_, i) => i + 1);
+  assert.equal(percentile(ordered, 0.95), 95);
+  assert.equal(percentile(ordered, 0.99), 99);
 } else if (mode === '--import') {
   const manifest = JSON.parse(readFileSync(path.join(candidate, 'package.json'), 'utf8'));
   const started = performance.now();
@@ -36,11 +47,13 @@ if (mode === '--self-test') {
   }
   process.stdout.write(JSON.stringify({ durationMs: performance.now() - started }));
 } else if (mode === '--sample') {
-  process.stdout.write(JSON.stringify(await measure(candidate)));
+  process.stdout.write(
+    JSON.stringify(await (suite === 'sessions' ? measureSessions : measure)(candidate)),
+  );
 } else {
   assert.ok(
     mode && candidate && output,
-    'Usage: runtime.mjs <baseline-root> <candidate-root> <output-dir>',
+    'Usage: runtime.mjs <baseline-root> <candidate-root> <output-dir> [runtime|sessions]',
   );
   const base = [];
   const head = [];
@@ -71,11 +84,20 @@ if (mode === '--self-test') {
     };
   });
   const report = [
-    '## Runtime performance',
+    `## ${suite === 'sessions' ? 'Session engineering' : 'Runtime'} performance`,
     '',
-    'Same-runner comparison, seven fresh processes per revision. Values are medians per operation (or per named batch). Cold imports measure module evaluation, excluding Node process startup. Settings and memory I/O use temporary files and warm filesystem caches; telemetry exports to the real OpenTelemetry SDK in memory, without network delivery.',
+    'Same-runner comparison, seven fresh processes per revision. Values are medians per operation (or per named batch). TCP connections and fetch requests are forbidden in performance workers; model tasks and service validation belong in Integration.',
     '',
-    'Failure limit: baseline × 1.30 + per-metric noise margin, shown below. Initial margins need calibration against hosted-runner history. Retained heap measures growth after 100 exporter create/publish/flush/close cycles and forced GC; it is not a production leak test.',
+    ...(suite === 'sessions'
+      ? [
+          'CLI readiness includes process startup and RPC initialization with no configured model. Hook pipelines dispatch real lifecycle events and project static contexts without submitting provider requests or executing tools. Resource growth is the maximum of checkpoints after 100/200/300/400/500 create/hook/shutdown cycles, relative to a warmed process after forced GC.',
+          '',
+        ]
+      : [
+          'Cold imports exclude Node startup. File I/O uses warm filesystem caches. Telemetry uses an in-memory SDK sink; its retained heap metric covers 100 exporter cycles.',
+          '',
+        ]),
+    'Failure limit: baseline × 1.30 + per-metric noise margin, shown below. Initial margins need hosted-runner calibration. Resource-growth probes do not replace production soak tests.',
     '',
     '| Metric | Unit | Baseline | Candidate | Noise margin | Limit | Result |',
     '| --- | --- | ---: | ---: | ---: | ---: | --- |',
@@ -91,6 +113,7 @@ if (mode === '--self-test') {
     path.join(output, 'results.json'),
     JSON.stringify(
       {
+        suite,
         node: process.version,
         platform: process.platform,
         arch: process.arch,

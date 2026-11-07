@@ -1,6 +1,6 @@
 # Offline runtime performance
 
-The independent `Performance` workflow runs on pull requests and pushes to `master`/`main`, and supports manual dispatch. Pull requests compare against the PR base commit; pushes compare against the previous branch head; manual runs compare against the selected commit's first parent. No model credentials or external services are required.
+The independent `Performance` workflow runs on pull requests and pushes to `master`/`main`, and supports manual dispatch. Pull requests compare against the PR base commit; pushes compare against the previous branch head; manual runs compare against the selected commit's first parent. No model credentials or external services are required. Performance workers reject TCP connections and fetch requests; model tasks, service validation, and native browser/desktop behavior belong in `integration.yml`. The workflow runs independent `runtime` and `sessions` matrix jobs, with separate artifacts.
 
 ## Coverage
 
@@ -29,17 +29,32 @@ All 17 extension packages have an independent cold-import measurement in a fresh
 
 The 66 metrics use the same workload definitions, input dimensions, and measurement code for both revisions. PNG fixtures contain incompressible noise and are generated outside the timed operations using the existing Sharp dependency. Temporary files are removed after each worker. Functional assertions check trust handling, output bounds, persisted facts, dispatch counts, span counts, redaction, and closure before accepting measurements.
 
+## Session engineering suite
+
+The additional 19 metrics exercise the real Pi runtime without calling a model or executing a business task:
+
+| Area | Measurements and boundary |
+| --- | --- |
+| CLI startup | Start the installed Pi CLI in a child process and wait for a successful RPC `get_state` response, then close stdin and require a clean exit. Compare no extensions, Memory only, and a common combination of Memory, Attachments, Security, Goal, and Telemetry. No model is configured; MCP, discovery, skills, and prompt templates are disabled. This includes Node startup and runtime initialization, not interactive TUI readiness. |
+| Per-prompt hooks | Real SDK sessions dispatch `input`, `before_agent_start`, `agent_start`, `turn_start`, context projection, `before_provider_request`, `turn_end`, and `agent_end` using static messages. Measure empty/Memory/common configurations with 1,000 messages, plus the common configuration with 10,000 messages. Memory prompt injection and retained context are checked. Extraction, dreaming, goal evaluation, and telemetry delivery are disabled. No provider request or tool execution occurs. |
+| Concurrency | Four independent common-configuration sessions process hook pipelines on one event loop. Record median batch time and P95/P99 per-pipeline latency from 120 measured operations after warmup. This is cooperative concurrency, not parallel model throughput. |
+| Cancellation and pressure | Cancel 32 pending Prefetch operations using a controlled in-memory provider; verify cancellation reaches all 32 and callers settle. Verify an uncancellable provider retains its single-flight slot until actual completion. Fill CaptureQueue with 16 accepted turns, reject overflow, release a controlled provider, and verify serialized drain and an empty saved outbox. No embedding or extraction service runs. |
+| Resource growth | After 10 warmup cycles, create a real common-configuration SDK session, dispatch hooks, emit shutdown, and dispose it 500 times. Snapshot after 100/200/300/400/500 cycles, following settlement and forced GC. Compare maximum positive growth in heap, RSS, open file descriptors, active Node resources, and direct child processes. Save checkpoints and concurrency latencies in the raw artifact. Lifecycle timing excludes checkpoint collection. Leaked child processes fail immediately. |
+
+Together the two suites provide 85 engineering metrics. The 500-cycle resource probe is a bounded durability check, not a long-running production soak test. RSS and other margins are provisional and do not guarantee the absence of existing baseline leaks.
+
 ## Run locally
 
 Use Node 24, install dependencies, and run `pnpm build` in both checkouts, then:
 
 ```sh
 node tests/performance/runtime.mjs --self-test
-node tests/performance/runtime.mjs /path/to/baseline /path/to/candidate /tmp/pi-performance-results
+node tests/performance/runtime.mjs /path/to/baseline /path/to/candidate /tmp/pi-performance-runtime runtime
+node tests/performance/runtime.mjs /path/to/baseline /path/to/candidate /tmp/pi-performance-sessions sessions
 ```
 
 If local `tsup` builds have replaced the TypeScript outputs for the browser/computer packages, regenerate their module files with `pnpm exec tsc -b --force packages/pi-browser-use/tsconfig.json packages/pi-computer-use/tsconfig.json`. CI starts from fresh checkouts.
 
-The runner alternates revisions across seven fresh worker processes per revision and compares medians. Each worker additionally starts one fresh import process per extension to prevent shared module-cache contamination. A metric fails above `baseline × 1.30 + noise margin`; each margin appears in the report. Exit code 1 indicates a regression or a failed correctness assertion. Reports and raw samples are saved as `report.md` and `results.json`, and uploaded by CI even when a measured regression fails the job.
+The runner alternates revisions across seven fresh worker processes per revision and compares medians. Each runtime worker additionally starts one fresh import process per extension to prevent shared module-cache contamination. A metric fails above `baseline × 1.30 + noise margin`; each margin appears in the report. Exit code 1 indicates a regression or a failed correctness assertion. Reports and raw samples are saved as `report.md` and `results.json`, and uploaded by CI even when a measured regression fails the job.
 
-These initial margins need calibration on hosted runners. File I/O uses warm filesystem caches. Concurrent memory timing includes lock contention, readback, and cleanup. Retained heap measures growth after 100 exporter lifecycle cycles, following warmup and forced GC; it is a short regression probe, not proof of absence of leaks. Coverage of a package means only the listed local paths: the suite does not measure a complete Pi CLI launch, external-service latency, desktop/browser automation, or sustained production load.
+These initial margins need calibration on hosted runners. File I/O uses warm filesystem caches. Concurrent memory timing includes lock contention, readback, and cleanup. Retained heap measures growth after 100 exporter lifecycle cycles, following warmup and forced GC; it is a short regression probe, not proof of absence of leaks. Coverage of a package means only the listed local paths: these tests exclude external-service latency, desktop/browser automation, model tasks, and sustained production load.
