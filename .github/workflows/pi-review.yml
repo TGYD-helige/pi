@@ -133,7 +133,7 @@ jobs:
             providers: {
               'deepseek-integration': {
                 baseUrl: process.env.PI_INTEGRATION_BASE_URL,
-                api: 'openai-completions',
+                api: 'openai-responses',
                 apiKey: '$PI_INTEGRATION_API_KEY',
                 authHeader: true,
                 models: [{
@@ -144,11 +144,6 @@ jobs:
                   contextWindow: 1000000,
                   maxTokens: 384000,
                   thinkingLevelMap: { minimal: null, low: null, medium: null, high: 'high', xhigh: 'max', max: 'max' },
-                  compat: {
-                    thinkingFormat: 'deepseek',
-                    requiresReasoningContentOnAssistantMessages: true,
-                    supportsDeveloperRole: false,
-                  },
                 }],
               },
             },

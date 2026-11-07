@@ -88,7 +88,7 @@ jobs:
             "providers": {
               "deepseek-integration": {
                 "baseUrl": "${PI_INTEGRATION_BASE_URL}",
-                "api": "openai-completions",
+                "api": "openai-responses",
                 "apiKey": "${PI_INTEGRATION_API_KEY}",
                 "models": [
                   { "id": "${{ inputs.model }}", "name": "${{ inputs.model }}", "input": ["text"] }
@@ -191,7 +191,7 @@ jobs:
             "providers": {
               "deepseek-integration": {
                 "baseUrl": "${PI_INTEGRATION_BASE_URL}",
-                "api": "openai-completions",
+                "api": "openai-responses",
                 "apiKey": "${PI_INTEGRATION_API_KEY}",
                 "models": [
                   { "id": "${{ inputs.model }}", "name": "${{ inputs.model }}", "input": ["text"] }
@@ -263,7 +263,7 @@ jobs:
             "providers": {
               "deepseek-integration": {
                 "baseUrl": "${PI_INTEGRATION_BASE_URL}",
-                "api": "openai-completions",
+                "api": "openai-responses",
                 "apiKey": "${PI_INTEGRATION_API_KEY}",
                 "models": [
                   { "id": "${{ inputs.model }}", "name": "${{ inputs.model }}", "input": ["text"] }

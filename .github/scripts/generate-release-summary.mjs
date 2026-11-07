@@ -120,14 +120,15 @@ async function modelSummary(sourceNotes) {
     commits: commits.slice(0, 200),
     commitCount: commits.length,
   };
-  const response = await fetch(`${baseUrl}/chat/completions`, {
+  const response = await fetch(`${baseUrl}/responses`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: 'deepseek-v4-flash',
       temperature: 0.2,
-      max_tokens: 1_400,
-      messages: [
+      max_output_tokens: 1_400,
+      store: false,
+      input: [
         { role: 'system', content: prompt },
         { role: 'user', content: JSON.stringify(releaseData) },
       ],
@@ -136,8 +137,10 @@ async function modelSummary(sourceNotes) {
   });
   if (!response.ok) throw new Error(`release summary gateway returned ${response.status}`);
   const data = await response.json();
-  const content = data?.choices?.[0]?.message?.content;
-  if (typeof content !== 'string' || !content.trim()) {
+  const content = (data.output ?? []).filter((item) => item.type === 'message')
+    .flatMap((item) => item.content ?? []).filter((part) => part.type === 'output_text')
+    .map((part) => part.text).join('');
+  if (!content.trim()) {
     console.error('::warning::release summary model returned empty content — using fallback release notes');
     return undefined;
   }
