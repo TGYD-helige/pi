@@ -55,45 +55,55 @@ pnpm --filter @amaster.ai/pi-eval judge:llm -- \
 
 Platform mode for mem0 (`--mode platform`) reads `MEM0_API_KEY` instead.
 
-## Browser (pi-browser-use L3 — task-completion rate)
+## Browser (task completion, local fixture suite v2)
 
-Answers the "does it actually work" question: a **real** tool-calling LLM must complete a task using only the `browser_*` tools, driving a **real Chrome**. It drives the extension through the **real `pi` CLI** — the same way `.github/workflows/integration.yml` does: install the extension with `pi install` into an isolated config dir, then `pi --mode json -p '<task>' --tools <allowlist>` and parse the event stream. The extension runs exactly as shipped (built dist, pi's own dependency resolution), so the success rate reflects the real wrapper (snapshot handling, tool descriptions, overlay/stale hints) plus the model — no importing package internals, no hand-rolled tool loop.
-
-Nothing is hardcoded. Provider, model, endpoint, and key are all parameterized:
+Run the shipped extension through the real Pi CLI and Chrome against eight local tasks: read headings/link text/an article, log in, navigate to a destination, save a form, and cancel without saving. Each task/trial gets a fresh Pi config, workspace, browser session and loopback HTTP server. Random fixture values prevent passing from memorized answers. No public website availability is required.
 
 ```bash
-# endpoint + key from env (repo convention: PI_INTEGRATION_*). The generated
-# models.json references the key by env-var NAME, so the secret never lands on disk.
 export PI_INTEGRATION_BASE_URL="https://your-gateway/v1"
-export PI_INTEGRATION_API_KEY="sk-..."
-
-pnpm --filter @amaster.ai/pi-eval eval:browser -- \
-  --provider deepseek-integration --model deepseek-v4-flash
-
-# single task:
-pnpm --filter @amaster.ai/pi-eval eval:browser -- --task example-title
-
-# LLM-judge the run (only needed for tasks without a deterministic `check`):
-pnpm --filter @amaster.ai/pi-eval judge:llm -- \
-  --input results/browser-tasks.json --llm-model deepseek-v4-pro --models "$MODELS"
+export PI_INTEGRATION_API_KEY="your-key"
+pnpm --filter @amaster.ai/pi-eval eval:browser -- --model deepseek-v4-flash --trials 3
 ```
 
-Flags (all optional, with env fallbacks): `--models <path>` (use a ready-made models.json verbatim — what CI does; `PI_MODELS_PATH`), or generate one from `--provider` (`PI_EVAL_PROVIDER`, default `deepseek-integration`), `--model` (`PI_EVAL_MODEL`), `--base-url` (`PI_INTEGRATION_BASE_URL`), `--api` (`PI_EVAL_API`, default `openai-completions`), `--api-key-env` (`PI_EVAL_API_KEY_ENV`, default `PI_INTEGRATION_API_KEY` — names the env var holding the key). Plus `--thinking` (default `high`), `--timeout` (per-task ms), `--tasks N`, `--task <id>`. Chrome is found via `CHROME_BIN` or common macOS/Linux paths; if none, install one with `npx -y @puppeteer/browsers install chrome@stable` and set `CHROME_BIN` (the Linux-CI step from integration.yml).
+Set `CHROME_BIN` if Chrome is not installed in a standard location. Provider flags remain `--models <path>` or `--base-url`, `--provider`, `--model`, `--api`, and `--api-key-env`. `--thinking` defaults to `high`; `--timeout` bounds each Pi invocation. Select cases with `--task <id>` or `--tasks N`. `--use-default-pi` is rejected for this suite to protect personal settings and preserve isolation.
 
-**Scoring.** Each task in `browser/tasks.ts` carries a deterministic `check(answer, observed)` predicate — success is a string/regex match over the model's final answer plus the tool outputs it saw. No LLM in the scoring path, so numbers are stable and free. Tasks that genuinely can't be reduced to a match omit `check` and defer to `judge-llm.ts` (every task still sets `gold`). The summary reports `successRate` (over checked, non-crashed tasks), `avgTurns` (model round-trips to reach a passing answer — **fewer is better**; a sharper wrapper/prompt lets the model finish in fewer turns), `avgToolCalls`, and a `failureMix` bucketing each task as `ok` / `check-failed` / `tool-error` / `crash` — a regression in, say, snapshot stripping shows up as a shift in the mix.
+Read tasks require a correct final answer and an independently observed server request for the correct page. Login additionally requires a valid submitted form; save/cancel check the actual saved value. Intermediate tool text and model claims alone cannot pass an action task. Any nonzero Pi exit, aborted/error generation or missing final answer is a crash. Tool errors that the agent recovers from do not automatically fail a completed task.
 
-Task coverage aims at the failure modes the wrapper is responsible for, not just happy-path reads: single reads (`example-*`, pinned Wikipedia), form fill+submit (`login-form-submit` — two fields + submit on the-internet.herokuapp.com), and **multi-step navigation** (`multi-step-navigate` — click a link, re-snapshot after uids invalidate), which exercises the extension's stale-element handling. Seeds are chosen for stability: IANA-reserved `example.com`/`example.org`, pinned Wikipedia `oldid`s, and the SeleniumHQ demo site — httpbin.org was dropped after it flaked repeatedly (503s / timeouts) in trial runs.
+Results default to `results/browser-tasks.json`. `successRate` includes crashes; `nonCrashSuccessRate` excludes them for diagnosis only. A crash is not automatically classified as an infrastructure fault. `consistentTaskRate` is the observed fraction of tasks passing every trial, not an estimate of a population reliability probability. Results include reported token usage, duration, turns, tool counts, bounded tool outputs, and fixture state. Unknown usage is `null` in the aggregate. Costs are not inferred.
 
-**CI.** Runs as the manual **Agentic Eval** workflow (`.github/workflows/agentic-eval.yml`, `workflow_dispatch`) — kept separate from integration.yml, which is a pass/fail smoke test; this one is effect evaluation. The workflow installs a real Chrome and writes models.json from the `PI_INTEGRATION_*` secrets, then runs this runner and publishes a scored summary.
+The suite is versioned `browser-v2`: its scores are not comparable to the previous external-site suite. It measures wrapper behavior on controlled pages; real websites, authentication providers and production network conditions still need separate coverage.
 
-Known variance:
-- **Site availability.** Seed sites can be down — a seed 503 shows up (correctly)
-  as `check-failed`/`tool-error`. Prefer static seeds; re-run before reading a
-  single-run failure as a regression.
-- **Model drift.** Temperature aside, tool-calling models still vary run-to-run
-  in tool-call count and page-reading accuracy. Treat `successRate` as ±.
-- **Wikipedia** tasks pin an `oldid` so article text can't drift; other seeds are
-  chosen for stability but are not pinned.
+## Memory product scenarios
+
+```bash
+pnpm --filter @amaster.ai/pi-eval eval:memory:product -- --model deepseek-v4-flash --trials 3
+pnpm --filter @amaster.ai/pi-eval eval:memory:product -- --without-memory --trials 3
+```
+
+Twelve scenarios cover preferences, corrections, forgetting, project-scoped facts, unknown facts, qualifier preservation, duplicate avoidance, transient task progress, unsupported inference, capacity pressure, new facts and selective forgetting. Synthetic seeds are written into a fresh temporary store. Mutation prompts execute the shipped `pi-memory` tools through Pi. A separate Pi process then answers a structured question using the next session's memory snapshot and read-only `memory_read` tool; the question does not include the expected answer. Follow-up writes are disabled, while legitimate reads stay available as in normal use. Scoring checks both the answer and persisted state. Background extraction and dreaming are disabled so the suite measures the foreground memory workflow.
+
+`--without-memory` runs the same prompts and questions without installing memory or exposing memory tools. It scores answer correctness only; state constraints apply to enabled-memory runs. Compare the control with enabled-memory results to see both helpful recall and harmful carryover. The suite checks project qualifiers in shared memory, not a promise of separate physical stores per project. Existing LoCoMo runners remain available for broader recall measurement.
+
+Defaults: `results/memory-product.json` and `results/memory-control.json`. The browser selection, provider, trial and output flags also apply. Personal Pi configuration is never used by this runner.
+
+## Compare revisions
+
+Use the same current evaluation code and Pi CLI for both builds. Build each checkout first, then point `--package-root` at the version of the extensions to execute. The baseline checkout does not need to contain these evaluation scripts.
+
+```bash
+# Run these commands from the checkout containing this evaluator.
+pnpm --filter @amaster.ai/pi-eval eval:memory:product -- \
+  --package-root /path/to/built-baseline-checkout --trials 3 --output results/base.json
+pnpm --filter @amaster.ai/pi-eval eval:memory:product -- \
+  --trials 3 --output results/head.json
+pnpm --filter @amaster.ai/pi-eval compare -- results/base.json results/head.json results/comparison.md
+# Optional: measure memory benefit against the no-memory control.
+pnpm --filter @amaster.ai/pi-eval compare -- results/memory-control.json results/head.json
+```
+
+Output paths are relative to the eval package working directory when invoked with `pnpm --filter`. Comparison requires matching task/trial sets, evaluator fingerprints, provider configuration, model, thinking, Node/platform and Pi version. Interrupted runs retain partial JSON, but comparison rejects incomplete runs. Reports show per-task improvements/regressions, completion rates including crashes, consistency, mean duration and reported tokens. They are descriptive and do not automatically fail on score changes; three trials are an initial signal, not statistical proof. Git revision and tracked/untracked package dirtiness are recorded; use clean, rebuilt checkouts for release comparisons.
+
+Run the manual **Effect Eval Comparison** workflow with `target`, `base_ref`, `trials`, and optionally `model`/`tasks`. It builds both revisions, uses the candidate evaluator for both, uploads JSON with diagnostic tool outputs and a Markdown comparison, and also runs a no-memory control for the memory target. This is not a PR gate. The existing **Agentic Eval** workflow still runs individual browser/computer/video suites; Computer requires a configured macOS runner, and video generation remains explicit.
 
 ## Computer (pi-computer-use L3 — desktop task-completion rate)
 
@@ -110,7 +120,7 @@ pnpm --filter @amaster.ai/pi-eval judge:llm -- \
   --input results/computer-tasks.json --llm-model deepseek-v4-pro --models "$MODELS"
 ```
 
-Flags are identical to the browser runner. Result file: `results/computer-tasks.json`, same summary shape.
+Provider, model, thinking, timeout and task-selection flags match the browser runner. Computer still runs one trial per task and does not support the new comparison report. Result file: `results/computer-tasks.json`, same summary shape.
 
 **macOS-only, and skips gracefully elsewhere.** On any non-macOS platform (e.g. a Linux CI runner) the runner writes a `{skipped: true}` result and exits 0 — it never fails a cross-platform pipeline. On macOS it requires:
 - The bundled `cua-driver` binary for your platform
@@ -192,7 +202,7 @@ Notes:
 
 ## Status
 
-Working, run manually (no CI hook). Open items:
+Memory recall runners run locally or through the manual Memory Eval workflow. Browser, Computer and Video have a manual Agentic Eval workflow; Browser and Memory product comparisons use Effect Eval Comparison. Open items:
 
 - Only LoCoMo wired; LongMemEval / MemBench are TODO (same fetch-on-demand pattern).
 - Video eval v1 executes pre-planned shot books only; LLM-planned runs (planning

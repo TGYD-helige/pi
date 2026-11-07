@@ -66,6 +66,9 @@ jobs:
           install-pi-cli: 'true'
           set-pi-agent-dir: 'true'
 
+      - name: Build packaged browser extension
+        run: pnpm --filter @amaster.ai/pi-browser-use build
+
       - name: Guard — require provider secrets
         run: |
           set -euo pipefail
@@ -137,7 +140,9 @@ jobs:
               const s = d.summary || {};
               console.log("");
               console.log(`- model: \`${s.model ?? "?"}\``);
-              console.log(`- successRate: **${(s.successRate ?? 0).toFixed(3)}** (${s.nChecked ?? 0} checked / ${s.n ?? 0} tasks)`);
+              console.log(`- successRate: **${(s.successRate ?? 0).toFixed(3)}** (${s.n ?? 0} trials, crashes included)`);
+              console.log(`- nonCrashSuccessRate: ${(s.nonCrashSuccessRate ?? 0).toFixed(3)}`);
+              console.log(`- consistentTaskRate: ${(s.consistentTaskRate ?? 0).toFixed(3)}`);
               console.log(`- avgTurns (to success): ${(s.avgTurns ?? 0).toFixed(1)}`);
               console.log(`- avgToolCalls: ${(s.avgToolCalls ?? 0).toFixed(1)}`);
               console.log(`- failureMix: \`${JSON.stringify(s.failureMix ?? {})}\``);

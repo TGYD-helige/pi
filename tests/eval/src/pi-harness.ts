@@ -23,14 +23,17 @@
  * convention). See README.
  */
 import { spawn } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 export type FailureMode = 'ok' | 'max-steps' | 'tool-error' | 'check-failed' | 'crash';
 
 export interface DriveResult {
-  /** Final assistant free-text (joined across message_end events). */
+  durationMs: number;
+  totalTokens?: number;
+  toolResults?: Array<{ toolName: string; text: string; isError: boolean }>;
+  /** Last assistant message only; intermediate claims are not outcomes. */
   answer: string;
   /** Concatenated tool outputs + names the agent produced (scorer haystack + judge blob). */
   observed: string;
@@ -80,8 +83,9 @@ export interface HarnessConfig {
   apiKeyEnv: string;
   /** Thinking level (default 'high'; xhigh can hang some gateways). */
   thinking: string;
-  /** Per-tool wall-clock timeout in ms. */
+  /** End-to-end deadline for one Pi invocation, in ms. */
   timeoutMs: number;
+  packageRoot?: string;
 }
 
 /**
@@ -96,8 +100,8 @@ function buildModelsJson(hcfg: HarnessConfig): string {
         [hcfg.provider]: {
           baseUrl: hcfg.baseUrl,
           api: hcfg.api,
-          // Literal env-var name → pi resolves it at runtime. Not the secret.
-          apiKey: hcfg.apiKeyEnv,
+          // Explicit env-var reference; never write the credential into generated config.
+          apiKey: `$${hcfg.apiKeyEnv}`,
           authHeader: true,
           models: [{ id: hcfg.model, name: hcfg.model, input: ['text'] }],
         },
@@ -110,7 +114,7 @@ function buildModelsJson(hcfg: HarnessConfig): string {
 
 export interface ExtensionSetup {
   /** Package dir name under packages/, e.g. 'pi-browser-use'. */
-  pkg: string;
+  pkg?: string;
   /** settings.json contents (the extension's config block(s)). */
   settings: Record<string, unknown>;
   /** Extra packages to also install (e.g. companion extensions). */
@@ -136,9 +140,9 @@ export interface Harness {
 export async function setupHarness(hcfg: HarnessConfig, ext: ExtensionSetup): Promise<Harness> {
   if (hcfg.useDefaultPi) {
     // Reuse the user's default pi config. Only ensure the extension is installed.
-    const pkgs = [ext.pkg, ...(ext.alsoInstall ?? [])];
+    const pkgs = [...(ext.pkg ? [ext.pkg] : []), ...(ext.alsoInstall ?? [])];
     for (const p of pkgs) {
-      const pkgPath = path.join(REPO_ROOT, 'packages', p);
+      const pkgPath = path.join(hcfg.packageRoot ?? REPO_ROOT, 'packages', p);
       await runPi('', ['install', pkgPath], 120_000);
     }
     return { cfgDir: '', cleanup: () => {} };
@@ -155,9 +159,9 @@ export async function setupHarness(hcfg: HarnessConfig, ext: ExtensionSetup): Pr
     }
     writeFileSync(path.join(cfgDir, 'settings.json'), JSON.stringify(ext.settings, null, 2));
 
-    const pkgs = [ext.pkg, ...(ext.alsoInstall ?? [])];
+    const pkgs = [...(ext.pkg ? [ext.pkg] : []), ...(ext.alsoInstall ?? [])];
     for (const p of pkgs) {
-      const pkgPath = path.join(REPO_ROOT, 'packages', p);
+      const pkgPath = path.join(hcfg.packageRoot ?? REPO_ROOT, 'packages', p);
       await runPi(cfgDir, ['install', pkgPath], 120_000);
     }
     return { cfgDir, cleanup };
@@ -172,6 +176,7 @@ function runPi(
   cfgDir: string,
   args: string[],
   timeoutMs: number,
+  credentialEnv: readonly string[] = [],
 ): Promise<{ stdout: string; code: number }> {
   return new Promise((resolve, reject) => {
     // Strip env vars that would hijack pi's provider selection. Claude Code (and
@@ -181,31 +186,88 @@ function runPi(
     const env: NodeJS.ProcessEnv = { ...process.env };
     for (const k of Object.keys(env)) {
       if (
-        /^(ANTHROPIC|OPENAI|GEMINI|GOOGLE|DEEPSEEK|GROQ|MISTRAL|XAI|OPENROUTER)_/.test(k) ||
-        /^(HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY)$/i.test(k)
+        !credentialEnv.includes(k) &&
+        (/^(ANTHROPIC|OPENAI|GEMINI|GOOGLE|DEEPSEEK|GROQ|MISTRAL|XAI|OPENROUTER)_/.test(k) ||
+          /^(HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY)$/i.test(k))
       ) {
         delete env[k];
       }
     }
     // Isolated mode: pin PI_CODING_AGENT_DIR to our temp dir. Default mode
     // (cfgDir === ''): leave it as-is so pi uses the user's ~/.pi/agent.
-    if (cfgDir) env.PI_CODING_AGENT_DIR = cfgDir;
+    if (cfgDir) {
+      env.PI_CODING_AGENT_DIR = cfgDir;
+      env.PI_AGENT_HOME = cfgDir;
+    }
 
     // stdin MUST be 'ignore': with an open stdin pipe, pi blocks waiting for
     // interactive input and never streams (0 bytes out). Ignoring it makes pi
     // run headless and flush the --mode json event stream.
-    const child = spawn('pi', args, { env, cwd: REPO_ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
-    let stdout = '';
-    let stderr = '';
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL');
-      reject(new Error(`pi timed out after ${timeoutMs}ms (args: ${args.join(' ')})`));
-    }, timeoutMs);
-    child.stdout.on('data', (d) => {
-      stdout += d;
+    const cwd = cfgDir ? path.join(cfgDir, 'workspace') : REPO_ROOT;
+    mkdirSync(cwd, { recursive: true });
+    const child = spawn('pi', args, {
+      env,
+      cwd,
+      detached: process.platform !== 'win32',
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
-    child.stderr.on('data', (d) => {
-      stderr += d;
+    let stdout = '';
+    let pending = '';
+    let stderrBytes = 0;
+    let failure: string | undefined;
+    let bytes = 0;
+    const stop = (reason: string) => {
+      failure ??= reason;
+      try {
+        if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, 'SIGKILL');
+        else child.kill('SIGKILL');
+      } catch {
+        child.kill('SIGKILL');
+      }
+    };
+    const timer = setTimeout(() => stop('Pi exceeded the evaluation deadline'), timeoutMs);
+    const keepLine = (line: string) => {
+      if (Buffer.byteLength(line) > 2_000_000) {
+        stop('Pi event exceeded evaluation limit');
+        return;
+      }
+      let event: { type?: string };
+      try {
+        event = JSON.parse(line);
+      } catch {
+        return;
+      }
+      if (
+        !event ||
+        !['session', 'turn_start', 'message_end', 'tool_execution_end'].includes(event.type ?? '')
+      )
+        return;
+      // Bound retained events, not repeated message_update snapshots (as in Skill Eval).
+      bytes += Buffer.byteLength(line) + 1;
+      if (bytes > 2_000_000) {
+        stop('Pi output exceeded evaluation limit');
+        return;
+      }
+      stdout += `${line}\n`;
+    };
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => {
+      if (failure) return;
+      pending += chunk;
+      const lines = pending.split('\n');
+      pending = lines.pop() ?? '';
+      for (const line of lines) {
+        keepLine(line);
+        if (failure) {
+          pending = '';
+          return;
+        }
+      }
+      if (Buffer.byteLength(pending) > 2_000_000) stop('Pi event exceeded evaluation limit');
+    });
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderrBytes += chunk.length;
+      if (stderrBytes > 2_000_000) stop('Pi diagnostics exceeded evaluation limit');
     });
     child.on('error', (err) => {
       clearTimeout(timer);
@@ -213,11 +275,16 @@ function runPi(
     });
     child.on('close', (code) => {
       clearTimeout(timer);
-      if (code !== 0 && args[0] === 'install') {
-        reject(new Error(`pi install failed (code ${code}): ${stderr.slice(0, 300)}`));
+      if (!failure && pending) keepLine(pending);
+      if (failure) {
+        reject(new Error(failure));
         return;
       }
-      resolve({ stdout: `${stdout}${stderr}`, code: code ?? 0 });
+      if (code !== 0 && args[0] === 'install') {
+        reject(new Error(`pi install failed (exit ${code})`));
+        return;
+      }
+      resolve({ stdout, code: code ?? 1 });
     });
   });
 }
@@ -227,7 +294,13 @@ interface PiEvent {
   toolName?: string;
   isError?: boolean;
   result?: { content?: Array<{ type: string; text?: string }> };
-  message?: { role?: string; content?: Array<{ type: string; text?: string }>; errorMessage?: string };
+  message?: {
+    role?: string;
+    content?: Array<{ type: string; text?: string }>;
+    errorMessage?: string;
+    stopReason?: string;
+    usage?: { totalTokens?: number };
+  };
   errorMessage?: string;
 }
 
@@ -262,7 +335,15 @@ export async function drivePrompt(
   prompt: string,
   tools: string,
 ): Promise<DriveResult> {
+  const started = Date.now();
   let out: { stdout: string; code: number };
+  const credentialEnv = [hcfg.apiKeyEnv];
+  if (hcfg.modelsPath) {
+    for (const match of readFileSync(hcfg.modelsPath, 'utf8').matchAll(
+      /\$\{?([A-Za-z_][A-Za-z0-9_]*)/g,
+    ))
+      credentialEnv.push(match[1]!);
+  }
   try {
     out = await runPi(
       harness.cfgDir,
@@ -275,24 +356,28 @@ export async function drivePrompt(
         hcfg.thinking,
         '--no-session',
         '--no-context-files',
-        '--tools',
-        tools,
+        '--no-skills',
+        '--no-prompt-templates',
+        '--no-mcp',
+        ...(tools ? ['--tools', tools] : ['--no-tools']),
         '--mode',
         'json',
         '-p',
         prompt,
       ],
       hcfg.timeoutMs,
+      credentialEnv,
     );
-  } catch (err) {
+  } catch {
     return {
+      durationMs: Date.now() - started,
       answer: '',
       observed: '',
       turns: 0,
       toolCalls: 0,
       sawToolError: false,
       failureMode: 'crash',
-      error: err instanceof Error ? err.message.slice(0, 300) : String(err),
+      error: 'Pi did not finish within the execution or output limit.',
     };
   }
 
@@ -300,24 +385,24 @@ export async function drivePrompt(
   // pi can exit 0 while printing a plain-text fatal (e.g. "No API key found
   // for provider X") and emitting ZERO events. Without this, the run reads as
   // a silent check-failed instead of the crash it is.
-  if (events.length === 0) {
-    const text = out.stdout
-      .split('\n')
-      .map((l) => l.trim())
-      .filter((l) => l && !l.startsWith('{'))
-      .join(' ')
-      .slice(0, 300);
+  if (events.length === 0 || out.code !== 0) {
     return {
+      durationMs: Date.now() - started,
       answer: '',
       observed: '',
       turns: 0,
       toolCalls: 0,
       sawToolError: false,
       failureMode: 'crash',
-      error: text || `pi produced no events (exit ${out.code})`,
+      error: `Pi failed (exit ${out.code}, events ${events.length}).`,
     };
   }
-  const answerParts: string[] = [];
+  let answer = '';
+  let totalTokens = 0;
+  let usageKnown = true;
+  let generations = 0;
+  const toolResults: NonNullable<DriveResult['toolResults']> = [];
+  let traceSize = 0;
   const observedParts: string[] = [];
   let turns = 0;
   let toolCalls = 0;
@@ -334,33 +419,53 @@ export async function drivePrompt(
         .map((c) => c.text as string)
         .join('\n');
       if (ev.isError || text.startsWith('Error:')) sawToolError = true;
+      const toolResult = {
+        toolName: (ev.toolName ?? 'tool').slice(0, 200),
+        text: truncate(text, MAX_OBSERVED / 2),
+        isError: Boolean(ev.isError || text.startsWith('Error:')),
+      };
+      toolResults.push(toolResult);
+      traceSize += toolResult.text.length + toolResult.toolName.length + 200;
+      while (traceSize > MAX_OBSERVED) {
+        const removed = toolResults.shift()!;
+        traceSize -= removed.text.length + removed.toolName.length + 200;
+      }
       observedParts.push(`# ${ev.toolName ?? 'tool'}${ev.isError ? ' [error]' : ''}\n${text}`);
     } else if (ev.type === 'message_end' && ev.message?.role === 'assistant') {
       const text = (ev.message.content ?? [])
         .filter((c) => c.type === 'text' && c.text)
         .map((c) => c.text as string)
         .join('\n');
-      if (text) answerParts.push(text);
-      if (ev.message.errorMessage) providerError = ev.message.errorMessage;
+      answer = text;
+      generations++;
+      const tokens = ev.message.usage?.totalTokens;
+      if (typeof tokens === 'number' && Number.isFinite(tokens) && tokens >= 0)
+        totalTokens += tokens;
+      else usageKnown = false;
+      if (ev.message.errorMessage || ['error', 'aborted'].includes(ev.message.stopReason ?? ''))
+        providerError = 'Provider failed or generation aborted.';
     }
   }
 
-  // A provider-level error (e.g. 401, overload) with no tool activity is a crash,
-  // not a task failure — surface it so it isn't miscounted as check-failed.
-  if (providerError && toolCalls === 0 && answerParts.length === 0) {
+  // A failed final generation cannot be rescued by an earlier success claim.
+  if (providerError || !answer) {
     return {
       answer: '',
-      observed: observedParts.join('\n'),
+      durationMs: Date.now() - started,
+      observed: truncate(observedParts.join('\n'), MAX_OBSERVED),
       turns,
       toolCalls,
       sawToolError,
       failureMode: 'crash',
-      error: providerError.slice(0, 300),
+      error: providerError ?? 'Pi produced no final answer.',
     };
   }
 
   return {
-    answer: truncate(answerParts.join('\n'), MAX_ANSWER),
+    durationMs: Date.now() - started,
+    ...(usageKnown && generations ? { totalTokens } : {}),
+    toolResults,
+    answer: truncate(answer, MAX_ANSWER),
     observed: truncate(observedParts.join('\n'), MAX_OBSERVED),
     turns,
     toolCalls,
@@ -383,6 +488,9 @@ export interface CommonArgs {
   timeoutMs: number;
   taskId: string;
   tasks: number;
+  trials: number;
+  output: string;
+  packageRoot: string;
 }
 
 /**
@@ -400,9 +508,23 @@ export function parseCommonArgs(defaults: { model: string; timeoutMs: number }):
   const argv = process.argv.slice(2);
   const get = (flag: string, dflt: string) => {
     const i = argv.indexOf(flag);
-    return i >= 0 ? argv[i + 1]! : dflt;
+    if (i < 0) return dflt;
+    const value = argv[i + 1];
+    if (!value || value.startsWith('--')) throw new Error(`${flag} requires a value`);
+    return value;
   };
+  const tasks = Number(get('--tasks', '0'));
+  const timeoutMs = Number(get('--timeout', String(defaults.timeoutMs)));
+  if (!Number.isInteger(tasks) || tasks < 0)
+    throw new Error('--tasks must be a nonnegative integer');
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('--timeout must be positive');
+  const trials = Number(get('--trials', '3'));
+  if (!Number.isInteger(trials) || trials < 1 || trials > 20)
+    throw new Error('--trials must be an integer from 1 to 20');
   return {
+    trials,
+    output: get('--output', ''),
+    packageRoot: path.resolve(get('--package-root', REPO_ROOT)),
     provider: get('--provider', process.env.PI_EVAL_PROVIDER || 'deepseek-integration'),
     model: get('--model', process.env.PI_EVAL_MODEL || defaults.model),
     useDefaultPi: argv.includes('--use-default-pi'),
@@ -411,9 +533,9 @@ export function parseCommonArgs(defaults: { model: string; timeoutMs: number }):
     api: get('--api', process.env.PI_EVAL_API || 'openai-responses'),
     apiKeyEnv: get('--api-key-env', process.env.PI_EVAL_API_KEY_ENV || 'PI_INTEGRATION_API_KEY'),
     thinking: get('--thinking', 'high'),
-    timeoutMs: Number(get('--timeout', String(defaults.timeoutMs))),
+    timeoutMs,
     taskId: get('--task', ''),
-    tasks: Number(get('--tasks', '0')),
+    tasks,
   };
 }
 
@@ -424,6 +546,7 @@ export function parseCommonArgs(defaults: { model: string; timeoutMs: number }):
  */
 export function toHarnessConfig(args: CommonArgs): HarnessConfig {
   const base = {
+    packageRoot: args.packageRoot,
     provider: args.provider,
     model: args.model,
     api: args.api,
@@ -437,6 +560,8 @@ export function toHarnessConfig(args: CommonArgs): HarnessConfig {
   if (args.modelsPath) {
     return { ...base, modelsPath: args.modelsPath, baseUrl: args.baseUrl };
   }
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(args.apiKeyEnv))
+    throw new Error('--api-key-env must name an environment variable');
   if (!args.baseUrl) {
     throw new Error(
       'No provider config. Pass --use-default-pi (reuse ~/.pi/agent), --models <models.json>, ' +
