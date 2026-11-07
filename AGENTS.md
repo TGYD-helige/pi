@@ -262,6 +262,12 @@ packages/pi-foo/
 
 **Unit tests vs integration tests**: `src/__tests__/` holds unit tests scoped to one package. Cross-package and end-to-end tests live in the top-level `tests/` directory.
 
+### Regression and isolation
+
+- Test at the smallest boundary that exhibits the bug. Use the reported runtime mode or a sanitized fixture when the failure depends on that mode or input shape. A regression test must fail on the old behavior and pass with the fix; assert observable results rather than private implementation details.
+- Keep unit tests offline and isolate config, environment variables, and files from the user's real Pi home. Use mocks or local servers; keep live-provider checks in explicit integration/E2E runs.
+- Stop or await every server, child process, timer, and background task a test starts before removing its temporary files. Synchronize on observable state; use fake clocks or controlled delays instead of fixed sleeps to reproduce timing bugs.
+
 ### Mock Pattern for Extensions
 
 ```typescript
@@ -333,6 +339,7 @@ Rules:
 ## Implementation Discipline
 
 - Before modifying code, look at the same package's existing patterns first — match style, naming, structure
+- Trace the change from user input through callers, state, and side effects to the final result. Search sibling implementations for the same defect; cover affected instances without unrelated refactors, and report any affected instance left outside this change.
 - Keep lifecycle handlers linear and readable: validate shared input first, perform independently configurable side effects independently, then use early returns for disabled or already-completed paths; each flag should govern only its own behavior.
 - Write only user-facing usage documentation. Do not add internal implementation notes, investigation logs, plans, or work/review reports; put necessary change rationale and verification in the PR description.
 - Do not hard-wrap Markdown prose. Keep each paragraph on one source line; use line breaks only for Markdown structure such as lists, tables, blockquotes, and code fences.
@@ -342,12 +349,27 @@ Rules:
 - Do not swallow exceptions — expected errors (config missing, user input invalid) should return sanitized `isError: true` results; unexpected exceptions should log to stderr but not expose full stack traces or raw request/response bodies to the user
 - Keep changes minimal and scoped; don't "improve" surrounding code unless asked
 
+### Code clarity and coupling
+
+- Name operations in the package’s vocabulary and make inputs and outputs explicit; extract a helper when it names a meaningful operation or isolates side effects, rather than to meet a line-count limit.
+- Keep parsing and domain decisions separate from filesystem, network, and runtime calls when they can be tested independently. Pass the specific values or capabilities needed instead of an entire extension context or mutable global state.
+- Keep module interfaces small and hide implementation details. Reuse sibling patterns and `packages/shared`; promote code to shared only when existing consumers need the same contract, and keep package-specific policy in its owning package.
+- Prefer direct control flow and concrete types. Keep a call direct when a wrapper only forwards its arguments. Add configuration when a caller needs a choice between supported behaviors.
+
+### User data and configuration writes
+
+- Distinguish a missing file from an unreadable or malformed one. A failed read is unknown state: preserve existing data, report the failure, and fail closed for authorization decisions instead of treating it as an empty configuration.
+- Preserve explicit user settings during defaults, sync, and migrations. Test existing user-edited data as well as fresh installs; state how previously persisted data is migrated or recovered.
+- For whole-file updates, preserve unrelated fields and rename a temporary file from the same directory over the target. Restrict access to sensitive files from creation and preserve or tighten access on replacement. Coordinate read-modify-write operations that can overlap; atomic replacement alone does not prevent lost updates.
+
 ---
 
 ## Execution Efficiency and Performance
 
 - Trace startup, per-prompt, per-tool, and shutdown paths before optimizing. Run cheap enabled/model/trust checks before imports, history scans, or external work; keep independent work off the prompt's critical path.
 - Use asynchronous I/O and child processes on runtime paths. Select files by metadata before decoding history, and bound bytes read, items retained, aggregate payload size, and concurrent work before materializing full inputs. Include the newest item and formatting overhead in output budgets.
+- For recurring paths, estimate how reads, writes, subprocesses, and requests scale with input size and invocation rate. Reuse a read or parsed snapshot within one operation when its consistency requirements allow; batch lookups when supported, and skip unchanged writes when the current value is already known. Follow the authorization freshness rule below when reusing policy data.
+- Eliminate redundant calls before adding concurrency, caching, or background work. Use bounded concurrency when independent operations cause delay; preserve dependencies and write ordering.
 - Give each external operation one end-to-end deadline, including metadata, queue waits, DNS, response bodies, and subprocesses. Propagate caller cancellation, clean up listeners/timers, and prevent late completions from starting work or publishing stale results. An uncancellable underlying operation must remain single-flight until it actually settles.
 - Bound background queues and shutdown waits. Persist accepted writes before acknowledging them, retain unfinished data for recovery, and make capacity rejection visible; preserve write ordering and report ambiguous outcomes rather than silently discarding or repeatedly retrying them.
 - Bound cache size and lifetime, key by all result-affecting inputs and trust scope, and coalesce identical in-flight work while preserving each caller's cancellation. Re-read mutable authorization policy for each decision unless invalidation guarantees equally prompt revocation.
@@ -362,6 +384,8 @@ Rules:
 - Keep titles specific and bodies brief. Include only the context needed to understand, reproduce, or review the work; link to longer logs or design notes instead of copying them.
 - Issues should identify the affected package and version when applicable, then state the problem or motivation, expected outcome, and minimal reproduction or context. Omit sections that do not apply.
 - Pull requests should summarize what changed and why, list verification performed, and reference the related issue when one exists. Use the conventional-commit title prefix recognized by `.github/workflows/labeler.yml`.
+- Report the checks run on the final reviewed commit and their results, including failures. Mention a skipped check only when it leaves a material verification gap. Re-run affected checks after a rebase or subsequent edits; a cancelled or unfinished run is not a pass. Before calling a failure pre-existing, reproduce it with the same check and environment on the base commit used for the comparison and record its SHA; link an existing issue or report the unresolved failure explicitly.
+- Use a separate worktree when another session or unrelated changes occupy the checkout. Preserve others' files, index, and logs; stage explicit paths and inspect the staged diff before committing.
 
 ---
 
