@@ -109,11 +109,15 @@ describe('telemetry', () => {
     });
     const attrs = inMemory.getFinishedSpans()[0]!.attributes;
     const serialized = JSON.stringify(attrs);
-    expect(serialized).not.toMatch(/hidden-auth|hidden-field|hidden-cookie/);
+    expect(serialized).not.toMatch(
+      /hidden-auth|hidden-anthropic|hidden-uppercase|hidden-field|hidden-cookie/,
+    );
     if (includePayloads) {
       const request = JSON.parse(String(attrs['langfuse.observation.metadata.requestHeaders']));
       const response = JSON.parse(String(attrs['langfuse.observation.metadata.responseHeaders']));
       expect(request['x-session-id']).toBe('session-id');
+      expect(request['x-api-key']).toBe('[redacted]');
+      expect(request['X-API-Key']).toBe('[redacted]');
       expect(response['x-request-id']).toBe('response-id');
       expect(response['telemetry-truncated']).toBeTruthy();
       expect(Buffer.byteLength(JSON.stringify(response))).toBeLessThan(17_000);
