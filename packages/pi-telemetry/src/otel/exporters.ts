@@ -169,7 +169,10 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
   }
 
   async publish(event: RuntimeTelemetryEvent): Promise<void> {
-    const redactedEvent = applyTelemetryRedaction(this.config, event);
+    const redactedEvent = applyTelemetryRedaction(this.config, {
+      ...event,
+      ...(this.requestContext.metadata ? { contextMetadata: this.requestContext.metadata } : {}),
+    });
     if (!redactedEvent?.traceId) {
       return;
     }
@@ -690,7 +693,7 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
       ...base,
       'langfuse.trace.name': this.requestContext.traceName || this.config.traceName || 'chat-turn',
     };
-    const contextMetadata = this.requestContext.metadata ?? {};
+    const contextMetadata = event.contextMetadata ?? {};
     for (const [key, value] of Object.entries(contextMetadata).slice(0, 32)) {
       if (value === undefined) continue;
       enriched[`langfuse.trace.metadata.${key.slice(0, 128)}`] = value;

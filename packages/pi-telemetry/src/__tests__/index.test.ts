@@ -87,6 +87,50 @@ afterEach(() => {
 });
 
 describe('telemetry', () => {
+  it('does not fully serialize oversized nested display messages', async () => {
+    const stringify = vi.spyOn(JSON, 'stringify');
+    const { exporter, inMemory } = makeExporter();
+    await exporter.publish({
+      ...completedTurnEvent('large-display'),
+      llmGenerationId: 'g',
+      model: { provider: 'test', model: 'fixture' },
+      status: 'completed',
+      displayOutput: [
+        {
+          role: 'user',
+          content: Array.from({ length: 20_000 }, () => ({ type: 'text', text: 'entry' })),
+        },
+      ],
+    });
+    expect(
+      stringify.mock.calls.some(
+        ([value]) =>
+          value &&
+          typeof value === 'object' &&
+          'content' in value &&
+          Array.isArray(value.content) &&
+          value.content.length > 10_000,
+      ),
+    ).toBe(false);
+    expect(String(inMemory.getFinishedSpans()[0]!.attributes['output.value'])).toContain('omitted');
+    await exporter.close();
+  });
+
+  it('applies payload opt-in and application redaction to request metadata', async () => {
+    for (const includePayloads of [true, false]) {
+      const { exporter, inMemory } = makeExporter({
+        includePayloads,
+        redactEvent: (event) => ({ ...event, contextMetadata: { approved: 'safe' } }),
+      });
+      exporter.setContext({ metadata: { input: 'private-context' } });
+      await exporter.publish(completedTurnEvent('context-privacy'));
+      const attrs = inMemory.getFinishedSpans()[0]!.attributes;
+      expect(JSON.stringify(attrs)).not.toContain('private-context');
+      expect(attrs['langfuse.trace.metadata.approved']).toBe(includePayloads ? 'safe' : undefined);
+      await exporter.close();
+    }
+  });
+
   it('bounds custom context metadata before retaining it', async () => {
     const readLate = vi.fn(() => 'late');
     const largeArray = Array.from({ length: 1000 }, () => 'entry');

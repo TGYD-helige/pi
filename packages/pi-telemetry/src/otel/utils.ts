@@ -9,7 +9,7 @@ import { isInlineImage } from '../observations.js';
 import { MAX_ATTRIBUTE_VALUE_BYTES } from './types.js';
 
 export function utf8Prefix(value: string, maxBytes: number): string {
-  const bytes = Buffer.from(value, 'utf8');
+  const bytes = Buffer.from(value.slice(0, maxBytes + 1), 'utf8');
   let end = Math.min(maxBytes, bytes.length);
   while (end > 0 && end < bytes.length && (bytes[end]! & 0xc0) === 0x80) {
     end -= 1;
@@ -136,6 +136,7 @@ export function applyTelemetryRedaction(
     'details',
     'streamEvents',
     'error',
+    'contextMetadata',
   ];
   const fieldsRedacted = config.redactFields?.length
     ? Object.fromEntries(
@@ -222,6 +223,8 @@ export function redactTelemetryValue(
 }
 
 export function stripTelemetryPayloads(event: RuntimeTelemetryEvent): RuntimeTelemetryEvent {
+  const { contextMetadata: _contextMetadata, ...withoutContext } = event;
+  event = withoutContext;
   if (isLlmStreamEvent(event)) {
     const {
       input: _input,

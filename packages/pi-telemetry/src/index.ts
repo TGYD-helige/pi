@@ -13,11 +13,12 @@ export type RuntimeLlmStreamEvent = Omit<
   error?: string;
 };
 
-export type RuntimeTelemetryEvent =
+export type RuntimeTelemetryEvent = (
   | RuntimeLifecycleEvent
   | RuntimeToolEvent
   | RuntimeLlmGenerationEvent
-  | RuntimeLlmStreamEvent;
+  | RuntimeLlmStreamEvent
+) & { contextMetadata?: Record<string, JsonValue> };
 
 export interface RuntimeEventExporter {
   publish(event: RuntimeTelemetryEvent): Promise<void>;
