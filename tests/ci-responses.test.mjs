@@ -46,7 +46,7 @@ describe('CI Responses API entry points', () => {
     await withGateway(output, async (baseUrl, requests) => {
       vi.stubEnv('PI_INTEGRATION_BASE_URL', baseUrl);
       vi.stubEnv('PI_INTEGRATION_API_KEY', 'fixture');
-      const workflow = await readFile(new URL('../workflows/labeler.yml', import.meta.url), 'utf8');
+      const workflow = await readFile(new URL('../.github/workflows/labeler.yml', import.meta.url), 'utf8');
       const script = workflow.split('          script: |\n')[1].split('\n').map((line) => line.slice(12)).join('\n');
       const addLabels = vi.fn(async () => {});
       const github = {
