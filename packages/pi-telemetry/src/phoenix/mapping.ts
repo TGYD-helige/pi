@@ -79,6 +79,9 @@ export function projectPhoenixSpan(
     }
   }
   return Object.assign(Object.create(Object.getPrototypeOf(span)), span, {
+    ...(span.name === 'chat-turn' && typeof source['langfuse.trace.name'] === 'string'
+      ? { name: source['langfuse.trace.name'] }
+      : {}),
     attributes,
     events,
     resource,

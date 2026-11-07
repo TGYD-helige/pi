@@ -14,10 +14,11 @@ function items(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
-function expandMessages(values: unknown[]): unknown[] {
+function expandMessages(values: unknown[], attributes: Attributes): unknown[] {
   return values.flatMap((value) => {
     const msg = record(value);
     const blocks = items(msg.content ?? msg.parts);
+    if (blocks.length > MAX_ITEMS) attributes['pi.telemetry.projection.truncated'] = true;
     if (
       !blocks.some(
         (block) => record(block).type === 'tool_result' || record(block).functionResponse,
@@ -105,6 +106,8 @@ export function projectMessages(attributes: Attributes, input: unknown, output: 
     if (typeof msg.content === 'string') text.push(msg.content);
     if (msg.type === 'function_call_output') text.push(String(msg.output ?? ''));
     if (msg.type === 'function_call') call(msg);
+    if (items(msg.thinking).length > MAX_ITEMS)
+      attributes['pi.telemetry.projection.truncated'] = true;
     for (const block of items(msg.thinking).slice(0, MAX_ITEMS))
       content('reasoning', record(block).content);
     content('reasoning', msg.reasoning_content);
@@ -161,22 +164,27 @@ export function projectMessages(attributes: Attributes, input: unknown, output: 
     ? output
     : [typeof output === 'string' ? { role: 'assistant', content: output } : output];
   if (outputs.length > MAX_ITEMS) attributes['pi.telemetry.projection.truncated'] = true;
-  for (const [index, value] of expandMessages(outputs.slice(-MAX_ITEMS))
-    .slice(-MAX_ITEMS)
-    .entries())
+  const expandedOutput = expandMessages(outputs.slice(-MAX_ITEMS), attributes);
+  if (expandedOutput.length > MAX_ITEMS) attributes['pi.telemetry.projection.truncated'] = true;
+  for (const [index, value] of expandedOutput.slice(-MAX_ITEMS).entries())
     message(`llm.output_messages.${index}.message`, value);
   const inputs = Array.isArray(input) ? input : [];
   if (inputs.length > MAX_ITEMS) attributes['pi.telemetry.projection.truncated'] = true;
-  const selected = expandMessages(inputs.slice(-MAX_ITEMS)).slice(-MAX_ITEMS);
+  const expandedInput = expandMessages(inputs.slice(-MAX_ITEMS), attributes);
+  if (expandedInput.length > MAX_ITEMS) attributes['pi.telemetry.projection.truncated'] = true;
+  const selected = expandedInput.slice(-MAX_ITEMS);
   for (let index = selected.length - 1; index >= 0; index--)
     message(`llm.input_messages.${index}.message`, selected[index]);
   const tools: unknown[] = [];
   for (const value of inputs) {
+    if (items(record(value).tools).length > MAX_ITEMS)
+      attributes['pi.telemetry.projection.truncated'] = true;
     for (const raw of items(record(value).tools).slice(0, MAX_ITEMS)) {
       const tool = record(raw);
       const declarations = tool.functionDeclarations
         ? items(tool.functionDeclarations)
         : [tool.function ?? tool];
+      if (declarations.length > MAX_ITEMS) attributes['pi.telemetry.projection.truncated'] = true;
       for (const declaration of declarations.slice(0, MAX_ITEMS)) {
         if (tools.length >= MAX_ITEMS) {
           attributes['pi.telemetry.projection.truncated'] = true;

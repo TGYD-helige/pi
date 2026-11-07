@@ -100,7 +100,7 @@ Configuration is read from the `"pi-telemetry"` section of, in increasing priori
 | `environment` | `string` | — | Langfuse environment label, e.g. `development` or `production` |
 | `release` | `string` | — | Release label; independent of OTEL serviceVersion |
 | `tags` | `string[]` | `[]` | Additional trace tags in Langfuse and Phoenix; up to 32 unique trimmed entries of 128 characters |
-| `traceName` | `string` | `"chat-turn"` | Trace display name, bounded to 90 characters |
+| `traceName` | `string` | `"chat-turn"` | Langfuse trace and Phoenix root display name, bounded to 90 characters |
 | `redactFields` | `string[]` | `[]` | Case-insensitive field names to mask in captured payloads, JSON-encoded payloads and custom metadata; same list limits as tags |
 
 ### Langfuse Config
@@ -214,7 +214,7 @@ When export is disabled, event handlers skip telemetry processing. Disabled star
 
 ## Context and auxiliary calls for extension authors
 
-Emit `pi-telemetry:request-context` on `pi.events` before the next prompt to supply a `TelemetryRequestContext`: optional `userId`, `traceName`, `tags`, `metadata`, and a W3C `traceparent`. Context is consumed once at a new prompt boundary; steering and follow-ups keep the active context. Programmatic exporters expose `setContext(context)` for the same values. Metadata should contain explicit correlation facts rather than conversation content, including when payload capture is disabled. Invalid traceparents fall back to a local root. Payload opt-in and credential masking remain in force.
+Emit `pi-telemetry:request-context` on `pi.events` before the next prompt to supply a `TelemetryRequestContext`: optional `userId`, `traceName`, `tags`, `metadata`, and a W3C `traceparent`. Context is consumed once at a new prompt boundary; steering and follow-ups keep the active context. Programmatic exporters expose `setContext(context)` for the same values. Metadata should contain explicit correlation facts rather than conversation content, including when payload capture is disabled. Custom metadata retains at most 31 entries plus an omission marker within a 60 KB value budget; oversized values are explicitly omitted. Invalid traceparents fall back to a local root. Payload opt-in and credential masking remain in force.
 
 ```ts
 pi.events.emit('pi-telemetry:request-context', {

@@ -194,6 +194,59 @@ describe('Phoenix telemetry export', () => {
     }
   });
 
+  it('marks projection limits when a single message expands into too many tool results', async () => {
+    const spans: ReadableSpan[] = [];
+    vi.spyOn(OtlpProtoExporter.prototype, 'export').mockImplementation((batch, callback) => {
+      spans.push(...batch);
+      callback({ code: 0 });
+    });
+    const exporter = createTelemetryExporter({
+      includePayloads: true,
+      traceName: 'custom-task',
+      phoenix: { enabled: true, endpoint: 'http://localhost:6006' },
+    });
+    try {
+      await exporter.publish({
+        ...context,
+        id: 'root',
+        type: 'chat_turn_completed',
+        createdAt: new Date().toISOString(),
+      });
+      await exporter.publish({
+        ...context,
+        id: 'expanded-start',
+        llmGenerationId: 'g',
+        status: 'started',
+        model,
+        createdAt: new Date().toISOString(),
+        displayInput: [
+          {
+            role: 'user',
+            content: Array.from({ length: 101 }, (_, index) => ({
+              type: 'tool_result',
+              tool_use_id: `call-${index}`,
+              content: String(index),
+            })),
+          },
+        ],
+      });
+      await exporter.publish({
+        ...context,
+        id: 'expanded-end',
+        llmGenerationId: 'g',
+        status: 'completed',
+        model,
+        createdAt: new Date().toISOString(),
+      });
+      await exporter.flush?.();
+      expect(spans[0]!.name).toBe('custom-task');
+      expect(spans[1]!.attributes['pi.telemetry.projection.truncated']).toBe(true);
+      expect(Object.values(spans[1]!.attributes)).toContain('call-100');
+    } finally {
+      await exporter.close?.();
+    }
+  });
+
   it('retains tools and a preview of the newest oversized message with explicit output truncation', async () => {
     const spans: ReadableSpan[] = [];
     vi.spyOn(OtlpProtoExporter.prototype, 'export').mockImplementation((batch, callback) => {

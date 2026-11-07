@@ -120,6 +120,7 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
   private readonly tracer: Tracer;
   private readonly idGenerator = new TelemetryIdGenerator();
   private readonly openSpans = new Map<string, LangfuseSpan>();
+  private readonly launchContexts = new WeakMap<LangfuseSpan, Record<string, string>>();
   private openSpanCapWarned = false;
   private exportFailures = new Set<string>();
   private rejectedSpans = new Map<string, number | string>();
@@ -420,12 +421,8 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
     const span = [...this.openSpans.entries()].find(([key]) =>
       key.startsWith(`tool:${sessionId}:${toolCallId}:`),
     )?.[1];
-    return span
-      ? {
-          PI_TELEMETRY_TRACEPARENT: traceparent(span),
-          PI_TELEMETRY_PARENT_TOOL_CALL_ID: toolCallId,
-        }
-      : undefined;
+    const context = span ? this.launchContexts.get(span) : undefined;
+    return context ? { ...context } : undefined;
   }
 
   private refreshToolContexts(): void {
@@ -454,6 +451,13 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
         ),
         this.telemetryParentContext(event),
       );
+      this.launchContexts.set(span, {
+        PI_TELEMETRY_TRACE_ID: requireTraceId(event.traceId),
+        PI_TELEMETRY_SESSION_ID: event.parentSessionId ?? event.sessionId,
+        PI_TELEMETRY_OWNER_PID: String(process.pid),
+        PI_TELEMETRY_TRACEPARENT: traceparent(span),
+        PI_TELEMETRY_PARENT_TOOL_CALL_ID: event.toolCallId,
+      });
       this.trackOpenSpan(key, span);
       this.refreshToolContexts();
       return;

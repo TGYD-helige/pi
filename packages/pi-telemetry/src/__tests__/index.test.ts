@@ -274,6 +274,11 @@ describe('telemetry', () => {
       createdAt: new Date().toISOString(),
     });
     const launch = exporter.getToolContext?.('parent', 'launch');
+    expect(launch).toMatchObject({
+      PI_TELEMETRY_TRACE_ID: traceId,
+      PI_TELEMETRY_SESSION_ID: 'parent',
+      PI_TELEMETRY_OWNER_PID: String(process.pid),
+    });
     expect(launch?.PI_TELEMETRY_TRACEPARENT).toMatch(/^00-[a-f0-9]{32}-[a-f0-9]{16}-01$/);
     const child = makeExporter();
     await child.exporter.publish({
