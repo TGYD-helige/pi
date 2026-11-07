@@ -144,6 +144,13 @@ describe('Phoenix telemetry export', () => {
               { type: 'tool_result', tool_use_id: 'two', content: 'TWO' },
             ],
           },
+          {
+            type: 'function_call',
+            id: 'fc-three',
+            call_id: 'three',
+            name: 'bash',
+            arguments: '{}',
+          },
           { type: 'function_call_output', call_id: 'three', output: 'THREE' },
         ],
       });
@@ -174,13 +181,65 @@ describe('Phoenix telemetry export', () => {
         'llm.input_messages.1.message.content': 'ONE',
         'llm.input_messages.2.message.tool_call_id': 'two',
         'llm.input_messages.2.message.content': 'TWO',
-        'llm.input_messages.3.message.tool_call_id': 'three',
+        'llm.input_messages.3.message.tool_calls.0.tool_call.id': 'three',
+        'llm.input_messages.4.message.tool_call_id': 'three',
         'llm.output_messages.0.message.contents.0.message_content.text': 'why',
       });
       expect(JSON.stringify(attrs)).not.toContain('data:image/png');
       expect(Object.values(attrs)).toContain('answer');
       expect(JSON.parse(String(attrs['llm.tools.1.tool.json_schema'])).name).toBe('second');
       expect(JSON.parse(String(attrs['llm.tools.2.tool.json_schema'])).name).toBe('third');
+    } finally {
+      await exporter.close?.();
+    }
+  });
+
+  it('retains tools and a preview of the newest oversized message with explicit output truncation', async () => {
+    const spans: ReadableSpan[] = [];
+    vi.spyOn(OtlpProtoExporter.prototype, 'export').mockImplementation((batch, callback) => {
+      spans.push(...batch);
+      callback({ code: 0 });
+    });
+    const exporter = createTelemetryExporter({
+      includePayloads: true,
+      phoenix: { enabled: true, endpoint: 'http://localhost:6006' },
+    });
+    try {
+      await exporter.publish({
+        ...context,
+        id: 'large-start',
+        llmGenerationId: 'g',
+        status: 'started',
+        model,
+        createdAt: new Date().toISOString(),
+        displayInput: [
+          {
+            role: 'system',
+            content: 'system',
+            tools: [{ type: 'function', function: { name: 'bash', parameters: {} } }],
+          },
+          ...Array.from({ length: 100 }, () => ({ role: 'user', content: 'old' })),
+          { role: 'user', content: 'LATEST' + '中'.repeat(200_000) },
+        ],
+      });
+      await exporter.publish({
+        ...context,
+        id: 'large-end',
+        llmGenerationId: 'g',
+        status: 'completed',
+        model,
+        createdAt: new Date().toISOString(),
+        displayOutput: Array.from({ length: 101 }, () => ({
+          role: 'assistant',
+          content: 'answer',
+        })),
+      });
+      await exporter.flush?.();
+      const attrs = spans[0]!.attributes;
+      expect(String(attrs['input.value'])).toContain('LATEST');
+      expect(Buffer.byteLength(String(attrs['input.value']))).toBeLessThanOrEqual(500_000);
+      expect(JSON.parse(String(attrs['llm.tools.0.tool.json_schema'])).name).toBe('bash');
+      expect(attrs['pi.telemetry.projection.truncated']).toBe(true);
     } finally {
       await exporter.close?.();
     }
@@ -348,6 +407,7 @@ describe('Phoenix telemetry export', () => {
         (span) => span.attributes.llmGenerationId === 'generation-1',
       )!;
       const tool = phoenixSpans.find((span) => span.attributes.toolCallId === 'call-1')!;
+      expect(JSON.parse(String(generation.attributes.metadata)).reportedCost.total).toBe(5.5);
       expect(root.attributes).toMatchObject({
         'openinference.span.kind': 'AGENT',
         'session.id': 'session-1',

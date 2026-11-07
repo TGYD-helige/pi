@@ -5,6 +5,7 @@ import type {
   RuntimeLlmGenerationEvent,
   RuntimeToolEvent,
 } from '@amaster.ai/pi-shared';
+import { utf8Prefix } from '../otel/utils.js';
 
 export function langfuseObservationAttributes(input: {
   input?: JsonValue | undefined;
@@ -175,29 +176,79 @@ export function truncateObservationSummary(value: string, maxLength = 90): strin
   return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1)}…` : normalized;
 }
 
-// Preserve the newest conversation messages before generic attribute truncation.
+// Reserve tool definitions and omission markers before retaining recent history.
 function serializeObservation(value: JsonValue): string {
   if (
     !Array.isArray(value) ||
     !value.every(
       (item) =>
-        item && typeof item === 'object' && !Array.isArray(item) && typeof item.role === 'string',
+        item &&
+        typeof item === 'object' &&
+        !Array.isArray(item) &&
+        (typeof item.role === 'string' ||
+          ['function_call', 'function_call_output', 'reasoning'].includes(String(item.type))),
     )
   )
     return JSON.stringify(value);
+  const tools: JsonValue[] = [];
+  let toolBytes = 0;
+  let omittedTools = false;
+  for (const message of value) {
+    if (
+      !message ||
+      typeof message !== 'object' ||
+      Array.isArray(message) ||
+      !Array.isArray(message.tools)
+    )
+      continue;
+    for (const tool of message.tools) {
+      const size = Buffer.byteLength(JSON.stringify(tool)) + 1;
+      if (tools.length >= 100 || toolBytes + size > 100_000) {
+        omittedTools = true;
+        break;
+      }
+      tools.push(tool);
+      toolBytes += size;
+    }
+    break;
+  }
+  const marker: JsonObject = {
+    role: 'system',
+    content: '[Earlier messages or oversized content omitted by telemetry budget]',
+    telemetryTruncated: true,
+  };
+  if (tools.length) marker.tools = tools;
+  if (omittedTools) marker.content = `${marker.content} [Some tool definitions omitted]`;
   const selected: JsonValue[] = [];
-  let bytes = 2;
-  for (let index = value.length - 1; index >= 0 && selected.length < 100; index--) {
-    const item = value[index]!;
-    const size = Buffer.byteLength(JSON.stringify(item)) + 1;
-    if (bytes + size > 500_000) break;
+  let bytes = Buffer.byteLength(JSON.stringify(marker)) + 2;
+  let truncated = omittedTools;
+  for (let index = value.length - 1; index >= 0 && selected.length < 99; index--) {
+    const { tools: _tools, ...message } = value[index] as JsonObject;
+    let item: JsonObject = message;
+    let size = Buffer.byteLength(JSON.stringify(item)) + 1;
+    if (bytes + size > 500_000) {
+      if (selected.length) break;
+      const content =
+        typeof message.content === 'string'
+          ? message.content
+          : JSON.stringify(message.content ?? message);
+      item = {
+        role: typeof message.role === 'string' ? message.role : 'assistant',
+        content: `${utf8Prefix(content, Math.max(0, Math.floor((500_000 - bytes) / 6) - 100))} [message preview truncated]`,
+      };
+      size = Buffer.byteLength(JSON.stringify(item)) + 1;
+      truncated = true;
+    }
     selected.unshift(item);
     bytes += size;
   }
-  if (selected.length < value.length)
-    selected.unshift({
-      role: 'system',
-      content: '[Earlier or oversized messages omitted by telemetry budget]',
-    });
+  if (selected.length < value.length || truncated) selected.unshift(marker);
+  else if (
+    tools.length &&
+    selected[0] &&
+    typeof selected[0] === 'object' &&
+    !Array.isArray(selected[0])
+  )
+    selected[0] = { ...selected[0], tools };
   return JSON.stringify(selected);
 }

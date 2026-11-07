@@ -95,7 +95,10 @@ export function projectMessages(attributes: Attributes, input: unknown, output: 
       const item = record(value);
       const fn = record(item.function ?? item.functionCall);
       const key = `${prefix}.tool_calls.${callIndex++}.tool_call`;
-      set(`${key}.id`, item.id ?? item.call_id);
+      set(
+        `${key}.id`,
+        item.type === 'function_call' ? (item.call_id ?? item.id) : (item.id ?? item.call_id),
+      );
       set(`${key}.function.name`, fn.name ?? item.name);
       set(`${key}.function.arguments`, fn.arguments ?? fn.args ?? item.arguments ?? item.input);
     }
@@ -150,9 +153,14 @@ export function projectMessages(attributes: Attributes, input: unknown, output: 
     for (const item of calls.slice(0, MAX_ITEMS)) call(item);
   }
   // Output and newest input get first claim on the budget.
+  if (
+    [...items(input), ...items(output)].some((value) => record(value).telemetryTruncated === true)
+  )
+    attributes['pi.telemetry.projection.truncated'] = true;
   const outputs = Array.isArray(output)
     ? output
     : [typeof output === 'string' ? { role: 'assistant', content: output } : output];
+  if (outputs.length > MAX_ITEMS) attributes['pi.telemetry.projection.truncated'] = true;
   for (const [index, value] of expandMessages(outputs.slice(-MAX_ITEMS))
     .slice(-MAX_ITEMS)
     .entries())
@@ -163,7 +171,7 @@ export function projectMessages(attributes: Attributes, input: unknown, output: 
   for (let index = selected.length - 1; index >= 0; index--)
     message(`llm.input_messages.${index}.message`, selected[index]);
   const tools: unknown[] = [];
-  for (const value of inputs.slice(-MAX_ITEMS)) {
+  for (const value of inputs) {
     for (const raw of items(record(value).tools).slice(0, MAX_ITEMS)) {
       const tool = record(raw);
       const declarations = tool.functionDeclarations

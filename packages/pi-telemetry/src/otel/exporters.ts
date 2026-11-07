@@ -129,6 +129,18 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
 
   constructor(config: OtelExporterConfig, opts?: { provider?: BasicTracerProvider }) {
     this.config = normalizeExporterConfig(config);
+    const labels = Object.fromEntries(
+      [
+        'serviceName',
+        'serviceVersion',
+        'userId',
+        'environment',
+        'release',
+        'traceName',
+        'tags',
+      ].map((key) => [key, this.config[key as keyof OtelExporterConfig]]),
+    );
+    Object.assign(this.config, redactTelemetryValue({ ...this.config, redactFields: [] }, labels));
     this.provider =
       opts?.provider ??
       buildTracerProvider(
@@ -179,19 +191,22 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
   }
 
   setContext(context: TelemetryRequestContext): void {
-    this.requestContext = redactTelemetryValue(this.config, {
-      ...(typeof context.userId === 'string' ? { userId: context.userId.slice(0, 256) } : {}),
-      ...(typeof context.traceName === 'string'
-        ? { traceName: context.traceName.slice(0, 90) }
-        : {}),
-      tags: stringList(context.tags),
-      ...(context.metadata &&
-      typeof context.metadata === 'object' &&
-      !Array.isArray(context.metadata)
-        ? { metadata: context.metadata }
-        : {}),
-      ...(typeof context.traceparent === 'string' ? { traceparent: context.traceparent } : {}),
-    }) as TelemetryRequestContext;
+    this.requestContext = redactTelemetryValue(
+      { ...this.config, redactFields: [] },
+      {
+        ...(typeof context.userId === 'string' ? { userId: context.userId.slice(0, 256) } : {}),
+        ...(typeof context.traceName === 'string'
+          ? { traceName: context.traceName.slice(0, 90) }
+          : {}),
+        tags: stringList(context.tags),
+        ...(context.metadata &&
+        typeof context.metadata === 'object' &&
+        !Array.isArray(context.metadata)
+          ? { metadata: redactTelemetryValue(this.config, boundMetadata(context.metadata)) }
+          : {}),
+        ...(typeof context.traceparent === 'string' ? { traceparent: context.traceparent } : {}),
+      },
+    ) as TelemetryRequestContext;
   }
 
   getStatus() {
@@ -365,7 +380,8 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
           this.subagentParentContext(event),
         );
         this.trackOpenSpan(key, span);
-        // Grandchildren (pi processes spawned by this subagent) parent here.
+        // The incoming pin has been consumed; descendants advertise their own launch context.
+        delete process.env.PI_TELEMETRY_PARENT_TOOL_CALL_ID;
         process.env[TRACEPARENT_ENV] = traceparent(span);
         this.refreshToolContexts();
         return;
@@ -708,8 +724,40 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
             : JSON.stringify(value);
       }
     }
-    return toOtelAttributes(redactTelemetryValue(this.config, enriched) as JsonObject);
+    return toOtelAttributes(enriched);
   }
+}
+
+function boundMetadata(value: Record<string, JsonValue>): JsonObject {
+  const result: JsonObject = {};
+  let bytes = 0;
+  let count = 0;
+  for (const key in value) {
+    if (!Object.hasOwn(value, key)) continue;
+    if (count++ >= 31) {
+      result.telemetryTruncated = '[additional metadata omitted]';
+      break;
+    }
+    const field = value[key];
+    let encoded: string | undefined;
+    try {
+      if (typeof field !== 'string' || Buffer.byteLength(field) <= 60_000 - bytes)
+        encoded = JSON.stringify(field);
+    } catch {
+      /* Non-JSON metadata is represented by an omission marker. */
+    }
+    const size =
+      encoded === undefined ? Infinity : Buffer.byteLength(encoded) + Buffer.byteLength(key) + 4;
+    const boundedKey = key.slice(0, 128);
+    if (bytes + size > 60_000) {
+      result[boundedKey] = '[metadata value omitted]';
+      bytes += 200;
+    } else {
+      result[boundedKey] = field;
+      bytes += size;
+    }
+  }
+  return result;
 }
 
 type OtlpExporterWithDelegate = SpanExporter & {

@@ -39,6 +39,8 @@ export function projectPhoenixSpan(
         parseJson(String(value)) ?? value,
       ]),
   );
+  const usage = jsonRecord(source.usage);
+  if (usage?.costSource !== 'unknown' && usage?.cost) metadata.reportedCost = usage.cost;
   if (source['langfuse.environment']) metadata.environment = source['langfuse.environment'];
   if (source['langfuse.release']) metadata.release = source['langfuse.release'];
   if (Object.keys(metadata).length) attributes.metadata = JSON.stringify(metadata);

@@ -87,6 +87,26 @@ afterEach(() => {
 });
 
 describe('telemetry', () => {
+  it('bounds custom context metadata before retaining it', async () => {
+    const { exporter, inMemory } = makeExporter();
+    exporter.setContext({
+      metadata: {
+        huge: 'x'.repeat(100_000),
+        ...Object.fromEntries(
+          Array.from({ length: 50 }, (_, index) => [`key-${index}`, 'v'.repeat(3000)]),
+        ),
+      },
+    });
+    await exporter.publish(completedTurnEvent('context-bound'));
+    const attrs = inMemory.getFinishedSpans()[0]!.attributes;
+    const values = Object.fromEntries(
+      Object.entries(attrs).filter(([key]) => key.startsWith('langfuse.trace.metadata.')),
+    );
+    expect(Buffer.byteLength(JSON.stringify(values))).toBeLessThan(70_000);
+    expect(JSON.stringify(values)).toContain('omitted');
+    await exporter.close();
+  });
+
   it('redacts configured fields inside objects and JSON strings while preserving request context', async () => {
     const { exporter, inMemory } = makeExporter({
       redactFields: ['password'],
@@ -126,6 +146,57 @@ describe('telemetry', () => {
       expect.arrayContaining(['batch', 'request']),
     );
     await exporter.close();
+  });
+
+  it('consumes an incoming explicit launch pin before a grandchild inherits its own tool', async () => {
+    process.env.PI_TELEMETRY_PARENT_TOOL_CALL_ID = 'ancestor-tool';
+    process.env.PI_TELEMETRY_TRACEPARENT =
+      '00-11111111111111111111111111111111-2222222222222222-01';
+    const child = makeExporter();
+    await child.exporter.publish({
+      id: 'start',
+      traceId,
+      sessionId: 'child',
+      parentSessionId: 'parent',
+      childSessionId: 'child',
+      type: 'subagent_started',
+      createdAt: new Date().toISOString(),
+    });
+    await child.exporter.publish({
+      id: 'tool',
+      traceId,
+      sessionId: 'child',
+      conversationId: 'child',
+      toolCallId: 'own-launch',
+      toolName: 'bash',
+      status: 'started',
+      createdAt: new Date().toISOString(),
+    });
+    const launch = child.exporter.getToolContext('child', 'own-launch')!;
+    const grandchild = makeExporter();
+    await grandchild.exporter.publish({
+      id: 'grand-start',
+      traceId,
+      sessionId: 'grandchild',
+      parentSessionId: 'child',
+      childSessionId: 'grandchild',
+      type: 'subagent_started',
+      createdAt: new Date().toISOString(),
+    });
+    await grandchild.exporter.publish({
+      id: 'grand-end',
+      traceId,
+      sessionId: 'grandchild',
+      parentSessionId: 'child',
+      childSessionId: 'grandchild',
+      type: 'subagent_completed',
+      createdAt: new Date().toISOString(),
+    });
+    expect(grandchild.inMemory.getFinishedSpans()[0]!.parentSpanContext?.spanId).toBe(
+      launch.PI_TELEMETRY_TRACEPARENT!.split('-')[2],
+    );
+    await grandchild.exporter.close();
+    await child.exporter.close();
   });
 
   it('does not guess a launch parent under concurrency and accepts an explicit context', async () => {
