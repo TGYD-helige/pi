@@ -419,6 +419,21 @@ describe('telemetryExtension', () => {
     expect(generations).toHaveLength(2);
     expect(generations[0]).toMatchObject({ model: actual.model, input: 'summary input' });
     expect(generations[0]!.traceId).toBe(generations[1]!.traceId);
+    expect(generations[0]).toMatchObject({ observationName: 'Compaction [#1]' });
+    expect(generations[1]).toMatchObject({ observationName: 'Compaction [#1]' });
+    await listeners.get('pi-telemetry:llm')?.({
+      ...actual,
+      llmGenerationId: 'failed-compact',
+      status: 'failed',
+      createdAt: '2026-05-02T00:00:02Z',
+      observationName: 'custom'.repeat(100),
+    });
+    expect(getPublishedEvents().at(-1)).toMatchObject({
+      status: 'failed',
+      error: 'Auxiliary model call failed',
+    });
+    const last = getPublishedEvents().at(-1)!;
+    expect('observationName' in last && last.observationName?.length).toBeLessThan(90);
   });
 
   it('records failed compaction with honest model and timing attribution', async () => {
@@ -473,6 +488,9 @@ describe('telemetryExtension', () => {
     );
     expect(generations[0]!.traceId).toBe(generations[1]!.traceId);
     expect(generations[2]!.traceId).not.toBe(generations[0]!.traceId);
+    expect(generations.map((event) => 'observationName' in event && event.observationName)).toEqual(
+      ['Compaction [#1]', 'Compaction [#1]', 'Branch Summary [#2]', 'Branch Summary [#2]'],
+    );
   });
 
   it.each([

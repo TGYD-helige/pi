@@ -276,6 +276,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   let traceStartTime: number | undefined;
   let tracePublished = false;
   let llmGenerationCounter = 0;
+  let auxiliaryCounter = 0;
   let pendingInput: string | undefined;
   let pendingImages: unknown[] = [];
   let systemPrompt: string | undefined;
@@ -306,7 +307,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
   let supportsSettlement = false;
   let pendingContext: TelemetryRequestContext | undefined;
   const subscriptions: Array<() => void> = [];
-  const auxiliaryTraces = new Map<string, string>();
+  const auxiliaryTraces = new Map<string, { traceId: string; observationName: string }>();
   const observedAuxiliary = new Set<string>();
   let convertMessages: typeof import('@earendil-works/pi-coding-agent').convertToLlm | undefined;
 
@@ -428,6 +429,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     for (const unsubscribe of subscriptions.splice(0)) unsubscribe();
     pendingContext = undefined;
     auxiliaryTraces.clear();
+    auxiliaryCounter = 0;
     observedAuxiliary.clear();
     if (!enabled) return;
     if (pi.events) {
@@ -791,6 +793,19 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     });
   });
 
+  function auxiliaryObservationName(
+    source: TelemetryAuxiliaryEvent['source'],
+    name?: string,
+  ): string {
+    auxiliaryCounter = Math.min(auxiliaryCounter + 1, 999_999);
+    const purpose = {
+      compaction: 'Compaction',
+      branch_summary: 'Branch Summary',
+      tool: 'Tool LLM Usage',
+    }[source];
+    return `${purpose}${typeof name === 'string' && name ? ` [${name.slice(0, 40)}]` : ''} [#${auxiliaryCounter}]`;
+  }
+
   async function publishExactAuxiliary(value: unknown): Promise<void> {
     if (!enabled || !value || typeof value !== 'object' || Array.isArray(value)) return;
     const event = value as TelemetryAuxiliaryEvent;
@@ -814,11 +829,14 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
     if (observedAuxiliary.size >= 512)
       observedAuxiliary.delete(observedAuxiliary.values().next().value!);
     observedAuxiliary.add(key);
-    let traceId = auxiliaryTraces.get(event.llmGenerationId) ?? currentTraceId;
+    const previous = auxiliaryTraces.get(event.llmGenerationId);
+    const observationName =
+      previous?.observationName ?? auxiliaryObservationName(event.source, event.observationName);
+    let traceId = previous?.traceId ?? currentTraceId;
     if (!traceId) traceId = randomUUID().replace(/-/g, '');
     if (event.status === 'started') {
       if (auxiliaryTraces.size >= 512) auxiliaryTraces.delete(auxiliaryTraces.keys().next().value!);
-      auxiliaryTraces.set(event.llmGenerationId, traceId);
+      auxiliaryTraces.set(event.llmGenerationId, { traceId, observationName });
     } else auxiliaryTraces.delete(event.llmGenerationId);
     await exporter.publish({
       id: randomUUID(),
@@ -848,8 +866,10 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
           return value === undefined ? [] : [[key, value]];
         }),
       ),
-      observationName:
-        event.observationName ?? `${event.source} [${event.llmGenerationId.slice(0, 40)}]`,
+      ...(event.status === 'failed' && !event.error
+        ? { error: 'Auxiliary model call failed' }
+        : {}),
+      observationName,
       modelParameters: {
         ...event.modelParameters,
         modelAttribution: 'producer',
@@ -873,12 +893,7 @@ export default function telemetryExtension(pi: ExtensionAPI): void {
       ...observationLineage(traceId),
       llmGenerationId: `${source}-${randomUUID()}`,
       source,
-      observationName:
-        source === 'compaction'
-          ? 'Compaction'
-          : source === 'branch_summary'
-            ? 'Branch Summary'
-            : 'Tool LLM Usage',
+      observationName: auxiliaryObservationName(source),
       model: { provider: 'unknown', model: 'unknown' },
       modelParameters: {
         modelAttribution: 'unreported',

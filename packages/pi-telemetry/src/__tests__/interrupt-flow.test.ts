@@ -439,7 +439,7 @@ describe('interrupt flow', () => {
       isError: false,
       result: { content: [] },
     });
-    const usage = exported.find((span) => span.name === 'Tool LLM Usage')!;
+    const usage = exported.find((span) => span.name === 'Tool LLM Usage [#1]')!;
     const tool = exported.find((span) => span.name === 'web')!;
     expect(usage.parentSpanContext?.spanId).toBe(tool.spanContext().spanId);
     expect(usage.attributes['langfuse.observation.model.name']).toBe('unknown');

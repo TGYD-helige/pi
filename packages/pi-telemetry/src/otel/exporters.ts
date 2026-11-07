@@ -421,9 +421,7 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
   }
 
   getToolContext(sessionId: string, toolCallId: string): Record<string, string> | undefined {
-    const span = [...this.openSpans.entries()].find(([key]) =>
-      key.startsWith(`tool:${sessionId}:${toolCallId}:`),
-    )?.[1];
+    const span = this.findToolSpan(sessionId, toolCallId);
     const context = span ? this.launchContexts.get(span) : undefined;
     return context ? { ...context } : undefined;
   }
@@ -657,12 +655,16 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
     this.openSpans.set(key, span);
   }
 
+  private findToolSpan(sessionId: string, toolCallId: string): LangfuseSpan | undefined {
+    for (const [key, span] of this.openSpans)
+      if (key.startsWith(`tool:${sessionId}:${toolCallId}:`)) return span;
+    return undefined;
+  }
+
   private subagentParentContext(event: RuntimeLifecycleEvent): Context | undefined {
     const local =
       (event.parentSessionId && event.parentToolCallId
-        ? [...this.openSpans.entries()].find(([key]) =>
-            key.startsWith(`tool:${event.parentSessionId}:${event.parentToolCallId}:`),
-          )?.[1]
+        ? this.findToolSpan(event.parentSessionId, event.parentToolCallId)
         : undefined) ?? this.openSpans.get(chatSpanKey(event));
     // In a subagent (child) process there is no local root span — parent to
     // the main process's span advertised through the environment instead.
@@ -673,9 +675,7 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
     const subagentKey = telemetryEventSubagentSpanKey(event);
     const toolParent =
       'parentToolCallId' in event && event.parentToolCallId
-        ? [...this.openSpans.entries()].find(([key]) =>
-            key.startsWith(`tool:${event.sessionId}:${event.parentToolCallId}:`),
-          )?.[1]
+        ? this.findToolSpan(event.sessionId, event.parentToolCallId)
         : undefined;
     const local =
       toolParent ??
