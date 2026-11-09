@@ -153,7 +153,9 @@ describe('runRemotion', () => {
     ).rejects.toThrow(/qcTimesSec/);
   });
 
-  it('holds the job lock until cancellation stops a detached browser launched before Remotion cleanup', async () => {
+  it.each([
+    0, 2100,
+  ])('holds the job lock until cancellation stops detached browsers (ps latency: %sms)', async (psDelayMs) => {
     const project = join(root, 'cancel-project');
     const job = join(root, '.video-gen', 'cancel-job');
     const marker = join(job, 'renderer-child.pid');
@@ -193,14 +195,14 @@ describe('runRemotion', () => {
         `#!/usr/bin/env node
         const fs = require('node:fs');
         const {execFileSync} = require('node:child_process');
-        process.stdout.write(execFileSync('/bin/ps', process.argv.slice(2)));
+        let output = execFileSync('/bin/ps', process.argv.slice(2)).toString();
         if (!fs.existsSync(${JSON.stringify(join(job, 'ps-triggered'))})) {
           fs.writeFileSync(${JSON.stringify(join(job, 'ps-triggered'))}, 'yes');
-          process.kill(Number(fs.readFileSync(${JSON.stringify(marker)}, 'utf8')), 'SIGUSR1');
-          const deadline = Date.now() + 2000;
-          while (!fs.existsSync(${JSON.stringify(helperMarker)}) && Date.now() < deadline)
-            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+          const helperPid = Number(fs.readFileSync(${JSON.stringify(helperMarker)}, 'utf8'));
+          output = output.split('\\n').filter(line => Number(line.trim().split(/\\s+/)[0]) !== helperPid).join('\\n');
         }
+        setTimeout(() => process.stdout.write(output), fs.existsSync(${JSON.stringify(join(job, 'ps-delayed'))}) ? 0 : ${psDelayMs});
+        fs.writeFileSync(${JSON.stringify(join(job, 'ps-delayed'))}, 'yes');
       `,
       );
       chmodSync(fakePs, 0o755);
@@ -266,6 +268,11 @@ describe('runRemotion', () => {
       if (process.platform !== 'win32')
         await vi.waitFor(() => expect(existsSync(browserReady)).toBe(true));
       const childPid = Number(readFileSync(marker, 'utf8'));
+      if (process.platform !== 'win32') {
+        process.kill(childPid, 'SIGUSR1');
+        await vi.waitFor(() => expect(existsSync(helperMarker)).toBe(true));
+      }
+      // Reveal the helper on the second scan without racing the real ps timeout.
       controller.abort();
       expect(settled).toBe(false);
       expect(() => process.kill(childPid, 0)).not.toThrow();
@@ -295,7 +302,7 @@ describe('runRemotion', () => {
         } catch {}
       }
     }
-  });
+  }, 20000);
 
   it('preserves public assets, injects shot URLs and verifies completed output', async () => {
     const project = join(root, 'project');

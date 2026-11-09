@@ -1,6 +1,6 @@
 # Motion authoring
 
-Use this guide for precise UI, text and chart animation in an editable Remotion project. It supplements film direction; a single generated clip, straightforward assembly, supplied edit or intentional montage does not need a continuous-motion plan. No external skill or animation runtime is required.
+Use this guide for precise UI, text and chart animation in an editable HyperFrames project by default, or an existing/explicitly requested Remotion project. It supplements film direction; a single generated clip, straightforward assembly, supplied edit or intentional montage does not need a continuous-motion plan. No external skill or animation runtime is required.
 
 ## Make each handoff explain a change
 
@@ -16,9 +16,9 @@ These are illustrative times, not a required structure. Use a persistent object 
 
 ## Build on a shared event clock
 
-Record the important landing frames in one project-level object, such as `events = { expanded: 90, result: 180 }`. Derive movement start frames from those landings and the chosen movement duration. Let both the picture and audio reference those values. Changes to a landing then move the related sound with it.
+Record the important landing frames in one project-level event map, with names such as `expanded` and `result`. Derive the values from this film's beat map and frame rate; frame indices run from zero through `durationInFrames - 1`. Derive movement start frames from those landings and the chosen movement duration. Let both the picture and audio reference those values. Changes to a landing then move the related sound with it.
 
-Use one visible carrier across the transition, interpolating position, bounds and relevant state. Keep animation a function of the current frame; random choices must be seeded. Reuse Remotion's motion helpers. Do not reset the carrier by swapping independently animated scene trees halfway through its handoff. Camera movement should preserve the carrier and important text within the delivery frame; settle the camera before asking the viewer to read dense content. Check a vertical layout independently rather than cropping a horizontal one.
+Use one visible carrier across the transition, interpolating position, bounds and relevant state. Keep animation a function of the current frame; random choices must be seeded. Use seekable animation registered with HyperFrames (for example a paused GSAP timeline in `window.__timelines`); use Remotion's frame-derived helpers for React projects. Do not reset the carrier by swapping independently animated scene trees halfway through its handoff. Camera movement should preserve the carrier and important text within the delivery frame; settle the camera before asking the viewer to read dense content. Check a vertical layout independently rather than cropping a horizontal one.
 
 For sound, use supplied or appropriately licensed assets. Put sparse accents on meaningful results, not on every animated property. Music should leave room for speech and important effects; author gain changes in the project when needed. Word-triggered animation requires timing with a known source and precision. Sentence boundaries or interpolated estimates MUST NOT be described as measured word alignment. Missing sound assets remain a production gap, not evidence of a completed sound treatment.
 
@@ -26,7 +26,7 @@ Keep music and effects separately editable. Align a recorded effect's relevant a
 
 ## Review the vulnerable moments
 
-For each risky handoff, choose a small set of before, middle and after timestamps. Include the moment of greatest zoom or travel, dense text and the result hold. Put up to 32 selected seconds-based times into `qcTimesSec` in the existing Remotion spec. Batch work still supplies `videoGenShotTimesSec` for every shot. The checks validate times and extract actual export frames; they do not recognize the carrier or judge aesthetics.
+For each risky handoff, choose a small set of before, middle and after timestamps. Include the moment of greatest zoom or travel, dense text and the result hold. Put up to 32 selected seconds-based times into `qcTimesSec` in the selected project spec. HyperFrames batch work supplies `shotTimesSec` in the assembly spec; Remotion supplies `videoGenShotTimesSec` in composition props for every shot. The checks validate times and extract actual export frames; they do not recognize the carrier or judge aesthetics.
 
 Inspect those returned frames for lost objects, crop, unreadable text, duplicated elements and a focus jump. Watch the actual transition at normal speed when playback inspection is available. Listen to the export when audio inspection is available. A still cannot prove temporal continuity, and a peak/loudness measurement cannot prove pleasant or intelligible sound. State unreviewed modalities explicitly.
 

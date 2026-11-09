@@ -42,6 +42,12 @@ import {
   saveRenderJob,
   writeJsonAtomic,
 } from './jobs/store.js';
+import {
+  type ProjectSpec,
+  parseProjectSpec,
+  preflightProject,
+  runProject,
+} from './project-render.js';
 import { assemblePrompt, validateFilmPrompt, validateShotPrompt } from './prompt.js';
 import {
   normalizeReferenceAssets,
@@ -49,12 +55,6 @@ import {
   requestFingerprint,
 } from './providers/request.js';
 import { CancelledError, pollTask, type RateLimiter } from './providers/task.js';
-import {
-  parseRemotionSpec,
-  preflightRemotion,
-  type RemotionSpec,
-  runRemotion,
-} from './remotion.js';
 import { hasCjkFont } from './text-layer.js';
 import { parseTimelineSpec, type TimelineSpec } from './timeline.js';
 import { assertNarrationOptIn, runTimeline } from './timeline-render.js';
@@ -100,16 +100,7 @@ export type RenderInput = FilmPrompt & {
   aspectRatio?: string | undefined;
   shots: RenderShotInput[];
   assembly?:
-    | {
-        type: 'remotion';
-        projectDir: string;
-        compositionId: string;
-        entryPoint?: string;
-        inputProps?: Record<string, unknown>;
-        assets?: Record<string, string>;
-        browserExecutable?: string;
-        qcTimesSec?: number[];
-      }
+    | (ProjectSpec & { type: 'remotion' | 'hyperframes' })
     | { type: 'timeline'; timeline: TimelineSpec };
 };
 
@@ -175,7 +166,7 @@ function sameKeys(actual: string[], expected: string[]): boolean {
 }
 
 function assemblySources(spec: RenderInput, cwd: string): Record<string, string> {
-  if (spec.assembly?.type === 'remotion')
+  if (spec.assembly && spec.assembly.type !== 'timeline')
     return Object.fromEntries(
       Object.entries(spec.assembly.assets ?? {}).map(([id, path]) => [id, resolve(cwd, path)]),
     );
@@ -205,6 +196,15 @@ export function parseRenderSpec(raw: string): RenderInput {
   } catch {
     throw new VideoGenError('render-input.json is not valid JSON.', 'render: spec not json');
   }
+  const assembly = (parsed as { assembly?: { type?: string; projectDir?: unknown } } | null)
+    ?.assembly;
+  if (
+    assembly &&
+    typeof assembly === 'object' &&
+    assembly.type === undefined &&
+    typeof assembly.projectDir === 'string'
+  )
+    assembly.type = 'hyperframes';
   const spec = parsed as RenderInput;
   if (!spec || typeof spec !== 'object' || !Array.isArray(spec.shots) || spec.shots.length === 0) {
     throw new VideoGenError(
@@ -323,15 +323,18 @@ export function parseRenderSpec(raw: string): RenderInput {
     if (
       !spec.assembly ||
       typeof spec.assembly !== 'object' ||
-      !['remotion', 'timeline'].includes(spec.assembly.type)
+      !['hyperframes', 'remotion', 'timeline'].includes(spec.assembly.type)
     )
-      throw new VideoGenError('assembly.type must be remotion or timeline.', 'render: assembly');
-    if (spec.assembly.type === 'remotion') {
-      parseRemotionSpec(JSON.stringify(spec.assembly));
+      throw new VideoGenError(
+        'assembly.type must be hyperframes, remotion or timeline.',
+        'render: assembly',
+      );
+    if (spec.assembly.type === 'remotion' || spec.assembly.type === 'hyperframes') {
+      parseProjectSpec(JSON.stringify(spec.assembly), spec.assembly.type);
       for (const id of Object.keys(spec.assembly.assets ?? {}))
         if (seen.has(id))
           throw new VideoGenError(
-            `Remotion asset "${id}" conflicts with shot ID.`,
+            `Video project asset "${id}" conflicts with shot ID.`,
             'render: asset collision',
           );
     }
@@ -525,7 +528,7 @@ export async function runRender(opts: {
     }
     const fingerprint = specFingerprint(specRaw, generated.length ? resolved : undefined);
     let manifest = loadRenderJob(jobDir);
-    let remotionQc: Pick<RenderRunResult, 'qcFrames' | 'qcReportPath'> | undefined;
+    let projectQc: Pick<RenderRunResult, 'qcFrames' | 'qcReportPath'> | undefined;
 
     if (manifest) {
       // 3a. resume: verify the whole input fingerprint before trusting anything
@@ -694,20 +697,23 @@ export async function runRender(opts: {
             'render: assembly asset drift',
           );
       }
-      if (spec.assembly?.type === 'remotion') {
+      if (spec.assembly && spec.assembly.type !== 'timeline') {
         if (!manifest.assemblyProjectHash || !opts.trusted)
           throw new VideoGenError(
-            'Remotion assembly has no frozen trusted project identity.',
+            'Video project assembly has no frozen trusted project identity.',
             'render: assembly identity',
           );
-        const childSpec = readJsonFile<unknown>(join(jobDir, 'assembly', 'remotion-input.json'));
+        const childSpec = readJsonFile<unknown>(
+          join(jobDir, 'assembly', `${spec.assembly.type}-input.json`),
+        );
         if (!childSpec || JSON.stringify(childSpec) !== JSON.stringify(spec.assembly))
           throw new VideoGenError(
-            'Remotion assembly input changed since the paid script was frozen.',
+            'Video project assembly input changed since the paid script was frozen.',
             'render: child spec drift',
           );
-        const current = await runRemotion({
-          specPath: join(jobDir, 'assembly', 'remotion-input.json'),
+        const current = await runProject({
+          engine: spec.assembly.type,
+          specPath: join(jobDir, 'assembly', `${spec.assembly.type}-input.json`),
           cwd,
           settings,
           activeJobs: opts.activeJobs,
@@ -717,20 +723,21 @@ export async function runRender(opts: {
         });
         if (current.projectHash !== manifest.assemblyProjectHash)
           throw new VideoGenError(
-            'Remotion project changed since paid generation; use a new job.',
+            'Video project changed since paid generation; use a new job.',
             'render: assembly drift',
           );
       }
       if (manifest.state === 'done') {
-        if (spec.assembly?.type === 'remotion') {
+        if (spec.assembly && spec.assembly.type !== 'timeline') {
           const assets = {
             ...spec.assembly.assets,
             ...Object.fromEntries(
               spec.shots.map((shot) => [shot.id, join(realShotsDir, shot.id, 'video.mp4')]),
             ),
           };
-          const child = await runRemotion({
-            specPath: join(jobDir, 'assembly', 'remotion-input.json'),
+          const child = await runProject({
+            engine: spec.assembly.type,
+            specPath: join(jobDir, 'assembly', `${spec.assembly.type}-input.json`),
             cwd,
             settings,
             activeJobs: opts.activeJobs,
@@ -741,7 +748,7 @@ export async function runRender(opts: {
             verifyOnly: true,
             signal: opts.signal,
           });
-          remotionQc = { qcFrames: child.qcFrames, qcReportPath: child.qcReportPath };
+          projectQc = { qcFrames: child.qcFrames, qcReportPath: child.qcReportPath };
         }
         if (spec.assembly) {
           if (spec.assembly.type === 'timeline')
@@ -753,8 +760,8 @@ export async function runRender(opts: {
               signal: opts.signal,
             });
           const childPath =
-            spec.assembly.type === 'remotion'
-              ? join(jobDir, 'assembly', 'remotion-manifest.json')
+            spec.assembly.type !== 'timeline'
+              ? join(jobDir, 'assembly', `${spec.assembly.type}-manifest.json`)
               : join(jobDir, 'assembly', 'manifest.json');
           const child = readJsonFile<{
             kind?: string;
@@ -782,13 +789,15 @@ export async function runRender(opts: {
             ...Object.keys(manifest.qcHashes ?? {})
               .filter((name) => name.endsWith('.png'))
               .map((name) => join(jobDir, name)),
-            ...(remotionQc?.qcFrames ?? []),
+            ...(projectQc?.qcFrames ?? []),
           ],
           qcReportPath: manifest.qcHashes?.[join('qc', 'report.json')]
             ? join(jobDir, 'qc', 'report.json')
             : undefined,
           editableProjectDir:
-            spec.assembly?.type === 'remotion' ? spec.assembly.projectDir : undefined,
+            spec.assembly && spec.assembly.type !== 'timeline'
+              ? spec.assembly.projectDir
+              : undefined,
         };
       }
       opts.onUpdate?.(`Resuming job ${jobId} (fingerprint verified).`);
@@ -910,10 +919,10 @@ export async function runRender(opts: {
         assemblyAssetHashes[id] = await hashFileSha256(path);
       }
       let assemblyProjectHash: string | undefined;
-      if (spec.assembly?.type === 'remotion') {
+      if (spec.assembly && spec.assembly.type !== 'timeline') {
         if (!opts.trusted)
           throw new VideoGenError(
-            'Remotion assembly requires a trusted project.',
+            'Video project assembly requires a trusted project.',
             'render: untrusted assembly',
           );
         const assets = {
@@ -927,8 +936,9 @@ export async function runRender(opts: {
             ]),
           ),
         };
-        assemblyProjectHash = await preflightRemotion({
-          spec: spec.assembly as RemotionSpec,
+        assemblyProjectHash = await preflightProject({
+          engine: spec.assembly.type,
+          spec: spec.assembly,
           cwd,
           jobDir,
           outputDir,
@@ -937,7 +947,10 @@ export async function runRender(opts: {
           ffmpegPath: opts.ffmpegPath,
           signal: opts.signal,
         });
-        writeJsonAtomic(join(jobDir, 'assembly', 'remotion-input.json'), spec.assembly);
+        writeJsonAtomic(
+          join(jobDir, 'assembly', `${spec.assembly.type}-input.json`),
+          spec.assembly,
+        );
       }
       if (spec.assembly?.type === 'timeline') {
         const timelineInput = spec.assembly.timeline;
@@ -1242,16 +1255,17 @@ export async function runRender(opts: {
     saveRenderJob(jobDir, manifest);
     const inputs = spec.shots.map((s) => join(realShotsDir, s.id, 'video.mp4'));
     let finalVideoPath = join(jobDir, 'final_video.mp4');
-    let remotionShotTimes: Record<string, number> | undefined;
+    let projectShotTimes: Record<string, number> | undefined;
     opts.onUpdate?.(`Assembling ${inputs.length} clips…`);
     try {
-      if (spec.assembly?.type === 'remotion') {
+      if (spec.assembly && spec.assembly.type !== 'timeline') {
         const assets = {
           ...spec.assembly.assets,
           ...Object.fromEntries(spec.shots.map((shot, index) => [shot.id, inputs[index]!])),
         };
-        const child = await runRemotion({
-          specPath: join(jobDir, 'assembly', 'remotion-input.json'),
+        const child = await runProject({
+          engine: spec.assembly.type,
+          specPath: join(jobDir, 'assembly', `${spec.assembly.type}-input.json`),
           cwd,
           settings,
           activeJobs: opts.activeJobs,
@@ -1263,8 +1277,8 @@ export async function runRender(opts: {
           signal: opts.signal,
         });
         finalVideoPath = child.finalVideoPath;
-        remotionShotTimes = child.shotTimesSec;
-        remotionQc = { qcFrames: child.qcFrames, qcReportPath: child.qcReportPath };
+        projectShotTimes = child.shotTimesSec;
+        projectQc = { qcFrames: child.qcFrames, qcReportPath: child.qcReportPath };
       } else if (spec.assembly?.type === 'timeline') {
         const assemblyDir = join(jobDir, 'assembly');
         await mkdir(assemblyDir, { recursive: true });
@@ -1349,9 +1363,9 @@ export async function runRender(opts: {
           });
           cursor += visible;
         }
-      } else if (spec.assembly?.type === 'remotion') {
+      } else if (spec.assembly) {
         for (const [index, shot] of spec.shots.entries()) {
-          const timeSec = remotionShotTimes?.[shot.id];
+          const timeSec = projectShotTimes?.[shot.id];
           if (
             timeSec === undefined ||
             !Number.isFinite(timeSec) ||
@@ -1359,8 +1373,8 @@ export async function runRender(opts: {
             timeSec >= finalDurationSec
           )
             throw new VideoGenError(
-              `Remotion has no valid timing for shot ${shot.id}.`,
-              'render: remotion qc',
+              `Video project has no valid timing for shot ${shot.id}.`,
+              'render: project qc',
             );
           finalSamples.push({ timeSec, path: join('qc', `final_part_${index + 1}.png`) });
         }
@@ -1396,7 +1410,7 @@ export async function runRender(opts: {
       const reportPath = join(qcDir, 'report.json');
       writeJsonAtomic(reportPath, {
         shots: shotMedia,
-        ...(remotionQc ? { remotion: remotionQc } : {}),
+        ...(projectQc && spec.assembly ? { [spec.assembly.type]: projectQc } : {}),
         final: {
           durationSec: finalDurationSec,
           videoCodec: finalStreams.videoCodec,
@@ -1420,12 +1434,13 @@ export async function runRender(opts: {
         ...Object.keys(manifest.qcHashes ?? {})
           .filter((name) => name.endsWith('.png'))
           .map((name) => join(jobDir, name)),
-        ...(remotionQc?.qcFrames ?? []),
+        ...(projectQc?.qcFrames ?? []),
       ],
       qcReportPath: manifest.qcHashes?.[join('qc', 'report.json')]
         ? join(jobDir, 'qc', 'report.json')
         : undefined,
-      editableProjectDir: spec.assembly?.type === 'remotion' ? spec.assembly.projectDir : undefined,
+      editableProjectDir:
+        spec.assembly && spec.assembly.type !== 'timeline' ? spec.assembly.projectDir : undefined,
     };
   } finally {
     release();
