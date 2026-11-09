@@ -21,12 +21,13 @@ export function makeHyperframesProject(project: string, sourcePath: string) {
     const output = args[args.indexOf('--output') + 1];
     if (args[0] === 'info') {console.log(JSON.stringify({duration:2})); process.exit(0);}
     const html = readFileSync(join(dir, 'index.html'), 'utf8').replace(/<!--[\\s\\S]*?-->/g, '');
-    const markup = html.replace(/<script>[\\s\\S]*?<\\/script>/gi, '');
+    const executableHtml = html.replace(/<(iframe|xmp|noembed|noframes)(?=[\\s/>])[^>]*>[\\s\\S]*?<\\/\\1\\s*>/gi, '');
+    const markup = executableHtml.replace(/<script>[\\s\\S]*?<\\/script>/gi, '');
     const authoredBase = markup.match(/<base href="([^"]+)"/i)?.[1];
     let effectiveBase = authoredBase ?? '/';
     const baseElement = {getAttribute: () => authoredBase, set href(value) {effectiveBase = value;}};
     const window = {};
-    for (const script of html.matchAll(/<script>([\\s\\S]*?)<\\/script>/gi)) {
+    for (const script of executableHtml.matchAll(/<script>([\\s\\S]*?)<\\/script>/gi)) {
       runInNewContext(script[1], {window, document:{currentScript:{previousElementSibling:baseElement}}, location:{href:'http://localhost/index.html'}, URL});
     }
     if (!window.videoGenAssets || ('assetAtAuthorTime' in window && !window.assetAtAuthorTime)) process.exit(1);

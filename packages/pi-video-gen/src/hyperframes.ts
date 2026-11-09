@@ -71,7 +71,7 @@ let stage = 19;
   let baseEnd;
   let inertDepth = 0;
   // Treat comments, quoted attributes and raw-text elements as opaque markup.
-  const tokens = /<!--[\s\S]*?-->|<(script|style|title|textarea|noscript)(?=[\s/>])(?:"[^"]*"|'[^']*'|[^'">])*>[\s\S]*?<\/\1\s*>|<\/?[a-z][a-z0-9:-]*\b(?:"[^"]*"|'[^']*'|[^'">])*>/gi;
+  const tokens = /<!--[\s\S]*?-->|<(script|style|title|textarea|noscript|iframe|xmp|noembed|noframes)(?=[\s/>])(?:"[^"]*"|'[^']*'|[^'">])*>[\s\S]*?<\/\1\s*>|<\/?[a-z][a-z0-9:-]*\b(?:"[^"]*"|'[^']*'|[^'">])*>/gi;
   for (const match of html.matchAll(tokens)) {
     const tag = match[0];
     if (/^<(template|svg|math)(?=[\s/>])/i.test(tag)) inertDepth++;
