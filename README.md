@@ -26,7 +26,7 @@ This repository contains the open-source runtime contracts, adapters, and orches
 | Extension | `@amaster.ai/pi-security` | Resource-aware security policy engine and tool authorization. |
 | Extension | `@amaster.ai/pi-teamwork` | Team collaboration and issue management via Multica. |
 | Extension | `@amaster.ai/pi-image-gen` | Image generation via OpenAI gpt-image, Google Nano Banana, Alibaba Qwen-Image, OpenRouter, and custom providers. |
-| Extension | `@amaster.ai/pi-video-gen` | Direct video-model clips, mixed-shot batch rendering with recovery, and local concat, FFmpeg timeline or editable Remotion composition. Includes subtitles, QC and bundled FFmpeg runtimes. |
+| Extension | `@amaster.ai/pi-video-gen` | Direct video-model clips, mixed-shot batch rendering with recovery, and local concat, FFmpeg timeline or editable HyperFrames (default) / Remotion composition. Includes subtitles, QC and bundled FFmpeg runtimes. |
 | Extension | `@amaster.ai/pi-lark` | Lark/Feishu workspace integration through lark-cli, including calendar, docs, drive, sheets, Base, tasks, mail, wiki, and IM skills. |
 | Extension | `@amaster.ai/pi-wecom` | WeCom workspace integration through wecom-cli, including contacts, messages, meetings, schedules, todos, docs, and smart sheets. |
 | Extension | `@amaster.ai/pi-dingtalk` | DingTalk workspace integration through dws CLI, including calendar, docs, chat, todos, sheets, AI tables, approvals, mail, wiki, and meeting minutes. |

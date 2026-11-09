@@ -21,6 +21,7 @@ import { requestFingerprint } from '../providers/request.js';
 import { CancelledError, RateLimiter } from '../providers/task.js';
 import { type RenderInput, runRender } from '../render.js';
 import type { GenerateVideoParams, ResolvedModel, VideoProviderAdapter } from '../types.js';
+import { makeHyperframesProject } from './hyperframes-fixture.js';
 
 const suiteDir = join(tmpdir(), 'pi-video-gen-render');
 afterEach(() => rmSync(suiteDir, { recursive: true, force: true }));
@@ -457,7 +458,10 @@ describe('runRender', () => {
     ]);
   });
 
-  it('returns requested Remotion review moments in fresh and resumed batches', async () => {
+  it.each([
+    'remotion',
+    'hyperframes',
+  ] as const)('returns requested %s review moments in fresh and resumed batches', async (engine) => {
     const project = join(cwd, 'review-project');
     for (const dir of [join(project, 'src'), join(project, 'public')])
       mkdirSync(dir, { recursive: true });
@@ -501,12 +505,16 @@ describe('runRender', () => {
       exports.renderMedia = async ({serveUrl, outputLocation}) => fs.copyFileSync(path.join(serveUrl, 'source.mp4'), outputLocation);
     `,
     );
+    if (engine === 'hyperframes') makeHyperframesProject(project, source);
     const jobDir = makeJob(cwd, {
       shots: [{ id: 'opening', videoPath: source }],
       assembly: {
-        type: 'remotion',
+        type: engine,
         projectDir: project,
-        compositionId: 'Promo',
+        ...(engine === 'remotion'
+          ? { compositionId: 'Promo' }
+          : { durationSec: 2, shotTimesSec: { opening: 0.5 } }),
+        browserExecutable: process.execPath,
         qcTimesSec: [0.9, 1.1],
       },
     });
@@ -519,19 +527,88 @@ describe('runRender', () => {
       ffmpegPath,
       verifyMedia: true,
     };
+    if (engine === 'hyperframes') {
+      const path = join(jobDir, 'render-input.json');
+      const input = JSON.parse(readFileSync(path, 'utf8'));
+      delete input.assembly.type;
+      writeFileSync(path, JSON.stringify(input));
+    }
     const first = await runRender(opts);
     const report = JSON.parse(readFileSync(first.qcReportPath!, 'utf8'));
-    const review = JSON.parse(readFileSync(report.remotion.qcReportPath, 'utf8'));
+    const review = JSON.parse(readFileSync(report[engine].qcReportPath, 'utf8'));
     expect(review.samples.map((sample: { timeSec: number }) => sample.timeSec)).toEqual([
       0.5, 0.9, 1, 1.1, 1.5,
     ]);
-    expect(first.qcFrames).toEqual(expect.arrayContaining(report.remotion.qcFrames));
-    expect(report.remotion.qcFrames).toHaveLength(5);
+    expect(first.qcFrames).toEqual(expect.arrayContaining(report[engine].qcFrames));
+    expect(report[engine].qcFrames).toHaveLength(5);
     const resumed = await runRender(opts);
     expect(resumed.qcFrames).toEqual(first.qcFrames);
     expect(resumed.qcReportPath).toBe(first.qcReportPath);
-    writeFileSync(report.remotion.qcFrames[0], 'tampered');
+    writeFileSync(report[engine].qcFrames[0], 'tampered');
     await expect(runRender(opts)).rejects.toThrow(/QC/);
+    expect(calls.submit).toBe(0);
+  });
+
+  it('rejects a HyperFrames HTML duration mismatch before paid generation', async () => {
+    const project = join(cwd, 'html-project');
+    makeHyperframesProject(project, join(cwd, 'unused.mp4'));
+    const jobDir = makeJob(cwd, {
+      shots: [
+        {
+          id: 'opening',
+          firstFramePath: makeFrame(cwd, 'opening.png'),
+          prompt: { visuals: 'medium shot', action: 'walks' },
+        },
+      ],
+      assembly: {
+        type: 'hyperframes',
+        projectDir: project,
+        durationSec: 3,
+        shotTimesSec: { opening: 0.5 },
+        browserExecutable: process.execPath,
+      },
+    });
+    await expect(
+      runRender({
+        ...baseOpts(cwd, mockAdapter(calls), concatCalls),
+        renderSpecPath: join(jobDir, 'render-input.json'),
+        trusted: true,
+        ffmpegPath: createRequire(import.meta.url)('ffmpeg-static') as string,
+      }),
+    ).rejects.toThrow(/duration/);
+    expect(calls.submit).toBe(0);
+  });
+
+  it('checks HyperFrames before submitting any paid shot', async () => {
+    const project = join(cwd, 'html-project');
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(project, 'package.json'), '{}');
+    writeFileSync(
+      join(project, 'index.html'),
+      '<div data-composition-id="promo" data-duration="2"></div>',
+    );
+    const jobDir = makeJob(cwd, {
+      shots: [
+        {
+          id: 'opening',
+          firstFramePath: makeFrame(cwd, 'opening.png'),
+          prompt: { visuals: 'medium shot', action: 'walks' },
+        },
+      ],
+      assembly: {
+        type: 'hyperframes',
+        projectDir: project,
+        durationSec: 2,
+        shotTimesSec: { opening: 0.5 },
+      },
+    } as RenderInput);
+    await expect(
+      runRender({
+        ...baseOpts(cwd, mockAdapter(calls), concatCalls),
+        renderSpecPath: join(jobDir, 'render-input.json'),
+        trusted: true,
+      }),
+    ).rejects.toThrow(/Install hyperframes/);
     expect(calls.submit).toBe(0);
   });
 

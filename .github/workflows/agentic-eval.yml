@@ -66,6 +66,9 @@ jobs:
           install-pi-cli: 'true'
           set-pi-agent-dir: 'true'
 
+      - name: Build packaged browser extension
+        run: pnpm --filter @amaster.ai/pi-browser-use build
+
       - name: Guard — require provider secrets
         run: |
           set -euo pipefail
@@ -126,29 +129,7 @@ jobs:
 
       - name: Summarize
         if: always()
-        run: |
-          set -euo pipefail
-          f=tests/eval/results/browser-tasks.json
-          [ -f "$f" ] || { echo "no results"; exit 0; }
-          {
-            echo "## Browser eval — task completion"
-            node -e '
-              const d = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-              const s = d.summary || {};
-              console.log("");
-              console.log(`- model: \`${s.model ?? "?"}\``);
-              console.log(`- successRate: **${(s.successRate ?? 0).toFixed(3)}** (${s.nChecked ?? 0} checked / ${s.n ?? 0} tasks)`);
-              console.log(`- avgTurns (to success): ${(s.avgTurns ?? 0).toFixed(1)}`);
-              console.log(`- avgToolCalls: ${(s.avgToolCalls ?? 0).toFixed(1)}`);
-              console.log(`- failureMix: \`${JSON.stringify(s.failureMix ?? {})}\``);
-              console.log("");
-              console.log("| task | success | mode | turns | tools |");
-              console.log("|------|:-------:|------|------:|------:|");
-              for (const r of d.rows ?? []) {
-                console.log(`| ${r.task} | ${r.success ? "✅" : "❌"} | ${r.failureMode} | ${r.turns} | ${r.toolCalls} |`);
-              }
-            ' "$f"
-          } >> "$GITHUB_STEP_SUMMARY"
+        run: node .github/scripts/effect-eval-summary.mjs tests/eval/results/browser-tasks.json >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload results
         if: always()

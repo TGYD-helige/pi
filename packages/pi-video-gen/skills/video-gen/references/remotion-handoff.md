@@ -1,6 +1,6 @@
 # Remotion handoff
 
-Use Remotion when the work needs exact text, UI, charts, editable React animation or frame control. Write an ordinary local Remotion project with an entry that calls `registerRoot()`. Install matching `remotion`, `@remotion/bundler`, `@remotion/renderer`, React and React DOM in that project. Provide an installed Chrome or Chromium binary through `browserExecutable` or `REMOTION_BROWSER_EXECUTABLE`. The plugin does not install packages or download a browser during a tool call.
+Use Remotion for existing or explicitly requested React video projects. Default new editable animation to [HyperFrames](hyperframes-handoff.md). Write an ordinary local Remotion project with an entry that calls `registerRoot()`. Install matching `remotion`, `@remotion/bundler`, `@remotion/renderer`, React and React DOM in that project. Provide an installed Chrome or Chromium binary through `browserExecutable` or `REMOTION_BROWSER_EXECUTABLE`. The plugin does not install packages or download a browser during a tool call.
 
 Write `<jobDir>/remotion-input.json` and call `video_compose({"composeSpecPath":".../remotion-input.json"})`:
 
@@ -9,6 +9,8 @@ Write `<jobDir>/remotion-input.json` and call `video_compose({"composeSpecPath":
 ```
 
 The project must be inside the trusted working directory. Set `entryPoint` to a project-relative file when the usual `src/index.ts`, `src/index.tsx`, `src/index.js` or `src/index.jsx` is missing or ambiguous. `assets` paths stay on the Node side. The plugin copies the project's original `public/` tree into the job snapshot, keeps relative paths such as `logo.png` and `fonts/brand.woff`, then copies injected assets into reserved `__pi_video_gen__/`. If the original public tree already uses this namespace, the call fails without overwriting it. The plugin passes `videoGenAssets: { demo: "__pi_video_gen__/demo.mp4" }` in `inputProps`; the composition uses `staticFile(videoGenAssets.demo)`. Ordinary `staticFile('logo.png')` and font references continue to work.
+
+For an input-only handoff, distinguish a prepared JSON file from a render-ready project. Report whether dependencies and the browser were checked; if not, leave them explicitly unverified and name their provisioning as a prerequisite to rendering.
 
 Treat the configured video output directory as generated artifacts. Keep the Remotion entry and every source file it imports outside that directory; it is excluded from the frozen project fingerprint so sibling jobs cannot invalidate one another. The entry is checked and rejected if it is inside the output directory. Do not configure video output inside the project's `public/` tree.
 
