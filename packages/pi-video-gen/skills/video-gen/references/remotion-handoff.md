@@ -1,6 +1,6 @@
 # Remotion handoff
 
-Use Remotion when the work needs exact text, UI, charts, editable React animation or frame control. Write an ordinary local Remotion project with an entry that calls `registerRoot()`. Install matching `remotion`, `@remotion/bundler`, `@remotion/renderer`, React and React DOM in that project. Provide an installed Chrome or Chromium binary through `browserExecutable` or `REMOTION_BROWSER_EXECUTABLE`. The plugin does not install packages or download a browser during a tool call.
+Use Remotion for existing or explicitly requested React video projects. Default new editable animation to [HyperFrames](hyperframes-handoff.md). Write an ordinary local Remotion project with an entry that calls `registerRoot()`. Install matching `remotion`, `@remotion/bundler`, `@remotion/renderer`, React and React DOM in that project. Provide an installed Chrome or Chromium binary through `browserExecutable` or `REMOTION_BROWSER_EXECUTABLE`. The plugin does not install packages or download a browser during a tool call.
 
 Write `<jobDir>/remotion-input.json` and call `video_compose({"composeSpecPath":".../remotion-input.json"})`:
 

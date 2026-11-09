@@ -1,6 +1,6 @@
 # pi-video-gen
 
-Pi extension for video creation. `video_generate` calls a video model directly for one clip; `video_compose` assembles existing media by lossless concat, FFmpeg timeline or a trusted Remotion project; `video_render` executes a prepared batch script with generated and existing shots, persistent remote-task recovery and optional assembly. The `video-gen` skill explains how to choose per shot. `video_capabilities` and `/video-gen` provide model information and direct commands.
+Pi extension for video creation. `video_generate` calls a video model directly for one clip; `video_compose` assembles existing media by lossless concat, FFmpeg timeline or a trusted HyperFrames/Remotion project; `video_render` executes a prepared batch script with generated and existing shots, persistent remote-task recovery and optional assembly. The `video-gen` skill explains how to choose per shot. `video_capabilities` and `/video-gen` provide model information and direct commands.
 
 ## Providers
 
@@ -95,9 +95,9 @@ Global settings (`~/.pi/agent/settings.json`):
 
 | Tool | What it does |
 |---|---|
-| `video_compose` | **Local video assembly, no paid video models.** `compose-input.json` concatenates compatible clips; `timeline-input.json` renders FFmpeg media, overlays, transitions and subtitles; `remotion-input.json` renders a trusted editable Remotion project. Narration with `edge-tts:<voice-name>` sends text to Microsoft Edge TTS. |
+| `video_compose` | **Local video assembly, no paid video models.** `compose-input.json` concatenates compatible clips; `timeline-input.json` renders FFmpeg media, overlays, transitions and subtitles; `hyperframes-input.json` renders a trusted editable HTML project (default for new animation); `remotion-input.json` keeps React projects supported. Narration with `edge-tts:<voice-name>` sends text to Microsoft Edge TTS. |
 | `video_generate` | One short clip from a structured prompt plus optional first/last frames or current-account trusted `referenceAssets`. Paid, minutes per clip. Interrupted after receiving a task id? Resume with the returned `jobId`; an ambiguous submit is parked and never resubmitted automatically. |
-| `video_render` | Executes `<jobDir>/render-input.json`: each shot uses either `videoPath` or a generated prompt with a first frame/trusted asset. Only generated shots need a model and API key. The default assembly concatenates; optional `assembly` selects FFmpeg timeline or Remotion. Paid handles, local snapshots, final SHA-256 and QC hashes support safe recovery. |
+| `video_render` | Executes `<jobDir>/render-input.json`: each shot uses either `videoPath` or a generated prompt with a first frame/trusted asset. Only generated shots need a model and API key. The default assembly concatenates; optional `assembly` selects FFmpeg timeline, HyperFrames or Remotion. New editable animations default to HyperFrames. Paid handles, local snapshots, final SHA-256 and QC hashes support safe recovery. |
 | `video_capabilities` | Read-only: active model's capability table, trusted asset modalities, and registered models. Call before composing prompts or shot books. |
 
 ## Structured prompts
@@ -136,7 +136,17 @@ Both paid tools take structured prompt fields, never a pre-joined string. The pl
 
 ## Choosing the path
 
-Choose the source for each shot: reuse existing video, call `video_generate` directly for a missing model clip, or draw precise text/UI/chart animation in Remotion. Use `video_render` when a prepared batch needs automation and reliable recovery. A shot book, character portraits and first/last frames are optional creative aids. See [the skill](skills/video-gen/SKILL.md), [render script examples](skills/video-gen/references/video-render-workflow.md) and [Remotion handoff](skills/video-gen/references/remotion-handoff.md).
+Choose the source for each shot: reuse existing video, call `video_generate` directly for a missing model clip, or draw precise text/UI/chart animation in HyperFrames by default; preserve existing or explicitly requested Remotion projects. Use `video_render` when a prepared batch needs automation and reliable recovery. A shot book, character portraits and first/last frames are optional creative aids. See [the skill](skills/video-gen/SKILL.md), [render script examples](skills/video-gen/references/video-render-workflow.md), [HyperFrames handoff](skills/video-gen/references/hyperframes-handoff.md) and [Remotion handoff](skills/video-gen/references/remotion-handoff.md).
+
+New editable animations use **HyperFrames** by default. Create a standalone HTML project and install `hyperframes` locally in it (`npm install --save-exact hyperframes@0.9.26`; this is the verified CLI version). Keep Chrome/Chromium and FFmpeg installed. Write `<jobDir>/hyperframes-input.json`:
+
+```json
+{"projectDir":"/absolute/path/html-project","durationSec":10,"assets":{"demo":"/absolute/path/demo.mp4"},"qcTimesSec":[3.8,4,4.2]}
+```
+
+Call `video_compose` or `/video-gen compose <spec>`. The plugin snapshots the HTML project, injects `window.videoGenAssets` with same-origin asset URLs, renders through the installed HyperFrames CLI, and verifies the MP4 duration and QC. `durationSec` must match the HTML composition duration. Optional `entryPoint` selects a project-relative HTML file; the default is `index.html`. Set `browserExecutable` or `HYPERFRAMES_BROWSER_PATH` to an installed browser. The editable source is preserved; the tool does not install packages or download a browser. Rendering has a 20-minute deadline and stops its process tree on cancellation.
+
+For batch `video_render`, use `assembly: {"type":"hyperframes","projectDir":"/absolute/path/html-project","durationSec":10,"shotTimesSec":{"opening":2,"demo":7}}`. Every shot ID needs a finite sample time within `durationSec`; the project reads the clips from `window.videoGenAssets`. An assembly with `projectDir` and no `type` defaults to HyperFrames. Omitting `assembly` still concatenates clips for compatibility. Before paid generation, the plugin renders a placeholder snapshot; completed output, project identity and QC hashes are checked on resume. The batch QC report links project evidence under `hyperframes`. See [HyperFrames handoff](skills/video-gen/references/hyperframes-handoff.md) for HTML authoring and offline assets.
 
 `video_compose` accepts `<jobDir>/remotion-input.json` with absolute `projectDir`, `compositionId`, optional `entryPoint`, `assets`, `inputProps` and `browserExecutable`. The project must be in a trusted working directory and have local Remotion dependencies plus Chrome/Chromium installed. Original `public/` files are copied with their relative paths; injected assets are available through `inputProps.videoGenAssets` and `staticFile()`. `video_render` uses the same contract under `assembly.type: "remotion"`; it preflights the project with placeholders before any model submit. The plugin does not install Remotion or download a browser during a render.
 
@@ -160,7 +170,7 @@ For source-based product demonstrations, see [component integration](skills/vide
 ├── shots/<shotId>/first_frame.png|last_frame.png|video.mp4
 ├── qc/shot_<shotId>.png # one frame per source shot with content hashes
 ├── qc/final_part_<n>.png # samples from the assembled MP4
-├── assembly/            # separate child job for timeline or Remotion mode
+├── assembly/            # separate child job for timeline or editable-project mode
 └── final_video.mp4      # default concat mode; assembly modes return assembly/final_video.mp4
 ```
 

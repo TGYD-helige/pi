@@ -49,6 +49,7 @@ import {
   singleJobDir,
   writeJsonAtomic,
 } from './jobs/store.js';
+import { runProject } from './project-render.js';
 import { assemblePrompt, validateFilmPrompt, validateShotPrompt } from './prompt.js';
 import { arkAdapter } from './providers/ark.js';
 import { dashscopeAdapter } from './providers/dashscope.js';
@@ -62,7 +63,6 @@ import {
   requestFingerprint,
 } from './providers/request.js';
 import { CancelledError, pollTask, RateLimiter } from './providers/task.js';
-import { runRemotion } from './remotion.js';
 import { parseRenderSpec, runRender } from './render.js';
 import { hasCjkFont } from './text-layer.js';
 import { runTimeline } from './timeline-render.js';
@@ -864,13 +864,18 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
           { ...result, qcStatus: result.qcFrames.length ? 'recorded' : 'not_performed' },
         );
       }
-      if (name === 'remotion-input.json') {
+      if (name === 'hyperframes-input.json' || name === 'remotion-input.json') {
+        const engine = name === 'hyperframes-input.json' ? 'hyperframes' : 'remotion';
+        const label = engine === 'hyperframes' ? 'HyperFrames' : 'Remotion';
+        if (!isProjectTrusted(ctx))
+          return errResult('Video project execution requires a trusted project.');
         const ffmpeg = await resolveFfmpeg(settings.ffmpegPath, signal);
         if (!ffmpeg.runnable)
           return errResult(
-            'ffmpeg is required for Remotion media validation. Run /video-gen doctor.',
+            'ffmpeg is required for video project media validation. Run /video-gen doctor.',
           );
-        const result = await runRemotion({
+        const result = await runProject({
+          engine,
           specPath: p.composeSpecPath,
           cwd: ctx.cwd,
           settings,
@@ -881,11 +886,11 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
         });
         pi.appendEntry('video-gen:last-job', {
           jobId: result.jobId,
-          kind: 'remotion',
+          kind: engine,
           finalVideoPath: result.finalVideoPath,
         });
         return okResult(
-          `Remotion video ready: ${result.finalVideoPath}. Editable project: ${result.projectDir}. QC frames: ${result.qcFrames.join(', ') || 'not recorded'}. Job: ${result.jobId}.`,
+          `${label} video ready: ${result.finalVideoPath}. Editable project: ${result.projectDir}. QC frames: ${result.qcFrames.join(', ') || 'not recorded'}. Job: ${result.jobId}.`,
           { ...result, qcStatus: result.qcFrames.length ? 'recorded' : 'not_performed' },
         );
       }
@@ -1067,20 +1072,20 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
       name: 'video_compose',
       label: 'Compose Video Clips',
       description:
-        'Compose existing media locally: lossless concat (compose-input.json), FFmpeg timeline (timeline-input.json), or a trusted Remotion project (remotion-input.json). No video-model calls; timeline narration may use network TTS.',
+        'Compose existing media locally: lossless concat (compose-input.json), FFmpeg timeline (timeline-input.json), or a trusted HyperFrames (default) / Remotion project (hyperframes-input.json / remotion-input.json). No video-model calls; timeline narration may use network TTS.',
       outputSchema: videoJobOutputSchema,
       parameters: Type.Object({
         composeSpecPath: Type.String({
           description:
-            'Path to <jobDir>/compose-input.json, timeline-input.json, or remotion-input.json. The parent directory is the immutable job under the video-gen output directory.',
+            'Path to <jobDir>/compose-input.json, timeline-input.json, hyperframes-input.json, or remotion-input.json. The parent directory is the immutable job under the video-gen output directory.',
         }),
       }),
       promptSnippet:
-        'Compose existing assets locally by concat, FFmpeg timeline, or a trusted Remotion project; no paid video model',
+        'Compose existing assets locally by concat, FFmpeg timeline, or a trusted HyperFrames/Remotion project; no paid video model',
       promptGuidelines: [
         'Read the video-gen skill and follow its concat or timeline workflow before writing the spec. Local composition skips video_capabilities and paid-model gates.',
-        'Choose compose-input.json for lossless concat, timeline-input.json for FFmpeg overlays and narration, or remotion-input.json for precise graphics and an editable React project. Remotion requires a trusted local project and installed Remotion/Chrome; optional narration sends text to Microsoft Edge TTS.',
-        'For Remotion, use optional qcTimesSec (up to 32 seconds-based timestamps) to inspect important handoffs before, during and after the transition. Review returned QC frames; recorded evidence does not establish motion or audio acceptance.',
+        'Default to HyperFrames (hyperframes-input.json) for new editable UI, charts and typography. Preserve existing or explicitly requested Remotion projects (remotion-input.json). Both require a trusted local project, installed project dependencies and Chrome. Choose compose-input.json for lossless concat or timeline-input.json for FFmpeg overlays and narration; optional narration sends text to Microsoft Edge TTS.',
+        'For HyperFrames and Remotion, use optional qcTimesSec (up to 32 seconds-based timestamps) to inspect important handoffs before, during and after the transition. Review returned QC frames; recorded evidence does not establish motion or audio acceptance.',
         'For C0: every ordered stream across all clips must match (codec/resolution/fps/timebase/pix_fmt/sample-rate/audio layout) — mismatches are reported via ffprobe, never silently transcoded. Do NOT use for AI video generation (use video_generate/video_render).',
         'For timeline: each segment contains exactly one image or video. Video uses numeric durationSec with optional trimStartSec, fit, and sourceAudio; image may use auto duration and motion.',
         'Reuse suitable existing images/screenshots/clips first; use image_generate for missing visuals or explicitly requested replacements. Put Chinese titles in overlay and use subtitles.mode "burn" when narration subtitles must appear directly in the frames.',
@@ -1098,7 +1103,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
       name: 'video_render',
       label: 'Render Multi-Shot Video',
       description:
-        'Execute a prepared render-input.json with generated and existing video shots. Only generated shots call a paid model; resume persisted tasks and assemble by concat, FFmpeg timeline, or Remotion.',
+        'Execute a prepared render-input.json with generated and existing video shots. Only generated shots call a paid model; resume persisted tasks and assemble by concat, FFmpeg timeline, or HyperFrames (default for new animation) / Remotion.',
       outputSchema: videoJobOutputSchema,
       parameters: Type.Object({
         renderSpecPath: Type.String({
@@ -1115,7 +1120,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
         'Execute a prepared multi-shot script with existing or paid generated clips and resumable assembly',
       promptGuidelines: [
         'Read the video-gen skill. Use video_render for a prepared batch needing automation or recovery. Paid approval applies only to generated shots; all-local scripts need no model key or paid confirmation.',
-        'Each shot chooses videoPath for existing media or prompt plus firstFramePath/referenceAssets for generation. Optional assembly selects timeline or Remotion; Remotion is preflighted before the first model submit.',
+        'Each shot chooses videoPath for existing media or prompt plus firstFramePath/referenceAssets for generation. Optional assembly selects timeline, HyperFrames (default for new animation), or Remotion; editable projects are preflighted before the first model submit.',
         'For each shot, either generate required local frames via image_generate and record their returned paths, or pass current-account provider assets in referenceAssets. Recognizable real-person references sent to Seedance must use preset-avatar or authorized-person assets.',
         'render-input.json carries structured prompts: film-level style/characters/consistency/negative, per-shot prompt.{scene,visuals,action,effects,audio,visibleCharacters} — the plugin assembles the labeled prompt text; never pre-join a prompt string.',
         'The spec is immutable per job directory: rerunning the same path resumes identical input; revisions go in a NEW job directory.',
@@ -1264,7 +1269,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
         const specPath = (args ?? '').trim().slice('compose'.length).trim();
         if (!specPath) {
           ctx.ui.notify(
-            'Usage: /video-gen compose <jobDir/compose-input.json|timeline-input.json|remotion-input.json>',
+            'Usage: /video-gen compose <jobDir/compose-input.json|timeline-input.json|hyperframes-input.json|remotion-input.json>',
             'error',
           );
           return;
@@ -1446,7 +1451,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
       }
 
       ctx.ui.notify(
-        'pi-video-gen commands:\n  /video-gen generate --visuals ".." --action ".." [--style ".." --scene ".."]  Generate one model clip\n  /video-gen render <spec>      Run a mixed-shot script with recovery\n  /video-gen compose <spec>     Concat, FFmpeg timeline, or Remotion project\n  /video-gen recover <jobId>    Resolve ambiguous shots (reset/adopt)\n  /video-gen models             List registered models\n  /video-gen reload             Reload settings\n  /video-gen doctor             Check environment (ffmpeg, CJK fonts, keys, image_generate, output dir)',
+        'pi-video-gen commands:\n  /video-gen generate --visuals ".." --action ".." [--style ".." --scene ".."]  Generate one model clip\n  /video-gen render <spec>      Run a mixed-shot script with recovery\n  /video-gen compose <spec>     Concat, FFmpeg timeline, or HyperFrames/Remotion project\n  /video-gen recover <jobId>    Resolve ambiguous shots (reset/adopt)\n  /video-gen models             List registered models\n  /video-gen reload             Reload settings\n  /video-gen doctor             Check environment (ffmpeg, CJK fonts, keys, image_generate, output dir)',
         'info',
       );
     },

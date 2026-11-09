@@ -1,7 +1,7 @@
 {
   "name": "@amaster.ai/pi-video-gen",
   "version": "0.1.0",
-  "description": "Pi extension for direct video-model clips, recoverable mixed-shot rendering, and local concat, FFmpeg timeline or Remotion composition with subtitles and QC.",
+  "description": "Pi extension for direct video-model clips, recoverable mixed-shot rendering, and local concat, FFmpeg timeline or editable HyperFrames (default) / Remotion composition with subtitles and QC.",
   "keywords": [
     "pi-package",
     "pi",
@@ -12,6 +12,7 @@
     "ark",
     "kling",
     "agentic-video",
+    "hyperframes",
     "remotion"
   ],
   "license": "Apache-2.0",

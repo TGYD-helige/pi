@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { Value } from 'typebox/value';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import piVideoGenExtension from '../index.js';
+import { makeHyperframesProject } from './hyperframes-fixture.js';
 
 const { safeFetchMock } = vi.hoisted(() => ({ safeFetchMock: vi.fn() }));
 
@@ -95,6 +96,145 @@ describe('pi-video-gen extension', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     rmSync(suiteDir, { recursive: true, force: true });
+  });
+
+  it('defaults editable animation guidance to HyperFrames and enforces project trust', async () => {
+    const tool = tools.get('video_compose')!;
+    expect(tool.promptGuidelines!.join(' ')).toContain('Default to HyperFrames');
+    const result = await tool.execute(
+      'hf',
+      { composeSpecPath: '.video-gen/hf/hyperframes-input.json' },
+      undefined,
+      undefined,
+      fakeCtx(cwd),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain('trusted project');
+  });
+
+  it('renders and resumes a HyperFrames project through video_compose', async () => {
+    const { createRequire } = await import('node:module');
+    const { runFfmpegCommand } = await import('../ffmpeg.js');
+    const project = join(cwd, 'html-project');
+    const source = join(cwd, 'source.mp4');
+    const ffmpegPath = createRequire(import.meta.url)('ffmpeg-static') as string;
+    await runFfmpegCommand(ffmpegPath, [
+      '-f',
+      'lavfi',
+      '-i',
+      'color=c=blue:s=160x90:r=10',
+      '-t',
+      '2',
+      '-c:v',
+      'mpeg4',
+      '-y',
+      source,
+    ]);
+    makeHyperframesProject(project, source);
+    const original = readFileSync(join(project, 'index.html'), 'utf8');
+    const job = join(cwd, '.video-gen', 'html-compose');
+    mkdirSync(job, { recursive: true });
+    const composeSpecPath = join(job, 'hyperframes-input.json');
+    writeFileSync(
+      composeSpecPath,
+      JSON.stringify({
+        projectDir: project,
+        durationSec: 2,
+        browserExecutable: process.execPath,
+        assets: { demo: source },
+        qcTimesSec: [0.9],
+      }),
+    );
+    const tool = tools.get('video_compose')!;
+    const first = await tool.execute(
+      'hf',
+      { composeSpecPath },
+      undefined,
+      undefined,
+      fakeCtx(cwd, true),
+    );
+    expect(first.isError).toBeUndefined();
+    expect(first.structuredContent?.qcStatus).toBe('recorded');
+    expect(first.structuredContent?.qcFrames).toHaveLength(4);
+    expect(first.content[0]!.text).toContain('HyperFrames video ready');
+    expect(readFileSync(join(project, 'index.html'), 'utf8')).toBe(original);
+    const resumed = await tool.execute(
+      'hf',
+      { composeSpecPath },
+      undefined,
+      undefined,
+      fakeCtx(cwd, true),
+    );
+    expect(resumed.structuredContent?.resumed).toBe(true);
+    writeFileSync(first.structuredContent!.finalVideoPath as string, 'tampered');
+    const changed = await tool.execute(
+      'hf',
+      { composeSpecPath },
+      undefined,
+      undefined,
+      fakeCtx(cwd, true),
+    );
+    expect(changed.isError).toBe(true);
+    expect(changed.content[0]!.text).toContain('changed');
+  });
+
+  it.each([
+    'fail',
+    'wait',
+  ] as const)('sanitizes HyperFrames failure and stops cancelled CLI processes (%s)', async (mode) => {
+    const project = join(cwd, 'html-project');
+    const job = join(cwd, '.video-gen', 'html-failure');
+    mkdirSync(job, { recursive: true });
+    makeHyperframesProject(project, join(cwd, 'unused.mp4'));
+    const marker = join(cwd, 'cli.pid');
+    writeFileSync(join(project, mode), mode === 'wait' ? marker : '');
+    const composeSpecPath = join(job, 'hyperframes-input.json');
+    writeFileSync(
+      composeSpecPath,
+      JSON.stringify({ projectDir: project, durationSec: 2, browserExecutable: process.execPath }),
+    );
+    const controller = new AbortController();
+    const running = tools
+      .get('video_compose')!
+      .execute('hf', { composeSpecPath }, controller.signal, undefined, fakeCtx(cwd, true));
+    let pid: number | undefined;
+    try {
+      if (mode === 'wait') {
+        await vi.waitFor(() => {
+          pid = Number(readFileSync(marker, 'utf8'));
+          expect(pid).toBeGreaterThan(0);
+        });
+        controller.abort();
+      }
+      const result = await running;
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).toMatch(mode === 'wait' ? /cancelled/ : /rendering failed/);
+      expect(JSON.stringify(result)).not.toContain('secret-provider-body');
+      expect(mockPi.appendEntry).not.toHaveBeenCalled();
+      if (pid) expect(() => process.kill(pid!, 0)).toThrow();
+    } finally {
+      controller.abort();
+      await running;
+    }
+  });
+
+  it('preserves an existing final video when a fresh HyperFrames job conflicts', async () => {
+    const project = join(cwd, 'html-project');
+    const job = join(cwd, '.video-gen', 'html-conflict');
+    mkdirSync(job, { recursive: true });
+    makeHyperframesProject(project, join(cwd, 'unused.mp4'));
+    writeFileSync(join(job, 'final_video.mp4'), 'user-data');
+    const composeSpecPath = join(job, 'hyperframes-input.json');
+    writeFileSync(
+      composeSpecPath,
+      JSON.stringify({ projectDir: project, durationSec: 2, browserExecutable: process.execPath }),
+    );
+    const result = await tools
+      .get('video_compose')!
+      .execute('hf', { composeSpecPath }, undefined, undefined, fakeCtx(cwd, true));
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain('already exists');
+    expect(readFileSync(join(job, 'final_video.mp4'), 'utf8')).toBe('user-data');
   });
 
   it('declares typed capabilities and safe errors for every public video tool', async () => {
