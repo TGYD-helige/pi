@@ -6,7 +6,7 @@ For a plan-only request, aim for about 600 words unless more detail is requested
 
 ## 1. Ground the film in the product
 
-For software shown through its source components or release notes, read [product component integration](product-components.md) before planning the demonstration.
+For an existing Remotion film or an explicit request to mount React product components in Remotion, read [product component integration](product-components.md). For release-note films, trace each shown change to its version and source evidence, then use the default HyperFrames path or the user's selected assembly method.
 
 Read the supplied site, UI, brand assets, data and footage before designing scenes. State the audience, the one idea the viewer should retain, the target duration/aspect ratio and the evidence that demonstrates that idea. Trace on-screen claims, numbers and UI states to those materials. Label illustrative mockups as such; use actual product states for demonstrations. If access is unavailable, identify the missing evidence and work from the material available without inventing product capabilities.
 

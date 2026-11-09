@@ -1,6 +1,6 @@
 # Product components in video
 
-Read this guide when demonstrating software from its source components or turning release notes into a product film. Use the existing Remotion path. For screenshots or supplied footage, follow film direction and the selected assembly guide instead.
+Read this guide for an existing Remotion film or an explicit request to mount React product components in Remotion. For a new release-note film, screenshots or supplied footage, follow [film direction](film-direction.md) and the default [HyperFrames path](hyperframes-handoff.md) or the user's selected assembly method.
 
 ## Trace the claim
 

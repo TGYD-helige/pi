@@ -15,11 +15,25 @@ export function makeHyperframesProject(project: string, sourcePath: string) {
     `
     import {copyFileSync, readFileSync, mkdirSync, writeFileSync, existsSync} from 'node:fs';
     import {join} from 'node:path';
+    import {runInNewContext} from 'node:vm';
     const args = process.argv.slice(2);
     const dir = args[1];
     const output = args[args.indexOf('--output') + 1];
     if (args[0] === 'info') {console.log(JSON.stringify({duration:2})); process.exit(0);}
-    if (!readFileSync(join(dir, 'index.html'), 'utf8').includes('window.videoGenAssets=')) process.exit(1);
+    const html = readFileSync(join(dir, 'index.html'), 'utf8').replace(/<!--[\\s\\S]*?-->/g, '');
+    const markup = html.replace(/<script>[\\s\\S]*?<\\/script>/gi, '');
+    const authoredBase = markup.match(/<base href="([^"]+)"/i)?.[1];
+    let effectiveBase = authoredBase ?? '/';
+    const baseElement = {getAttribute: () => authoredBase, set href(value) {effectiveBase = value;}};
+    const window = {};
+    for (const script of html.matchAll(/<script>([\\s\\S]*?)<\\/script>/gi)) {
+      runInNewContext(script[1], {window, document:{currentScript:{previousElementSibling:baseElement}}, location:{href:'http://localhost/index.html'}, URL});
+    }
+    if (!window.videoGenAssets) process.exit(1);
+    if (html.includes('data-review-relative')) {
+      const resource = new URL('poster.png', new URL(effectiveBase, 'http://localhost/'));
+      if (!existsSync(join(dir, resource.pathname))) process.exit(1);
+    }
     if (existsSync(join(dir, 'fail'))) {console.error('secret-provider-body'); process.exit(1);}
     if (existsSync(join(dir, 'wait'))) {
       writeFileSync(readFileSync(join(dir, 'wait'), 'utf8'), String(process.pid));

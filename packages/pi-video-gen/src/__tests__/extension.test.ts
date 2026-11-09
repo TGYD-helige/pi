@@ -112,7 +112,17 @@ describe('pi-video-gen extension', () => {
     expect(result.content[0]!.text).toContain('trusted project');
   });
 
-  it('renders and resumes a HyperFrames project through video_compose', async () => {
+  it.each([
+    'plain',
+    'comment',
+    'attribute',
+    'implicit-head',
+    'nested-base-comment',
+    'nested-base-script',
+    'nested-base-attribute',
+    'nested-author-base',
+    'nested-relative-base',
+  ] as const)('renders and resumes a HyperFrames project through video_compose (%s)', async (markup) => {
     const { createRequire } = await import('node:module');
     const { runFfmpegCommand } = await import('../ffmpeg.js');
     const project = join(cwd, 'html-project');
@@ -131,6 +141,36 @@ describe('pi-video-gen extension', () => {
       source,
     ]);
     makeHyperframesProject(project, source);
+    let entry = readFileSync(join(project, 'index.html'), 'utf8');
+    if (markup === 'comment')
+      entry = entry.replace('<html>', '<!-- Put scripts in <head> --><html>');
+    if (markup === 'attribute') entry = entry.replace('<html>', '<html data-note="<head>">');
+    if (markup === 'implicit-head') entry = entry.replace('<head></head>', '');
+    const nested = markup.startsWith('nested-');
+    if (nested) {
+      const resourceDir =
+        markup === 'nested-author-base'
+          ? 'media'
+          : markup === 'nested-relative-base'
+            ? 'scenes/media'
+            : 'scenes';
+      mkdirSync(join(project, resourceDir), { recursive: true });
+      mkdirSync(join(project, 'scenes'), { recursive: true });
+      writeFileSync(join(project, resourceDir, 'poster.png'), 'image');
+      entry = entry.replace('<body>', '<body><img data-review-relative src="poster.png">');
+      if (markup === 'nested-base-comment')
+        entry = entry.replace('<head>', '<!-- no <base> needed --><head>');
+      if (markup === 'nested-base-script')
+        entry = entry.replace('</head>', '<script>const note="<base>";</script></head>');
+      if (markup === 'nested-base-attribute')
+        entry = entry.replace('<html>', '<html data-note="<base>">');
+      if (markup === 'nested-author-base')
+        entry = entry.replace('<head>', '<head><base href="/media/">');
+      if (markup === 'nested-relative-base')
+        entry = entry.replace('<head>', '<head><base href="media/">');
+      writeFileSync(join(project, 'scenes', 'intro.html'), entry);
+    }
+    writeFileSync(join(project, 'index.html'), entry);
     const original = readFileSync(join(project, 'index.html'), 'utf8');
     const job = join(cwd, '.video-gen', 'html-compose');
     mkdirSync(job, { recursive: true });
@@ -142,6 +182,7 @@ describe('pi-video-gen extension', () => {
         durationSec: 2,
         browserExecutable: process.execPath,
         assets: { demo: source },
+        ...(nested ? { entryPoint: 'scenes/intro.html' } : {}),
         qcTimesSec: [0.9],
       }),
     );

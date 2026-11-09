@@ -67,12 +67,36 @@ let stage = 19;
   const entryPath = join(x.publicDir, entry);
   if ((await stat(entryPath)).size > 5*1024*1024) throw new Error('HTML entry exceeds 5 MB');
   let html = await readFile(entryPath, 'utf8');
-  const base = entry !== 'index.html' && !/<base\b/i.test(html)
+  let headEnd;
+  let baseEnd;
+  let inertDepth = 0;
+  // Treat comments, quoted attributes and raw-text elements as opaque markup.
+  const tokens = /<!--[\s\S]*?-->|<(script|style|title|textarea|noscript)\b(?:"[^"]*"|'[^']*'|[^'">])*>[\s\S]*?<\/\1\s*>|<\/?[a-z][a-z0-9:-]*\b(?:"[^"]*"|'[^']*'|[^'">])*>/gi;
+  for (const match of html.matchAll(tokens)) {
+    const tag = match[0];
+    if (/^<(template|svg|math)\b/i.test(tag)) inertDepth++;
+    else if (/^<\/(template|svg|math)\b/i.test(tag)) inertDepth = Math.max(0, inertDepth - 1);
+    else if (!inertDepth) {
+      if (/^<head\b/i.test(tag) && headEnd === undefined) headEnd = match.index + tag.length;
+      if (/^<base\b/i.test(tag) && baseEnd === undefined) {
+        for (const attr of tag.slice(5, -1).matchAll(/([^\s'"<>/=]+)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?/g)) {
+          if (attr[1].toLowerCase() === 'href') { baseEnd = match.index + tag.length; break; }
+        }
+      }
+    }
+  }
+  if (entry !== 'index.html' && baseEnd !== undefined) {
+    const sourceUrl = '/' + entry.replace(/\\/g, '/').split('/').map(encodeURIComponent).join('/');
+    const rebase = '<script>{const base=document.currentScript.previousElementSibling;base.href=new URL(base.getAttribute("href"),new URL(' + JSON.stringify(sourceUrl) + ',location.href)).href;}</script>';
+    html = html.slice(0, baseEnd) + rebase + html.slice(baseEnd);
+    if (headEnd !== undefined && headEnd >= baseEnd) headEnd += rebase.length;
+  }
+  const base = entry !== 'index.html' && baseEnd === undefined
     ? '<base href="/' + dirname(entry).replace(/\\/g, '/').split('/').map(encodeURIComponent).join('/') + '/">' : '';
   const bootstrap = base + '<script>window.videoGenAssets=' + payload + ';</script>';
-  if (/<head\b[^>]*>/i.test(html)) html = html.replace(/<head\b[^>]*>/i, match => match + bootstrap);
-  else if (/<html\b[^>]*>/i.test(html)) html = html.replace(/<html\b[^>]*>/i, match => match + '<head>' + bootstrap + '</head>');
-  else html = html.replace(/^(\s*<!doctype[^>]*>)?/i, match => match + '<head>' + bootstrap + '</head>');
+  const prefix = /^(?:\uFEFF|\s|<!--[\s\S]*?-->|<!doctype\b(?:"[^"]*"|'[^']*'|[^'">])*>|<html\b(?:"[^"]*"|'[^']*'|[^'">])*>)*/i.exec(html)[0];
+  const insertAt = headEnd ?? prefix.length;
+  html = html.slice(0, insertAt) + bootstrap + html.slice(insertAt);
   await writeFile(join(x.publicDir, 'index.html'), html);
   const env = {...process.env, HYPERFRAMES_BROWSER_PATH: x.browserExecutable, HYPERFRAMES_FFMPEG_PATH: isAbsolute(x.ffmpegPath) ? x.ffmpegPath : undefined, HYPERFRAMES_FFPROBE_PATH: isAbsolute(x.ffprobePath) ? x.ffprobePath : undefined, HYPERFRAMES_NO_TELEMETRY: '1', DO_NOT_TRACK: '1'};
   stage = 24;
