@@ -1,11 +1,11 @@
 ---
 name: video-gen
-description: "Create or edit videos using existing media, video models, FFmpeg timelines, HyperFrames or Remotion. Use for clips, video assembly, product films and animated explainers; use image-gen for still-image deliverables."
+description: "Create or edit videos with HyperFrames for editable animation, existing media, video models or FFmpeg timelines. Use for clips, video assembly, product films and animated explainers; use image-gen for still-image deliverables."
 ---
 
 # Video generation
 
-Choose each shot's source independently: existing media, a model-generated clip, or graphics in an editable HyperFrames project by default. Preserve existing or explicitly requested Remotion projects. Name the executable tool at each handoff. The video model comes from `pi-video-gen.defaultModel`; image generation uses pi-image-gen's active model. `<outputDir>` is the configured `pi-video-gen.outputDir`, defaulting to `<cwd>/.video-gen`; `/video-gen doctor` reports its resolved path.
+Default new editable animation to HyperFrames. Choose each shot's source independently: existing media, a model-generated clip, or HTML graphics. Name the executable tool at each handoff. The video model comes from `pi-video-gen.defaultModel`; image generation uses pi-image-gen's active model. `<outputDir>` is the configured `pi-video-gen.outputDir`, defaulting to `<cwd>/.video-gen`; `/video-gen doctor` reports its resolved path.
 
 ## Route the task
 
@@ -16,8 +16,10 @@ Honor the user's specified method and existing usable material. For a plan-only 
 | Join compatible MP4 clips without re-encoding | `video_compose`; follow Compatible clip concat below |
 | Create one or several model clips under direct control | `video_generate`; follow Direct model clips below; use `video_compose` if assembly is needed |
 | Assemble images/screenshots and clips with overlays, transitions or narration | `video_compose`; read [Timeline composition](references/timeline-compose.md) |
-| Animate exact UI, charts, typography or editable graphics | `video_compose`; default to [HyperFrames handoff](references/hyperframes-handoff.md); use [Remotion handoff](references/remotion-handoff.md) for existing or explicitly requested React projects |
+| Animate exact UI, charts, typography or editable graphics | `video_compose`; read [HyperFrames handoff](references/hyperframes-handoff.md) |
 | Execute a prepared batch with saved remote tasks and optional assembly | `video_render`; read [render script and recovery](references/video-render-workflow.md), plus the selected assembly guide |
+
+For an existing Remotion project or an explicit request to use Remotion, read [Remotion handoff](references/remotion-handoff.md) and preserve that workflow.
 
 For a product film, demonstration, capability showcase or authored explainer, read [film direction](references/film-direction.md) before designing scenes. An explicitly supplied edit, single clip or straightforward assembly follows its supplied instructions without that planning stage. For continuous UI/graphic handoffs, film direction routes to the motion-authoring guide. Read [shot planning and frame preparation](references/shot-planning.md) only when recurring identities, narrative continuity or missing reference frames require it.
 
