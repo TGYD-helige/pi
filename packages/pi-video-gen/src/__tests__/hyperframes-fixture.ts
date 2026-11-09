@@ -31,6 +31,7 @@ export function makeHyperframesProject(project: string, sourcePath: string) {
       runInNewContext(script[1], {window, document:{currentScript:{previousElementSibling:baseElement}}, location:{href:'http://localhost/index.html'}, URL});
     }
     if (!window.videoGenAssets || ('assetAtAuthorTime' in window && !window.assetAtAuthorTime)) process.exit(1);
+    if (Object.values(window.videoGenAssets).some(path => new URL(path, new URL(effectiveBase, 'http://localhost/index.html')).origin !== 'http://localhost')) process.exit(1);
     if (html.includes('data-review-relative')) {
       const resource = new URL('poster.png', new URL(effectiveBase, 'http://localhost/'));
       if (!existsSync(join(dir, resource.pathname))) process.exit(1);

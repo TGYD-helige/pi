@@ -119,6 +119,7 @@ describe('pi-video-gen extension', () => {
     'implicit-head',
     'custom-head-tag',
     'iframe-fallback',
+    'external-base',
     'nested-base-comment',
     'nested-base-script',
     'nested-base-attribute',
@@ -164,6 +165,8 @@ describe('pi-video-gen extension', () => {
           '<body>',
           '<body><iframe><head>Fallback</head></iframe><script>window.assetAtAuthorTime=Boolean(window.videoGenAssets);</script>',
         );
+    if (markup === 'external-base')
+      entry = entry.replace('<head>', '<head><base href="https://cdn.example/media/">');
     const nested = markup.startsWith('nested-');
     if (nested) {
       const resourceDir = ['nested-author-base', 'nested-svg-template'].includes(markup)

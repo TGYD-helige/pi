@@ -89,7 +89,7 @@ let stage = 19;
   const prepend = element => head.childNodes.length
     ? adapter.insertBefore(head, element, head.childNodes[0]) : adapter.appendChild(head, element);
   const script = adapter.createElement('script', namespace, []);
-  adapter.insertText(script, 'window.videoGenAssets=' + payload + ';');
+  adapter.insertText(script, 'window.videoGenAssets=Object.fromEntries(Object.entries(' + payload + ').map(([id,path])=>[id,new URL(path,location.href).href]));');
   prepend(script);
   if (entry !== 'index.html') {
     const sourceUrl = new URL('/' + entry.replace(/\\/g, '/').split('/').map(encodeURIComponent).join('/'), 'http://pi-video-gen.invalid');
