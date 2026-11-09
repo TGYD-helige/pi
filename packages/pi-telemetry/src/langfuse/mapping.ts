@@ -6,6 +6,7 @@ import type {
   RuntimeToolEvent,
 } from '@amaster.ai/pi-shared';
 import { serializeTelemetryValue } from '../observations.js';
+import { MAX_ATTRIBUTE_VALUE_BYTES } from '../otel/types.js';
 import { utf8Prefix } from '../otel/utils.js';
 
 export function langfuseObservationAttributes(input: {
@@ -233,9 +234,9 @@ function serializeObservation(value: JsonValue): string {
             ? { parameters: declaration.parameters ?? declaration.input_schema }
             : {}),
         };
-        const encoded = serializeTelemetryValue(tool, 100_000 - toolBytes);
-        const size = encoded === undefined ? 100_001 : Buffer.byteLength(encoded) + 1;
-        if (tools.length >= 100 || toolBytes + size > 100_000) {
+        const encoded = serializeTelemetryValue(tool, 500_000 - toolBytes);
+        const size = encoded === undefined ? 500_001 : Buffer.byteLength(encoded) + 1;
+        if (tools.length >= 100 || toolBytes + size > 500_000) {
           omittedTools = true;
           break;
         }
@@ -257,19 +258,22 @@ function serializeObservation(value: JsonValue): string {
   let truncated = omittedTools;
   for (let index = value.length - 1; index >= 0 && selected.length < 99; index--) {
     const message = value[index] as JsonObject;
-    const encoded = serializeTelemetryValue(message, 500_000 - bytes - 1, true);
+    const encoded = serializeTelemetryValue(message, MAX_ATTRIBUTE_VALUE_BYTES - bytes - 1, true);
     let item: JsonObject = encoded === undefined ? {} : JSON.parse(encoded);
-    let size = encoded === undefined ? 500_001 : Buffer.byteLength(encoded) + 1;
-    if (bytes + size > 500_000) {
+    let size =
+      encoded === undefined ? MAX_ATTRIBUTE_VALUE_BYTES + 1 : Buffer.byteLength(encoded) + 1;
+    if (bytes + size > MAX_ATTRIBUTE_VALUE_BYTES) {
       if (selected.length) break;
       const content =
         typeof message.content === 'string'
           ? message.content
-          : (serializeTelemetryValue(message.content ?? null, Math.max(0, 500_000 - bytes)) ??
-            '[structured content omitted]');
+          : (serializeTelemetryValue(
+              message.content ?? null,
+              Math.max(0, MAX_ATTRIBUTE_VALUE_BYTES - bytes),
+            ) ?? '[structured content omitted]');
       item = {
         role: typeof message.role === 'string' ? message.role : 'assistant',
-        content: `${utf8Prefix(content, Math.max(0, Math.floor((500_000 - bytes) / 6) - 100))} [message preview truncated]`,
+        content: `${utf8Prefix(content, Math.max(0, Math.floor((MAX_ATTRIBUTE_VALUE_BYTES - bytes) / 6) - 100))} [message preview truncated]`,
       };
       size = Buffer.byteLength(JSON.stringify(item)) + 1;
       truncated = true;

@@ -23,6 +23,74 @@ afterEach(() => {
 });
 
 describe('Phoenix telemetry export', () => {
+  it('retains all tool definitions above 250 KB alongside long messages', async () => {
+    const spans: ReadableSpan[] = [];
+    vi.spyOn(OtlpProtoExporter.prototype, 'export').mockImplementation((batch, callback) => {
+      spans.push(...batch);
+      callback({ code: 0 });
+    });
+    const tools = Array.from({ length: 100 }, (_, index) => ({
+      type: 'function',
+      name: index === 99 ? 'web_search' : `tool_${index}`,
+      description: 'd'.repeat(4200),
+      parameters: { type: 'object' },
+    }));
+    const exporter = createTelemetryExporter({
+      includePayloads: true,
+      phoenix: { enabled: true, endpoint: 'http://localhost:6006' },
+    });
+    try {
+      await exporter.publish({
+        ...context,
+        id: 'tools-start',
+        llmGenerationId: 'g',
+        status: 'started',
+        model,
+        createdAt: new Date().toISOString(),
+        displayInput: [
+          { role: 'system', content: 's'.repeat(400_000), tools },
+          { role: 'user', content: 'LATEST' },
+        ],
+      });
+      await exporter.publish({
+        ...context,
+        id: 'tools-end',
+        llmGenerationId: 'g',
+        status: 'completed',
+        model,
+        createdAt: new Date().toISOString(),
+      });
+      await exporter.flush?.();
+      const attrs = spans[0]!.attributes;
+      const input = JSON.parse(String(attrs['input.value']));
+      expect(Buffer.byteLength(String(attrs['input.value']))).toBeLessThanOrEqual(750_000);
+      expect(input[0].tools).toHaveLength(100);
+      expect(input[0].tools[99].name).toBe('web_search');
+      const projectedTools = Object.entries(attrs).filter(([key]) => key.startsWith('llm.tools.'));
+      expect(projectedTools).toHaveLength(100);
+      expect(JSON.parse(String(attrs['llm.tools.99.tool.json_schema']))).toMatchObject({
+        name: 'web_search',
+        description: tools[99]!.description,
+        parameters: { type: 'object' },
+      });
+      expect(Object.values(attrs)).toContain('LATEST');
+      const semantic = Object.entries(attrs).filter(([key]) =>
+        /^(llm\.(input_messages|output_messages|tools)\.)/.test(key),
+      );
+      expect(semantic.length).toBeLessThanOrEqual(512);
+      expect(
+        semantic.reduce(
+          (bytes, [key, value]) =>
+            bytes + Buffer.byteLength(key) + Buffer.byteLength(String(value)),
+          0,
+        ),
+      ).toBeLessThanOrEqual(750_000);
+      expect(attrs['pi.telemetry.projection.truncated']).toBe(true);
+    } finally {
+      await exporter.close?.();
+    }
+  });
+
   it('projects readable messages, tools, parameters and context without changing other destinations', async () => {
     const spans: ReadableSpan[] = [];
     vi.spyOn(OtlpProtoExporter.prototype, 'export').mockImplementation((batch, callback) => {
@@ -279,7 +347,7 @@ describe('Phoenix telemetry export', () => {
             tools: [{ type: 'function', function: { name: 'bash', parameters: {} } }],
           },
           ...Array.from({ length: 100 }, () => ({ role: 'user', content: 'old' })),
-          { role: 'user', content: `LATEST${'中'.repeat(200_000)}` },
+          { role: 'user', content: `LATEST${'中'.repeat(400_000)}` },
         ],
       });
       await exporter.publish({
@@ -297,7 +365,7 @@ describe('Phoenix telemetry export', () => {
       await exporter.flush?.();
       const attrs = spans[0]!.attributes;
       expect(String(attrs['input.value'])).toContain('LATEST');
-      expect(Buffer.byteLength(String(attrs['input.value']))).toBeLessThanOrEqual(500_000);
+      expect(Buffer.byteLength(String(attrs['input.value']))).toBeLessThanOrEqual(750_000);
       expect(JSON.parse(String(attrs['llm.tools.0.tool.json_schema'])).name).toBe('bash');
       expect(attrs['pi.telemetry.projection.truncated']).toBe(true);
     } finally {

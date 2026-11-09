@@ -1,8 +1,9 @@
 import type { Attributes } from '@opentelemetry/api';
 import { isInlineImage } from '../observations.js';
 
-// Raw I/O remains available; semantic duplication has its own aggregate budget.
-const MAX_BYTES = 250_000;
+// Raw I/O remains available; tools and messages each have a bounded projection budget.
+const MAX_TOOL_BYTES = 500_000;
+const MAX_MESSAGE_BYTES = 250_000;
 const MAX_ATTRIBUTES = 512;
 const MAX_ITEMS = 100;
 
@@ -50,12 +51,13 @@ function expandMessages(values: unknown[], attributes: Attributes): unknown[] {
 
 export function projectMessages(attributes: Attributes, input: unknown, output: unknown): void {
   let bytes = 0;
+  let maxBytes = MAX_TOOL_BYTES;
   let count = 0;
   const set = (key: string, value: unknown) => {
     if (value === undefined) return;
     const text = typeof value === 'string' ? value : JSON.stringify(value);
     const size = Buffer.byteLength(key) + Buffer.byteLength(text);
-    if (count >= MAX_ATTRIBUTES || bytes + size > MAX_BYTES) {
+    if (count >= MAX_ATTRIBUTES || bytes + size > maxBytes) {
       attributes['pi.telemetry.projection.truncated'] = true;
       return;
     }
@@ -155,26 +157,7 @@ export function projectMessages(attributes: Attributes, input: unknown, output: 
     if (calls.length > MAX_ITEMS) attributes['pi.telemetry.projection.truncated'] = true;
     for (const item of calls.slice(0, MAX_ITEMS)) call(item);
   }
-  // Output and newest input get first claim on the budget.
-  if (
-    [...items(input), ...items(output)].some((value) => record(value).telemetryTruncated === true)
-  )
-    attributes['pi.telemetry.projection.truncated'] = true;
-  const outputs = Array.isArray(output)
-    ? output
-    : [typeof output === 'string' ? { role: 'assistant', content: output } : output];
-  if (outputs.length > MAX_ITEMS) attributes['pi.telemetry.projection.truncated'] = true;
-  const expandedOutput = expandMessages(outputs.slice(-MAX_ITEMS), attributes);
-  if (expandedOutput.length > MAX_ITEMS) attributes['pi.telemetry.projection.truncated'] = true;
-  for (const [index, value] of expandedOutput.slice(-MAX_ITEMS).entries())
-    message(`llm.output_messages.${index}.message`, value);
   const inputs = Array.isArray(input) ? input : [];
-  if (inputs.length > MAX_ITEMS) attributes['pi.telemetry.projection.truncated'] = true;
-  const expandedInput = expandMessages(inputs.slice(-MAX_ITEMS), attributes);
-  if (expandedInput.length > MAX_ITEMS) attributes['pi.telemetry.projection.truncated'] = true;
-  const selected = expandedInput.slice(-MAX_ITEMS);
-  for (let index = selected.length - 1; index >= 0; index--)
-    message(`llm.input_messages.${index}.message`, selected[index]);
   const tools: unknown[] = [];
   for (const value of inputs) {
     if (items(record(value).tools).length > MAX_ITEMS)
@@ -196,4 +179,26 @@ export function projectMessages(attributes: Attributes, input: unknown, output: 
     }
   }
   for (const [index, value] of tools.entries()) set(`llm.tools.${index}.tool.json_schema`, value);
+  // Tool schemas and messages each have their own byte budget; attribute count stays shared.
+  bytes = 0;
+  maxBytes = MAX_MESSAGE_BYTES;
+  // Output and newest input get first claim on the budget.
+  if (
+    [...items(input), ...items(output)].some((value) => record(value).telemetryTruncated === true)
+  )
+    attributes['pi.telemetry.projection.truncated'] = true;
+  const outputs = Array.isArray(output)
+    ? output
+    : [typeof output === 'string' ? { role: 'assistant', content: output } : output];
+  if (outputs.length > MAX_ITEMS) attributes['pi.telemetry.projection.truncated'] = true;
+  const expandedOutput = expandMessages(outputs.slice(-MAX_ITEMS), attributes);
+  if (expandedOutput.length > MAX_ITEMS) attributes['pi.telemetry.projection.truncated'] = true;
+  for (const [index, value] of expandedOutput.slice(-MAX_ITEMS).entries())
+    message(`llm.output_messages.${index}.message`, value);
+  if (inputs.length > MAX_ITEMS) attributes['pi.telemetry.projection.truncated'] = true;
+  const expandedInput = expandMessages(inputs.slice(-MAX_ITEMS), attributes);
+  if (expandedInput.length > MAX_ITEMS) attributes['pi.telemetry.projection.truncated'] = true;
+  const selected = expandedInput.slice(-MAX_ITEMS);
+  for (let index = selected.length - 1; index >= 0; index--)
+    message(`llm.input_messages.${index}.message`, selected[index]);
 }
