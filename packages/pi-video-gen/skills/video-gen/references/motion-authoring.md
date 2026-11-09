@@ -16,7 +16,7 @@ These are illustrative times, not a required structure. Use a persistent object 
 
 ## Build on a shared event clock
 
-Record the important landing frames in one project-level object, such as `events = { expanded: 90, result: 180 }`. Derive movement start frames from those landings and the chosen movement duration. Let both the picture and audio reference those values. Changes to a landing then move the related sound with it.
+Record the important landing frames in one project-level event map, with names such as `expanded` and `result`. Derive the values from this film's beat map and frame rate; frame indices run from zero through `durationInFrames - 1`. Derive movement start frames from those landings and the chosen movement duration. Let both the picture and audio reference those values. Changes to a landing then move the related sound with it.
 
 Use one visible carrier across the transition, interpolating position, bounds and relevant state. Keep animation a function of the current frame; random choices must be seeded. Use seekable animation registered with HyperFrames (for example a paused GSAP timeline in `window.__timelines`); use Remotion's frame-derived helpers for React projects. Do not reset the carrier by swapping independently animated scene trees halfway through its handoff. Camera movement should preserve the carrier and important text within the delivery frame; settle the camera before asking the viewer to read dense content. Check a vertical layout independently rather than cropping a horizontal one.
 

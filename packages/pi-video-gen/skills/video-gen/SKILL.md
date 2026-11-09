@@ -21,7 +21,7 @@ Honor the user's specified method and existing usable material. For a plan-only 
 
 For an existing Remotion project or an explicit request to use Remotion, read [Remotion handoff](references/remotion-handoff.md) and preserve that workflow.
 
-For a product film, demonstration, capability showcase or authored explainer, read [film direction](references/film-direction.md) before designing scenes. An explicitly supplied edit, single clip or straightforward assembly follows its supplied instructions without that planning stage. For continuous UI/graphic handoffs, film direction routes to the motion-authoring guide. Read [shot planning and frame preparation](references/shot-planning.md) only when recurring identities, narrative continuity or missing reference frames require it.
+For a product film, demonstration, capability showcase or authored explainer, read [film direction](references/film-direction.md) before designing scenes. An explicitly supplied edit, single clip or straightforward assembly follows its supplied instructions without that planning stage. When proposing continuous UI/graphic handoffs, also read [motion authoring](references/motion-authoring.md), including for plan-only requests. Read [shot planning and frame preparation](references/shot-planning.md) only when recurring identities, narrative continuity or missing reference frames require it.
 
 ## Execution rules
 
@@ -50,5 +50,7 @@ For a product film, demonstration, capability showcase or authored explainer, re
 5. Inspect the returned saved video or available QC evidence and report its path, accepted degradation and any verification limitation.
 
 ## Completion
+
+Check any supplied timing examples against this film's duration and beat map, including plan-only handoffs: sampled seconds must be strictly below the duration, and event frames must be within the composition.
 
 Before reporting success, verify the requested clip/segment count and order, review the actual exported version or available QC evidence, and return the absolute output path plus any editable project and accepted limitations. Complete the selected assembly guide's checks. For creative films, apply film direction's delivery review and revision rules and report separately what was checked in stills, motion and audio. A successful render or recorded QC is evidence, not visual or user acceptance.
