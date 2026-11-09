@@ -123,6 +123,7 @@ describe('pi-video-gen extension', () => {
     'nested-base-script',
     'nested-base-attribute',
     'nested-author-base',
+    'nested-svg-template',
     'nested-relative-base',
     'nested-custom-base-tag',
   ] as const)('renders and resumes a HyperFrames project through video_compose (%s)', async (markup) => {
@@ -165,12 +166,11 @@ describe('pi-video-gen extension', () => {
         );
     const nested = markup.startsWith('nested-');
     if (nested) {
-      const resourceDir =
-        markup === 'nested-author-base'
-          ? 'media'
-          : markup === 'nested-relative-base'
-            ? 'scenes/media'
-            : 'scenes';
+      const resourceDir = ['nested-author-base', 'nested-svg-template'].includes(markup)
+        ? 'media'
+        : markup === 'nested-relative-base'
+          ? 'scenes/media'
+          : 'scenes';
       mkdirSync(join(project, resourceDir), { recursive: true });
       mkdirSync(join(project, 'scenes'), { recursive: true });
       writeFileSync(join(project, resourceDir, 'poster.png'), 'image');
@@ -183,6 +183,8 @@ describe('pi-video-gen extension', () => {
         entry = entry.replace('</head>', '<script>const note="<base>";</script></head>');
       if (markup === 'nested-base-attribute')
         entry = entry.replace('<html>', '<html data-note="<base>">');
+      if (markup === 'nested-svg-template')
+        entry = entry.replace('<head>', '<head><template><svg/></template><base href="/media/">');
       if (markup === 'nested-author-base')
         entry = entry.replace('<head>', '<head><base href="/media/">');
       if (markup === 'nested-relative-base')

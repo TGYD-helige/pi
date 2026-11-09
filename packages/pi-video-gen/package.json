@@ -60,7 +60,8 @@
   "dependencies": {
     "@amaster.ai/pi-shared": "workspace:*",
     "sharp": "^0.34.0",
-    "msedge-tts": "^2.0.7"
+    "msedge-tts": "^2.0.7",
+    "parse5": "^8.1.1"
   },
   "optionalDependencies": {
     "@amaster.ai/pi-video-gen-ffmpeg-darwin-arm64": "workspace:*",

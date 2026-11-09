@@ -44,7 +44,12 @@ export async function resolveHyperframesProject(spec: ProjectSpec, projectDir: s
       'An installed Chrome/Chromium is required. Set browserExecutable or HYPERFRAMES_BROWSER_PATH; no browser is downloaded.',
       'hyperframes: browser missing',
     );
-  return { projectDir, entryPoint, browserExecutable };
+  return {
+    projectDir,
+    entryPoint,
+    browserExecutable,
+    htmlParserUrl: import.meta.resolve('parse5'),
+  };
 }
 
 // The CLI runs only against a job-owned snapshot; it cannot rewrite the editable source project.
@@ -52,7 +57,7 @@ export const hyperframesRunner = String.raw`
 const {spawn, execFile} = require('node:child_process');
 const {promisify} = require('node:util');
 const {readFile, writeFile, stat} = require('node:fs/promises');
-const {join, relative, dirname, isAbsolute} = require('node:path');
+const {join, relative, isAbsolute} = require('node:path');
 let stage = 19;
 (async () => {
   const x = JSON.parse(process.argv[1]);
@@ -66,38 +71,35 @@ let stage = 19;
   const payload = JSON.stringify(assets).replace(/</g, '\\u003c');
   const entryPath = join(x.publicDir, entry);
   if ((await stat(entryPath)).size > 5*1024*1024) throw new Error('HTML entry exceeds 5 MB');
-  let html = await readFile(entryPath, 'utf8');
-  let headEnd;
-  let baseEnd;
-  let inertDepth = 0;
-  // Treat comments, quoted attributes and raw-text elements as opaque markup.
-  const tokens = /<!--[\s\S]*?-->|<(script|style|title|textarea|noscript|iframe|xmp|noembed|noframes)(?=[\s/>])(?:"[^"]*"|'[^']*'|[^'">])*>[\s\S]*?<\/\1\s*>|<\/?[a-z][a-z0-9:-]*\b(?:"[^"]*"|'[^']*'|[^'">])*>/gi;
-  for (const match of html.matchAll(tokens)) {
-    const tag = match[0];
-    if (/^<(template|svg|math)(?=[\s/>])/i.test(tag)) inertDepth++;
-    else if (/^<\/(template|svg|math)(?=[\s/>])/i.test(tag)) inertDepth = Math.max(0, inertDepth - 1);
-    else if (!inertDepth) {
-      if (/^<head(?=[\s/>])/i.test(tag) && headEnd === undefined) headEnd = match.index + tag.length;
-      if (/^<base(?=[\s/>])/i.test(tag) && baseEnd === undefined) {
-        for (const attr of tag.slice(5, -1).matchAll(/([^\s'"<>/=]+)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?/g)) {
-          if (attr[1].toLowerCase() === 'href') { baseEnd = match.index + tag.length; break; }
-        }
-      }
+  const {parse, serialize, defaultTreeAdapter: adapter} = await import(x.htmlParserUrl);
+  stage = 20;
+  const document = parse(await readFile(entryPath, 'utf8'));
+  const namespace = 'http://www.w3.org/1999/xhtml';
+  let head;
+  let baseHref;
+  const nodes = [document];
+  while (nodes.length) {
+    const node = nodes.pop();
+    if (node.namespaceURI === namespace) {
+      if (node.tagName === 'head') head ??= node;
+      if (node.tagName === 'base') baseHref ??= node.attrs.find(attr => attr.name === 'href');
     }
+    if (node.childNodes) for (let i = node.childNodes.length - 1; i >= 0; i--) nodes.push(node.childNodes[i]);
   }
-  if (entry !== 'index.html' && baseEnd !== undefined) {
-    const sourceUrl = '/' + entry.replace(/\\/g, '/').split('/').map(encodeURIComponent).join('/');
-    const rebase = '<script>{const base=document.currentScript.previousElementSibling;base.href=new URL(base.getAttribute("href"),new URL(' + JSON.stringify(sourceUrl) + ',location.href)).href;}</script>';
-    html = html.slice(0, baseEnd) + rebase + html.slice(baseEnd);
-    if (headEnd !== undefined && headEnd >= baseEnd) headEnd += rebase.length;
+  const prepend = element => head.childNodes.length
+    ? adapter.insertBefore(head, element, head.childNodes[0]) : adapter.appendChild(head, element);
+  const script = adapter.createElement('script', namespace, []);
+  adapter.insertText(script, 'window.videoGenAssets=' + payload + ';');
+  prepend(script);
+  if (entry !== 'index.html') {
+    const sourceUrl = new URL('/' + entry.replace(/\\/g, '/').split('/').map(encodeURIComponent).join('/'), 'http://pi-video-gen.invalid');
+    if (baseHref) {
+      let url;
+      try { url = new URL(baseHref.value, sourceUrl); } catch { url = sourceUrl; }
+      baseHref.value = url.origin === sourceUrl.origin ? url.pathname + url.search + url.hash : url.href;
+    } else prepend(adapter.createElement('base', namespace, [{name:'href', value:new URL('.', sourceUrl).pathname}]));
   }
-  const base = entry !== 'index.html' && baseEnd === undefined
-    ? '<base href="/' + dirname(entry).replace(/\\/g, '/').split('/').map(encodeURIComponent).join('/') + '/">' : '';
-  const bootstrap = base + '<script>window.videoGenAssets=' + payload + ';</script>';
-  const prefix = /^(?:\uFEFF|\s|<!--[\s\S]*?-->|<!doctype\b(?:"[^"]*"|'[^']*'|[^'">])*>|<html(?=[\s/>])(?:"[^"]*"|'[^']*'|[^'">])*>)*/i.exec(html)[0];
-  const insertAt = headEnd ?? prefix.length;
-  html = html.slice(0, insertAt) + bootstrap + html.slice(insertAt);
-  await writeFile(join(x.publicDir, 'index.html'), html);
+  await writeFile(join(x.publicDir, 'index.html'), serialize(document));
   const env = {...process.env, HYPERFRAMES_BROWSER_PATH: x.browserExecutable, HYPERFRAMES_FFMPEG_PATH: isAbsolute(x.ffmpegPath) ? x.ffmpegPath : undefined, HYPERFRAMES_FFPROBE_PATH: isAbsolute(x.ffprobePath) ? x.ffprobePath : undefined, HYPERFRAMES_NO_TELEMETRY: '1', DO_NOT_TRACK: '1'};
   stage = 24;
   const {stdout} = await promisify(execFile)(process.execPath, [cli, 'info', x.publicDir, '--json'], {cwd:x.publicDir, env, maxBuffer:64*1024, timeout:30000});
