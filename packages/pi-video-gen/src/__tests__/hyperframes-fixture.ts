@@ -19,7 +19,16 @@ export function makeHyperframesProject(project: string, sourcePath: string) {
     const args = process.argv.slice(2);
     const dir = args[1];
     const output = args[args.indexOf('--output') + 1];
+    if (args[0] === 'browser' && args[1] === 'path') {
+      if (existsSync(${JSON.stringify(join(project, 'browser-discovery-wait'))})) {
+        writeFileSync(${JSON.stringify(join(project, 'browser-discovery.pid'))}, String(process.pid));
+        setInterval(() => {}, 1000);
+        await new Promise(() => {});
+      }
+      console.log(process.execPath); process.exit(0);
+    }
     if (args[0] === 'info') {console.log(JSON.stringify({duration:2})); process.exit(0);}
+    if (existsSync(join(dir, 'cached-browser-required')) && process.env.HYPERFRAMES_BROWSER_PATH !== process.execPath) process.exit(1);
     const html = readFileSync(join(dir, 'index.html'), 'utf8').replace(/<!--[\\s\\S]*?-->/g, '');
     const executableHtml = html.replace(/<(iframe|xmp|noembed|noframes)(?=[\\s/>])[^>]*>[\\s\\S]*?<\\/\\1\\s*>/gi, '');
     const markup = executableHtml.replace(/<script>[\\s\\S]*?<\\/script>/gi, '');

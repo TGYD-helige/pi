@@ -120,6 +120,7 @@ describe('pi-video-gen extension', () => {
     'custom-head-tag',
     'iframe-fallback',
     'external-base',
+    'cli-browser',
     'nested-base-comment',
     'nested-base-script',
     'nested-base-attribute',
@@ -167,6 +168,10 @@ describe('pi-video-gen extension', () => {
         );
     if (markup === 'external-base')
       entry = entry.replace('<head>', '<head><base href="https://cdn.example/media/">');
+    if (markup === 'cli-browser') {
+      vi.stubEnv('HYPERFRAMES_BROWSER_PATH', undefined);
+      writeFileSync(join(project, 'cached-browser-required'), 'yes');
+    }
     const nested = markup.startsWith('nested-');
     if (nested) {
       const resourceDir = ['nested-author-base', 'nested-svg-template'].includes(markup)
@@ -204,7 +209,7 @@ describe('pi-video-gen extension', () => {
       JSON.stringify({
         projectDir: project,
         durationSec: 2,
-        browserExecutable: process.execPath,
+        browserExecutable: markup === 'cli-browser' ? undefined : process.execPath,
         assets: { demo: source },
         ...(nested ? { entryPoint: 'scenes/intro.html' } : {}),
         qcTimesSec: [0.9],
@@ -241,6 +246,43 @@ describe('pi-video-gen extension', () => {
     );
     expect(changed.isError).toBe(true);
     expect(changed.content[0]!.text).toContain('changed');
+  });
+
+  it('cancels HyperFrames browser discovery before starting the renderer', async () => {
+    vi.stubEnv('HYPERFRAMES_BROWSER_PATH', undefined);
+    const project = join(cwd, 'browser-project');
+    const job = join(cwd, '.video-gen', 'browser-cancel');
+    makeHyperframesProject(project, join(cwd, 'unused.mp4'));
+    mkdirSync(job, { recursive: true });
+    writeFileSync(join(project, 'browser-discovery-wait'), 'yes');
+    const composeSpecPath = join(job, 'hyperframes-input.json');
+    writeFileSync(composeSpecPath, JSON.stringify({ projectDir: project, durationSec: 2 }));
+    const controller = new AbortController();
+    const running = tools
+      .get('video_compose')!
+      .execute(
+        'browser-cancel',
+        { composeSpecPath },
+        controller.signal,
+        undefined,
+        fakeCtx(cwd, true),
+      );
+    try {
+      await vi.waitFor(() =>
+        expect(
+          Number(readFileSync(join(project, 'browser-discovery.pid'), 'utf8')),
+        ).toBeGreaterThan(0),
+      );
+      const pid = Number(readFileSync(join(project, 'browser-discovery.pid'), 'utf8'));
+      controller.abort();
+      const result = await running;
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).toContain('cancelled');
+      await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow());
+    } finally {
+      controller.abort();
+      await running;
+    }
   });
 
   it.each([

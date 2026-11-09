@@ -60,10 +60,10 @@ const namespace = '__pi_video_gen__';
 const sha = (data: Buffer | string) => createHash('sha256').update(data).digest('hex');
 const execFileAsync = promisify(execFile);
 
-async function descendantGroups(rootPid: number): Promise<number[]> {
+async function descendantGroups(rootPid: number, timeoutMs: number): Promise<number[]> {
   const { stdout } = await execFileAsync('ps', ['-axo', 'pid=,ppid=,pgid='], {
     maxBuffer: 4 * 1024 * 1024,
-    timeout: 2_000,
+    timeout: timeoutMs,
   });
   const rows = stdout
     .trim()
@@ -248,7 +248,12 @@ async function projectFingerprint(
   return hash.digest('hex');
 }
 
-async function resolveProject(spec: ProjectSpec, cwd: string, engine: ProjectEngine) {
+async function resolveProject(
+  spec: ProjectSpec,
+  cwd: string,
+  engine: ProjectEngine,
+  signal?: AbortSignal,
+) {
   const projectDir = await realpath(spec.projectDir).catch(() => {
     throw new VideoGenError('Video project directory is missing.', 'project: project');
   });
@@ -263,7 +268,7 @@ async function resolveProject(spec: ProjectSpec, cwd: string, engine: ProjectEng
       'Video project needs package.json and installed dependencies.',
       'project: package',
     );
-  if (engine === 'hyperframes') return resolveHyperframesProject(spec, projectDir);
+  if (engine === 'hyperframes') return resolveHyperframesProject(spec, projectDir, signal);
   const candidates = ['src/index.ts', 'src/index.tsx', 'src/index.js', 'src/index.jsx'].filter(
     (p) => existsSync(join(projectDir, p)),
   );
@@ -455,7 +460,14 @@ function runRunner(input: Record<string, unknown>, signal?: AbortSignal): Promis
           let cleanupFailed = false;
           const discoverDeadline = Date.now() + 7_000;
           while (true) {
-            const fresh = (await descendantGroups(rootPid)).filter((group) => !groups.has(group));
+            const remaining = discoverDeadline - Date.now();
+            if (remaining <= 0) {
+              cleanupFailed = true;
+              break;
+            }
+            const fresh = (await descendantGroups(rootPid, remaining)).filter(
+              (group) => !groups.has(group),
+            );
             if (fresh.length === 0) break;
             for (const group of fresh) {
               groups.add(group);
@@ -464,10 +476,6 @@ function runRunner(input: Record<string, unknown>, signal?: AbortSignal): Promis
               } catch (error) {
                 if ((error as NodeJS.ErrnoException).code !== 'ESRCH') cleanupFailed = true;
               }
-            }
-            if (Date.now() >= discoverDeadline) {
-              cleanupFailed = true;
-              break;
             }
           }
           for (const group of groups) {
@@ -560,7 +568,7 @@ export async function preflightProject(opts: {
   signal?: AbortSignal | undefined;
 }) {
   const engine = opts.engine ?? 'hyperframes';
-  const project = await resolveProject(opts.spec, opts.cwd, engine);
+  const project = await resolveProject(opts.spec, opts.cwd, engine, opts.signal);
   const realJob = await realpath(opts.jobDir);
   const realOutput = await realpath(opts.outputDir ?? dirname(realJob));
   assertOutputLocation(project.projectDir, realOutput, project.entryPoint);
@@ -680,7 +688,7 @@ export async function runProject(opts: {
   const release = opts.activeJobs.acquire(jobDir);
   let releaseLock = true;
   try {
-    const project = await resolveProject(spec, opts.cwd, engine);
+    const project = await resolveProject(spec, opts.cwd, engine, opts.signal);
     assertOutputLocation(project.projectDir, output, project.entryPoint);
     const projectHash = await projectFingerprint(project.projectDir, output, engine);
     if (opts.frozenProjectHash && projectHash !== opts.frozenProjectHash)

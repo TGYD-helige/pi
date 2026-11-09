@@ -1,10 +1,18 @@
+import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { realpath, stat } from 'node:fs/promises';
 import { join, sep } from 'node:path';
+import { promisify } from 'node:util';
 import { VideoGenError } from './errors.js';
 import type { ProjectSpec } from './project-render.js';
 
-export async function resolveHyperframesProject(spec: ProjectSpec, projectDir: string) {
+const execFileAsync = promisify(execFile);
+
+export async function resolveHyperframesProject(
+  spec: ProjectSpec,
+  projectDir: string,
+  signal?: AbortSignal,
+) {
   const entryPoint = await realpath(join(projectDir, spec.entryPoint ?? 'index.html')).catch(
     () => null,
   );
@@ -29,16 +37,36 @@ export async function resolveHyperframesProject(spec: ProjectSpec, projectDir: s
       'Install hyperframes locally in the video project before rendering.',
       'hyperframes: cli missing',
     );
-  const browserExecutable =
-    spec.browserExecutable ??
-    process.env.HYPERFRAMES_BROWSER_PATH ??
-    [
-      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-      '/Applications/Chromium.app/Contents/MacOS/Chromium',
-      '/usr/bin/google-chrome',
-      '/usr/bin/chromium',
-      '/usr/bin/chromium-browser',
-    ].find(existsSync);
+  let browserExecutable = spec.browserExecutable ?? process.env.HYPERFRAMES_BROWSER_PATH;
+  if (browserExecutable === undefined) {
+    try {
+      const { stdout } = await execFileAsync(process.execPath, [cli, 'browser', 'path'], {
+        cwd: projectDir,
+        timeout: 5000,
+        maxBuffer: 16 * 1024,
+        signal,
+        env: { ...process.env, HYPERFRAMES_NO_TELEMETRY: '1', DO_NOT_TRACK: '1' },
+      });
+      const candidate = stdout.trim();
+      if ((await stat(candidate).catch(() => null))?.isFile()) browserExecutable = candidate;
+    } catch {
+      if (signal?.aborted)
+        throw new VideoGenError(
+          'HyperFrames browser discovery was cancelled.',
+          'hyperframes: cancelled',
+        );
+      console.error(
+        '[pi-video-gen] HyperFrames browser discovery unavailable; checking system browsers.',
+      );
+    }
+  }
+  browserExecutable ??= [
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    '/Applications/Chromium.app/Contents/MacOS/Chromium',
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+  ].find(existsSync);
   if (!browserExecutable || !(await stat(browserExecutable).catch(() => null))?.isFile())
     throw new VideoGenError(
       'An installed Chrome/Chromium is required. Set browserExecutable or HYPERFRAMES_BROWSER_PATH; no browser is downloaded.',

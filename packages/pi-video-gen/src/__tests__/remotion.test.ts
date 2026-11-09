@@ -153,7 +153,9 @@ describe('runRemotion', () => {
     ).rejects.toThrow(/qcTimesSec/);
   });
 
-  it('holds the job lock until cancellation stops a detached browser launched before Remotion cleanup', async () => {
+  it.each([
+    0, 2100,
+  ])('holds the job lock until cancellation stops detached browsers (ps latency: %sms)', async (psDelayMs) => {
     const project = join(root, 'cancel-project');
     const job = join(root, '.video-gen', 'cancel-job');
     const marker = join(job, 'renderer-child.pid');
@@ -199,7 +201,8 @@ describe('runRemotion', () => {
           const helperPid = Number(fs.readFileSync(${JSON.stringify(helperMarker)}, 'utf8'));
           output = output.split('\\n').filter(line => Number(line.trim().split(/\\s+/)[0]) !== helperPid).join('\\n');
         }
-        process.stdout.write(output);
+        setTimeout(() => process.stdout.write(output), fs.existsSync(${JSON.stringify(join(job, 'ps-delayed'))}) ? 0 : ${psDelayMs});
+        fs.writeFileSync(${JSON.stringify(join(job, 'ps-delayed'))}, 'yes');
       `,
       );
       chmodSync(fakePs, 0o755);
@@ -299,7 +302,7 @@ describe('runRemotion', () => {
         } catch {}
       }
     }
-  });
+  }, 20000);
 
   it('preserves public assets, injects shot URLs and verifies completed output', async () => {
     const project = join(root, 'project');

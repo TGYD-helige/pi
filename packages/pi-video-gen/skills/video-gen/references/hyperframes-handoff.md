@@ -1,6 +1,6 @@
 # HyperFrames handoff
 
-Default new editable UI, typography, chart and product animation to HyperFrames. Honor an existing or explicitly requested [Remotion project](remotion-handoff.md). Use a standalone project inside the trusted working directory; keep editable source and local media outside the configured video output directory. Install the verified CLI in that project with `npm install --save-exact hyperframes@0.9.26`. Use an installed Chrome/Chromium (`browserExecutable` or `HYPERFRAMES_BROWSER_PATH`) and the plugin's FFmpeg. Tool calls do not install dependencies or download a browser.
+Default new editable UI, typography, chart and product animation to HyperFrames. Honor an existing or explicitly requested [Remotion project](remotion-handoff.md). Use a standalone project inside the trusted working directory; keep editable source and local media outside the configured video output directory. Install the verified CLI in that project with `npm install --save-exact hyperframes@0.9.26`. Use the plugin's FFmpeg and an installed browser. Explicit `browserExecutable` or `HYPERFRAMES_BROWSER_PATH` wins; otherwise the plugin checks `hyperframes browser path` for an already-installed CLI browser before trying system Chrome/Chromium. Prefer the CLI's headless shell when GUI Chrome produces clipped exports. Provision it separately with `npx --no-install hyperframes browser ensure` before the tool call if needed. Tool calls do not install dependencies or download a browser.
 
 ## Author and preview
 
