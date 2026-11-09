@@ -117,11 +117,13 @@ describe('pi-video-gen extension', () => {
     'comment',
     'attribute',
     'implicit-head',
+    'custom-head-tag',
     'nested-base-comment',
     'nested-base-script',
     'nested-base-attribute',
     'nested-author-base',
     'nested-relative-base',
+    'nested-custom-base-tag',
   ] as const)('renders and resumes a HyperFrames project through video_compose (%s)', async (markup) => {
     const { createRequire } = await import('node:module');
     const { runFfmpegCommand } = await import('../ffmpeg.js');
@@ -146,6 +148,13 @@ describe('pi-video-gen extension', () => {
       entry = entry.replace('<html>', '<!-- Put scripts in <head> --><html>');
     if (markup === 'attribute') entry = entry.replace('<html>', '<html data-note="<head>">');
     if (markup === 'implicit-head') entry = entry.replace('<head></head>', '');
+    if (markup === 'custom-head-tag')
+      entry = entry
+        .replace(
+          '<head></head>',
+          '<script>window.assetAtAuthorTime=Boolean(window.videoGenAssets);</script>',
+        )
+        .replace('<body>', '<body><head-widget></head-widget>');
     const nested = markup.startsWith('nested-');
     if (nested) {
       const resourceDir =
@@ -160,6 +169,8 @@ describe('pi-video-gen extension', () => {
       entry = entry.replace('<body>', '<body><img data-review-relative src="poster.png">');
       if (markup === 'nested-base-comment')
         entry = entry.replace('<head>', '<!-- no <base> needed --><head>');
+      if (markup === 'nested-custom-base-tag')
+        entry = entry.replace('<body>', '<body><base-card href="/wrong/"></base-card>');
       if (markup === 'nested-base-script')
         entry = entry.replace('</head>', '<script>const note="<base>";</script></head>');
       if (markup === 'nested-base-attribute')

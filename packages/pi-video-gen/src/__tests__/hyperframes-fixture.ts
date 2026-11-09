@@ -29,7 +29,7 @@ export function makeHyperframesProject(project: string, sourcePath: string) {
     for (const script of html.matchAll(/<script>([\\s\\S]*?)<\\/script>/gi)) {
       runInNewContext(script[1], {window, document:{currentScript:{previousElementSibling:baseElement}}, location:{href:'http://localhost/index.html'}, URL});
     }
-    if (!window.videoGenAssets) process.exit(1);
+    if (!window.videoGenAssets || ('assetAtAuthorTime' in window && !window.assetAtAuthorTime)) process.exit(1);
     if (html.includes('data-review-relative')) {
       const resource = new URL('poster.png', new URL(effectiveBase, 'http://localhost/'));
       if (!existsSync(join(dir, resource.pathname))) process.exit(1);

@@ -71,14 +71,14 @@ let stage = 19;
   let baseEnd;
   let inertDepth = 0;
   // Treat comments, quoted attributes and raw-text elements as opaque markup.
-  const tokens = /<!--[\s\S]*?-->|<(script|style|title|textarea|noscript)\b(?:"[^"]*"|'[^']*'|[^'">])*>[\s\S]*?<\/\1\s*>|<\/?[a-z][a-z0-9:-]*\b(?:"[^"]*"|'[^']*'|[^'">])*>/gi;
+  const tokens = /<!--[\s\S]*?-->|<(script|style|title|textarea|noscript)(?=[\s/>])(?:"[^"]*"|'[^']*'|[^'">])*>[\s\S]*?<\/\1\s*>|<\/?[a-z][a-z0-9:-]*\b(?:"[^"]*"|'[^']*'|[^'">])*>/gi;
   for (const match of html.matchAll(tokens)) {
     const tag = match[0];
-    if (/^<(template|svg|math)\b/i.test(tag)) inertDepth++;
-    else if (/^<\/(template|svg|math)\b/i.test(tag)) inertDepth = Math.max(0, inertDepth - 1);
+    if (/^<(template|svg|math)(?=[\s/>])/i.test(tag)) inertDepth++;
+    else if (/^<\/(template|svg|math)(?=[\s/>])/i.test(tag)) inertDepth = Math.max(0, inertDepth - 1);
     else if (!inertDepth) {
-      if (/^<head\b/i.test(tag) && headEnd === undefined) headEnd = match.index + tag.length;
-      if (/^<base\b/i.test(tag) && baseEnd === undefined) {
+      if (/^<head(?=[\s/>])/i.test(tag) && headEnd === undefined) headEnd = match.index + tag.length;
+      if (/^<base(?=[\s/>])/i.test(tag) && baseEnd === undefined) {
         for (const attr of tag.slice(5, -1).matchAll(/([^\s'"<>/=]+)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?/g)) {
           if (attr[1].toLowerCase() === 'href') { baseEnd = match.index + tag.length; break; }
         }
@@ -94,7 +94,7 @@ let stage = 19;
   const base = entry !== 'index.html' && baseEnd === undefined
     ? '<base href="/' + dirname(entry).replace(/\\/g, '/').split('/').map(encodeURIComponent).join('/') + '/">' : '';
   const bootstrap = base + '<script>window.videoGenAssets=' + payload + ';</script>';
-  const prefix = /^(?:\uFEFF|\s|<!--[\s\S]*?-->|<!doctype\b(?:"[^"]*"|'[^']*'|[^'">])*>|<html\b(?:"[^"]*"|'[^']*'|[^'">])*>)*/i.exec(html)[0];
+  const prefix = /^(?:\uFEFF|\s|<!--[\s\S]*?-->|<!doctype\b(?:"[^"]*"|'[^']*'|[^'">])*>|<html(?=[\s/>])(?:"[^"]*"|'[^']*'|[^'">])*>)*/i.exec(html)[0];
   const insertAt = headEnd ?? prefix.length;
   html = html.slice(0, insertAt) + bootstrap + html.slice(insertAt);
   await writeFile(join(x.publicDir, 'index.html'), html);
