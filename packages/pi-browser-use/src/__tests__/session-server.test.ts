@@ -58,6 +58,166 @@ describe('browser session startup', () => {
   });
 });
 
+describe('browser session tool recovery', () => {
+  it('refreshes a retained marker page ID after MCP replacement', async () => {
+    const token = randomBytes(32).toString('hex');
+    const owner = randomBytes(32).toString('hex');
+    let nonce = '';
+    const state = vi.spyOn(DevToolsClient.prototype, 'getState').mockReturnValue('ready');
+    vi.spyOn(DevToolsClient.prototype, 'connect').mockImplementation(async () => {
+      state.mockReturnValue('ready');
+    });
+    vi.spyOn(DevToolsClient.prototype, 'close').mockResolvedValue();
+    const removeMarker = vi
+      .spyOn(DevToolsClient.prototype, 'removeSessionMarker')
+      .mockResolvedValue();
+    const call = vi
+      .spyOn(DevToolsClient.prototype, 'callTool')
+      .mockImplementation(async (name, args) => {
+        if (name === 'new_page')
+          return { content: [{ type: 'text', text: '2: about:blank [selected]' }] };
+        if (name === 'evaluate_script') {
+          nonce ||= /__piBrowserRetention = "([a-f0-9]+)"/.exec(String(args.function))?.[1] ?? '';
+          return { content: [{ type: 'text', text: '```json\ntrue\n```' }] };
+        }
+        return { content: [{ type: 'text', text: `9: about:blank#pi-retained-session-${nonce}` }] };
+      });
+    const server = await serveBrowserSession(
+      {
+        sessionMode: 'existing',
+        autoConnect: true,
+        session: { enabled: true, key: 'marker-recovery', retentionMs: 30000 },
+      },
+      token,
+      {
+        adapter: {
+          ownership: 'external',
+          async acquire() {
+            return {
+              id: 'same-browser',
+              connection: { sessionMode: 'existing', autoConnect: true },
+            };
+          },
+          async reconnect() {
+            return { wsEndpoint: 'ws://127.0.0.1:1' };
+          },
+          async release() {},
+        },
+      },
+    );
+    const request = async (action: string, data: object = {}) => {
+      const response = await fetch(`http://127.0.0.1:${server.port}/`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ owner, action, ...data }),
+        signal: AbortSignal.timeout(1000),
+      });
+      return response.json();
+    };
+    try {
+      await request('attach');
+      await request('call', { name: 'list_pages', args: {} });
+      await request('retain');
+      expect(nonce).toMatch(/^[a-f0-9]{48}$/);
+      state.mockReturnValue('stalled');
+      expect(await request('call', { name: 'click', args: { uid: 'old_uid' } })).toMatchObject({
+        error: expect.stringContaining('Page IDs and element UIDs may have changed'),
+      });
+      expect(call).toHaveBeenLastCalledWith(
+        'evaluate_script',
+        {
+          pageId: 9,
+          function: `() => globalThis.__piBrowserRetention === ${JSON.stringify(nonce)}`,
+        },
+        expect.any(AbortSignal),
+      );
+      expect(call.mock.calls.some(([name]) => name === 'click')).toBe(false);
+      await server.stop();
+      expect(removeMarker).toHaveBeenCalledWith(9, nonce, expect.any(AbortSignal));
+    } finally {
+      await server.stop();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it.each([
+    'unsupported',
+    'rejected',
+    'deadline',
+  ] as const)('fences stalled tools without retrying unsafe recovery: %s', async (scenario) => {
+    const token = randomBytes(32).toString('hex');
+    const owner = randomBytes(32).toString('hex');
+    const entered = deferred();
+    const pending = deferred();
+    const deadline = new AbortController();
+    const timeout = AbortSignal.timeout;
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) =>
+      ms === 10_000 ? deadline.signal : timeout(ms),
+    );
+    const connect = vi.spyOn(DevToolsClient.prototype, 'connect').mockResolvedValue();
+    vi.spyOn(DevToolsClient.prototype, 'close').mockResolvedValue();
+    const state = vi.spyOn(DevToolsClient.prototype, 'getState').mockReturnValue('ready');
+    const call = vi.spyOn(DevToolsClient.prototype, 'callTool').mockResolvedValue({ content: [] });
+    const binding = { id: 'original', connection: { wsEndpoint: 'ws://127.0.0.1:1' } };
+    const reconnect = vi.fn(async () => {
+      entered.resolve();
+      if (scenario === 'deadline') await pending.promise;
+      else throw new Error('private provider response');
+      return binding.connection;
+    });
+    const server = await serveBrowserSession(
+      { session: { enabled: true, key: 'recovery-fence', retentionMs: 1000 } },
+      token,
+      {
+        adapter: {
+          async acquire() {
+            return binding;
+          },
+          ...(scenario === 'unsupported' ? {} : { reconnect }),
+          async release() {},
+        },
+      },
+    );
+    const request = async (action: string, data: object = {}) => {
+      const response = await fetch(`http://127.0.0.1:${server.port}/`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ owner, action, ...data }),
+        signal: AbortSignal.timeout(1000),
+      });
+      return response.json();
+    };
+    try {
+      await request('attach');
+      await request('call', { name: 'list_pages', args: {} });
+      state.mockReturnValue('stalled');
+      const connectsBefore = connect.mock.calls.length;
+      const callsBefore = call.mock.calls.length;
+      const recovering = request('call', { name: 'click', args: { uid: 'old_uid' } });
+      if (scenario === 'deadline') {
+        await entered.promise;
+        deadline.abort(new DOMException('Recovery deadline exceeded', 'TimeoutError'));
+      }
+      expect(await recovering).toMatchObject({
+        error: expect.stringMatching(/stalled|recovery failed/),
+      });
+      for (const name of ['evaluate_script', 'list_pages'])
+        expect(await request('call', { name, args: {} })).toMatchObject({
+          error: expect.stringContaining('stalled'),
+        });
+      expect(reconnect).toHaveBeenCalledTimes(scenario === 'unsupported' ? 0 : 1);
+      pending.resolve();
+      await server.stop();
+      expect(connect).toHaveBeenCalledTimes(connectsBefore);
+      expect(call).toHaveBeenCalledTimes(callsBefore);
+    } finally {
+      pending.resolve();
+      await server.stop();
+      vi.restoreAllMocks();
+    }
+  });
+});
+
 describe('browser session shutdown', () => {
   it.each([
     { reason: 'expired', cleanup: 'success' },

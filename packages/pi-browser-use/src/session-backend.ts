@@ -30,6 +30,8 @@ export interface BrowserAdapter {
     browser: ManagedBrowser,
     signal: AbortSignal,
   ): Promise<{ alive: boolean; expiresAt?: number }>;
+  /** Must preserve this exact live browser across MCP disconnect, never launch a replacement. */
+  reconnect?(browser: ManagedBrowser, signal: AbortSignal): Promise<ManagedBrowser['connection']>;
   retain?(
     browser: ManagedBrowser,
     expiresAt: number,

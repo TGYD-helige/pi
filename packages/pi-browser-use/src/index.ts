@@ -71,7 +71,8 @@ export { configToArgs, resolveConfig };
 // All upstream tools are re-exported with this prefix to avoid name collisions with other extensions.
 const TOOL_PREFIX = 'browser_';
 
-const MCP_TIMEOUT_MS = 60_000;
+const MCP_TIMEOUT_MS = 50_000;
+const TOOL_WAIT_MS = 40_000;
 const MCP_HEALTH_TIMEOUT_MS = 5_000;
 const MCP_HEALTH_CHECK_INTERVAL_MS = 10_000;
 const MCP_STDERR_LIMIT = 4_096;
@@ -134,6 +135,7 @@ function pageRoutingGuidance(enabled: boolean) {
         promptGuidelines: [
           'Call browser_list_pages before page-scoped tools to obtain the current numeric pageId.',
           'Pass pageId explicitly instead of relying on shared browser_select_page state.',
+          'After a timeout or recovery notice, do not replay the action. Refresh page IDs and snapshot UIDs and inspect the actual state before continuing.',
         ],
       }
     : {};
@@ -145,6 +147,7 @@ export type ConnectionState =
   | 'ready'
   | 'reconnecting'
   | 'failed'
+  | 'stalled'
   | 'closing';
 
 /**
@@ -177,6 +180,10 @@ export class DevToolsClient {
 
   async connect(signal?: AbortSignal): Promise<void> {
     if (this.sessionClient) return this.sessionClient.connect(signal);
+    if (this.state === 'stalled')
+      throw new BrowserSessionError(
+        'Browser tools are stalled. The action may have completed. Automatic reattachment is unavailable for this connection; inspect the original browser externally before explicitly starting another session.',
+      );
     if (this.state === 'ready') return;
     if (this.connectPromise) return this.connectPromise;
 
@@ -262,14 +269,16 @@ export class DevToolsClient {
   }
 
   private markDisconnected(generation: number): void {
-    if (generation !== this.generation || this.state === 'closing') return;
+    if (generation !== this.generation || this.state === 'closing' || this.state === 'stalled')
+      return;
     ++this.generation;
     this.client = null;
     this.state = 'disconnected';
   }
 
   private async disconnectUnhealthyClient(generation: number): Promise<void> {
-    if (generation !== this.generation || this.state === 'closing') return;
+    if (generation !== this.generation || this.state === 'closing' || this.state === 'stalled')
+      return;
     const failedClient = this.client;
     this.markDisconnected(generation);
     if (!failedClient) return;
@@ -352,9 +361,20 @@ export class DevToolsClient {
     isError?: boolean;
   }> {
     if (this.sessionClient) return this.sessionClient.callTool(name, args, signal);
+    signal = AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(MCP_TIMEOUT_MS)]);
+    signal.throwIfAborted();
     await this.ensureReady(signal);
+    signal.throwIfAborted();
     const client = this.client;
     if (!client) throw new Error('Client not connected');
+    if (['navigate_page', 'new_page', 'wait_for'].includes(name)) {
+      const timeout = args.timeout;
+      if (
+        timeout === undefined ||
+        (typeof timeout === 'number' && (timeout === 0 || timeout > TOOL_WAIT_MS))
+      )
+        args = { ...args, timeout: TOOL_WAIT_MS };
+    }
 
     try {
       return (await client.callTool(
@@ -371,8 +391,18 @@ export class DevToolsClient {
         isError?: boolean;
       };
     } catch (error) {
-      if (signal?.aborted) throw error;
-      if (this.state !== 'ready' || this.client !== client) {
+      if (
+        !this.explicitlyClosed &&
+        (this.client === client || !this.client) &&
+        (signal.aborted || classifyError(error).errorCategory === 'timeout')
+      ) {
+        this.state = 'stalled';
+        console.error(
+          '[pi-browser-use] browser tool execution stalled; recovery required (phase=tool)',
+        );
+      }
+      if (signal.aborted) throw error;
+      if ((this.state !== 'ready' && this.state !== 'stalled') || this.client !== client) {
         throw new SafeToolError(
           'Browser tool call',
           error,
