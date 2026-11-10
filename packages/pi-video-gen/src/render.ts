@@ -145,17 +145,22 @@ function specFingerprint(
 }
 
 // The preceding catalog was part of persisted fingerprints; retain its exact metadata for recovery.
-function previousCatalogCapabilities(resolved: ResolvedModel): VideoModelCapabilities | undefined {
+function previousCatalogCapabilities(resolved: ResolvedModel): VideoModelCapabilities[] {
   const { durationValues: _unused, ...caps } = resolved.entry.capabilities;
   switch (resolved.remoteId) {
     case 'doubao-seedance-2-0-260128':
-      return { ...caps, resolutions: caps.resolutions.filter((value) => value !== '4k') };
+      return [{ ...caps, resolutions: caps.resolutions.filter((value) => value !== '4k') }];
     case 'happyhorse-1.1':
-      return { ...caps, resolutions: caps.resolutions.filter((value) => value !== '480P') };
-    case 'google/veo-3.1':
-      return { ...caps, durations: [5, 8], resolutions: ['720p'], aspectRatios: ['16:9'] };
+      return [{ ...caps, resolutions: caps.resolutions.filter((value) => value !== '480P') }];
+    case 'google/veo-3.1': {
+      // Keep explicit custom overrides when reconstructing each changed catalog field (at most 8 candidates).
+      const durationVariants: VideoModelCapabilities[] = [caps, { ...caps, durations: [5, 8] }];
+      return durationVariants
+        .flatMap((value) => [value, { ...value, resolutions: ['720p'] }])
+        .flatMap((value) => [value, { ...value, aspectRatios: ['16:9'] }]);
+    }
     default:
-      return undefined;
+      return [];
   }
 }
 
@@ -552,6 +557,7 @@ export async function runRender(opts: {
     let projectQc: Pick<RenderRunResult, 'qcFrames' | 'qcReportPath'> | undefined;
 
     if (manifest && manifest.specFingerprint !== fingerprint) {
+      const savedFingerprint = manifest.specFingerprint;
       const oldCaps =
         generated.length && resolved ? previousCatalogCapabilities(resolved) : undefined;
       const matchesLegacy =
@@ -559,7 +565,7 @@ export async function runRender(opts: {
         resolved &&
         (manifest.specFingerprint ===
           specFingerprint(specRaw, resolved, resolved.entry.capabilities) ||
-          (oldCaps && manifest.specFingerprint === specFingerprint(specRaw, resolved, oldCaps)));
+          oldCaps?.some((caps) => savedFingerprint === specFingerprint(specRaw, resolved, caps)));
       if (!matchesLegacy) {
         throw new VideoGenError(
           'render-input.json or the model/provider config changed since this job was created. Revisions require a NEW job directory (rerunning the same path only resumes identical input).',

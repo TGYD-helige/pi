@@ -162,7 +162,8 @@ describe('runRender', () => {
     ['veo-3.1', 8],
     ['veo-3.1', 5],
     ['veo-3.1', 7],
-  ] as const)('resumes paid jobs saved before the %s capability update (%ss)', async (model, duration) => {
+    ['veo-3.1', 5, true],
+  ] as const)('resumes paid jobs saved before the %s capability update (%ss)', async (model, duration, customRange: boolean = false) => {
     const frame = makeFrame(cwd, 'legacy.png');
     const spec = {
       shots: [
@@ -175,10 +176,34 @@ describe('runRender', () => {
       ],
     };
     const jobDir = makeJob(cwd, spec);
-    const resolved = resolveModel({
-      defaultModel: model,
-      providers: { ark: { apiKey: 'k' }, dashscope: { apiKey: 'k' }, openrouter: { apiKey: 'k' } },
-    })!;
+    const resolved = resolveModel(
+      customRange
+        ? {
+            defaultModel: 'relay',
+            customProviders: {
+              relay: {
+                api: 'openrouter',
+                apiKey: 'k',
+                models: [
+                  {
+                    id: 'google/veo-3.1',
+                    alias: 'relay',
+                    capabilities: { durations: [5, 10] },
+                    defaultDurationSec: 5,
+                  },
+                ],
+              },
+            },
+          }
+        : {
+            defaultModel: model,
+            providers: {
+              ark: { apiKey: 'k' },
+              dashscope: { apiKey: 'k' },
+              openrouter: { apiKey: 'k' },
+            },
+          },
+    )!;
     const opts = baseOpts(cwd, mockAdapter(calls), concatCalls, resolved);
     const initialResolved =
       model === 'veo-3.1'
@@ -189,7 +214,7 @@ describe('runRender', () => {
               capabilities: {
                 ...resolved.entry.capabilities,
                 durationValues: undefined,
-                durations: [5, 8] as [number, number],
+                durations: (customRange ? [5, 10] : [5, 8]) as [number, number],
               },
             },
           }
@@ -209,7 +234,7 @@ describe('runRender', () => {
     if (model === 'seedance-2.0') capabilities.resolutions = ['480p', '720p', '1080p'];
     if (model === 'happyhorse-1.1') capabilities.resolutions = ['720P', '1080P'];
     if (model === 'veo-3.1') {
-      capabilities.durations = [5, 8];
+      capabilities.durations = customRange ? [5, 10] : [5, 8];
       capabilities.resolutions = ['720p'];
       capabilities.aspectRatios = ['16:9'];
     }
