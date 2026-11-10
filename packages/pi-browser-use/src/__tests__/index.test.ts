@@ -646,8 +646,10 @@ describe('browserUseExtension', () => {
       expect(mockCallTool).toHaveBeenCalledWith(
         'take_screenshot',
         { pageId: 7 },
-        controller.signal,
+        expect.any(AbortSignal),
       );
+      controller.abort();
+      expect(mockCallTool.mock.calls.at(-1)![2]!.aborted).toBe(true);
     });
   });
 
@@ -658,7 +660,11 @@ describe('browserUseExtension', () => {
 
       await clickTool.execute('call-1', { pageId: 7, uid: '1_2' }, undefined, undefined, {});
 
-      expect(mockCallTool).toHaveBeenCalledWith('click', { pageId: 7, uid: '1_2' }, undefined);
+      expect(mockCallTool).toHaveBeenCalledWith(
+        'click',
+        { pageId: 7, uid: '1_2' },
+        expect.any(AbortSignal),
+      );
     });
 
     it('forwards the Pi abort signal to the browser client', async () => {
@@ -668,7 +674,9 @@ describe('browserUseExtension', () => {
 
       await clickTool.execute('call-1', {}, controller.signal, undefined, {});
 
-      expect(mockCallTool).toHaveBeenCalledWith('click', {}, controller.signal);
+      expect(mockCallTool).toHaveBeenCalledWith('click', {}, expect.any(AbortSignal));
+      controller.abort();
+      expect(mockCallTool.mock.calls.at(-1)![2]!.aborted).toBe(true);
     });
 
     test('returns upstream text content', async () => {

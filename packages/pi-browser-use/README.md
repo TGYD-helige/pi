@@ -26,7 +26,7 @@ bun add @amaster.ai/pi-browser-use
 
 Requires Node.js `^20.19.0 || ^22.12.0 || >=23`, Chrome (stable or newer), and `@earendil-works/pi-coding-agent >= 0.74.0`.
 
-`chrome-devtools-mcp` uses the compatible `^1.6.0` range and its installed entrypoint is resolved when the extension connects. A missing or malformed installation fails connection; the extension does not download a replacement at connection time. Connection failures expose only allowlisted system error codes or Chrome startup categories, not raw subprocess stderr.
+`chrome-devtools-mcp` uses the compatible `^1.12.0` range and its installed entrypoint is resolved when the extension connects. A missing or malformed installation fails connection; the extension does not download a replacement at connection time. Connection failures expose only allowlisted system error codes or Chrome startup categories, not raw subprocess stderr.
 
 Hosts where `process.execPath` is not a directly executable Node runtime can set `PI_BROWSER_USE_NODE` to the Node command used for the MCP subprocess.
 
@@ -192,9 +192,19 @@ const browser = await adapter.acquire(config, signal);
 await adapter.release(browser, signal); // after closing that transport
 ```
 
-The common `BrowserAdapter` interface provides `acquire`, optional `describe`/`retain`, and `release`. Acquisition returns `{ id, connection, expiresAt? }`: HTTP-managed providers supply their actual ID and explicit CDP connection; connection-owned Browserless and direct adapters generate a private local reference and return the existing connection or local MCP launch configuration. `ownership` is `local` for plugin-launched Chrome, `external` for existing CDP/discovery connections, and defaults to `adapter` for managed/custom backends. A managed backend without an explicit CDP connection fails instead of falling back to local Chrome. SDK hosts can inject an adapter through the factory's `options.adapter`; delegated instances use `options.browser` with a configured management backend.
+The common `BrowserAdapter` interface provides `acquire`, optional `describe`/`retain`/`reconnect`, and `release`. Acquisition returns `{ id, connection, expiresAt? }`: HTTP-managed providers supply their actual ID and explicit CDP connection; connection-owned Browserless and direct adapters generate a private local reference and return the existing connection or local MCP launch configuration. `ownership` is `local` for plugin-launched Chrome, `external` for existing CDP/discovery connections, and defaults to `adapter` for managed/custom backends. A managed backend without an explicit CDP connection fails instead of falling back to local Chrome. SDK hosts can inject an adapter through the factory's `options.adapter`; delegated instances use `options.browser` with a configured management backend.
 
 MCP/CDP transport cleanup closes plugin-launched processes and detaches external connections. The direct adapter has no additional resource to release; managed adapters then stop only the instances they own. The session manager owns cross-process retention, marker verification, deadlines, and cancellation. `session.enabled: false` keeps ordinary direct connections without a holding worker. The named Browserless provider and direct CDP connections share the same connection lifecycle; this does not enable Browserless persistent-profile REST sessions or add a paid idle retention window.
+
+### Tool timeouts and recovery
+
+Retained sessions allow different pages to execute tools concurrently. Each session key keeps its own worker/MCP connection and single-owner attachment; there is no global MCP pool. Pi follows MCP 1.12’s page/exclusive scheduling metadata and keeps waiting requests cancellable before sending them to MCP; tools on the same page and globally exclusive operations remain ordered. Browser initialization, identity checks, retention, release, detach, and recovery remain ordered; authenticated heartbeats stay responsive while tools run. A session accepts up to eight queued or running tool calls and rejects additional calls before dispatch. Local browser identity is checked through a page-scoped snapshot of an ephemeral marker; restoring its URL alone does not restore the live session. Upstream exclusive tools such as `evaluate_script` still wait for other operations. A stalled transport cancels sibling requests before bounded recovery; queued requests from an older transport generation are rejected. Already-dispatched actions can have uncertain outcomes and are never replayed.
+
+Navigation, new-page and text-wait timeouts are capped at 40000 ms (including omitted or zero/default values); smaller explicit values are preserved. Tool requests have a 50000 ms deadline, inside the session's 60000 ms operation and 65000 ms client transport deadlines. A timeout or cancellation after dispatch leaves the action's outcome uncertain. Pi never automatically replays that action, and a successful MCP ping does not clear a stalled tool session. `/browser-session status` includes `toolState` so a live browser can be distinguished from working browser tools.
+
+Custom SDK/module adapters may implement `reconnect(browser, signal)`, returning connection settings for the **same live browser**. The adapter must keep that browser alive across MCP/CDP disconnect and must never return a launch endpoint that could allocate another instance. Pi allows one recovery attempt with a 10000 ms total deadline: obtain the connection, close the old subprocess and single-use tunnel, open a new tunnel/subprocess, and verify actual `list_pages` execution. The waiting tool is not executed during recovery. After the recovery notice, call `browser_list_pages`, then `browser_take_snapshot` with the fresh page ID, and inspect the actual state before continuing; previous page IDs and element UIDs may be invalid.
+
+Without this explicit adapter capability, or after failed recovery, subsequent tools fail immediately instead of spending another full timeout. Inspect the original browser externally before explicitly ending or replacing the session. Built-in cloud/direct adapters and generic HTTP backends currently do not advertise safe reattachment; their endpoints are never automatically redialed after a stalled call. In particular, a Browserless launch URL can create a replacement browser when redialed. No existing persisted session records require migration.
 
 ### Built-in cloud providers
 
@@ -421,7 +431,7 @@ To load even the core upstream tool schemas only when needed, explicitly set `"t
 | `experimentalVision` | `boolean` | `true` | Enable vision tools (click_at) |
 | `experimentalScreencast` | `boolean` | `false` | Enable screencast |
 | `experimentalMemory` | `boolean` | `false` | Enable memory snapshots |
-| `experimentalPageIdRouting` | `boolean` | `true` | Add a required `pageId` to page-scoped tools and route directly to that page |
+| `experimentalPageIdRouting` | `boolean` | `true` | Add a required `pageId` to page-scoped tools and route directly to that page; maps to upstream `--page-id-routing` |
 
 ### Privacy
 

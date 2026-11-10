@@ -14,9 +14,11 @@ import {
 } from './session-backend.js';
 import { createBrowserConnection, listenOnReachablePort } from './session-connection.js';
 import { BrowserSessionError, scriptValue } from './session-control.js';
+import { loadConcurrencyMap } from './tool-groups.js';
 
 const MAX_BYTES = 32 * 1024 * 1024;
 const OPERATION_MS = 60_000;
+const MAX_TOOL_CALLS = 8;
 
 async function bounded<T>(operation: Promise<T>, milliseconds: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -81,6 +83,7 @@ export async function serveBrowserSession(
     throw new BrowserSessionError('Browser session transport requires a random 32-byte hex token.');
   const retentionMs = session.retentionMs;
   const adapter = await createBrowserAdapter(config, options);
+  const toolConcurrency = await loadConcurrencyMap();
   let managed: ManagedBrowser | undefined;
   let acquiring: Promise<void> | undefined;
   let releasing: Promise<void> | undefined;
@@ -88,9 +91,21 @@ export async function serveBrowserSession(
   let acquisitionFailed = false;
   let browserCleanupFailed = false;
   let browserUsed = false;
+  let recoveryFailed = false;
   let connection: Awaited<ReturnType<typeof createBrowserConnection>> | undefined;
   const startupSignal = AbortSignal.timeout(OPERATION_MS);
   const { session: _session, ...directConfig } = config;
+  const {
+    wsEndpoint: _ws,
+    browserUrl: _url,
+    wsHeaders: _headers,
+    userDataDir: _profile,
+    executablePath: _executable,
+    channel: _channel,
+    isolated: _isolated,
+    autoConnect: _autoConnect,
+    ...localConfig
+  } = directConfig;
   let client = new DevToolsClient(directConfig);
   let owner: string | undefined;
   let ownerPid: number | undefined;
@@ -104,8 +119,89 @@ export async function serveBrowserSession(
   let stopped = false;
   let stopping: Promise<void> | undefined;
   let sweepScheduled = false;
-  let mutations = Promise.resolve<unknown>(undefined);
+  const activeCalls = new Set<Promise<unknown>>();
+  let pendingToolCalls = 0;
+  let toolLifetime = new AbortController();
   const lifetime = new AbortController();
+  type ScheduledOperation = {
+    pageId: number | undefined;
+    running: boolean;
+    signal: AbortSignal;
+    operation: () => Promise<unknown>;
+    resolve: (value: unknown) => void;
+    reject: (reason: unknown) => void;
+    cancel: () => void;
+  };
+  const scheduled: ScheduledOperation[] = [];
+  const preparation: ScheduledOperation[] = [];
+
+  function removeOperation(queue: ScheduledOperation[], entry: ScheduledOperation) {
+    const index = queue.indexOf(entry);
+    if (index < 0) return;
+    queue.splice(index, 1);
+    entry.signal.removeEventListener('abort', entry.cancel);
+    runScheduledOperations(queue);
+  }
+
+  function runScheduledOperations(queue: ScheduledOperation[]) {
+    for (const entry of queue) {
+      if (entry.running) continue;
+      const predecessors = queue.slice(0, queue.indexOf(entry));
+      if (
+        predecessors.some(
+          (previous) =>
+            previous.pageId === undefined ||
+            entry.pageId === undefined ||
+            previous.pageId === entry.pageId,
+        )
+      )
+        continue;
+      entry.running = true;
+      entry.signal.removeEventListener('abort', entry.cancel);
+      void Promise.resolve()
+        .then(entry.operation)
+        .then(
+          (result) => {
+            removeOperation(queue, entry);
+            entry.resolve(result);
+          },
+          (error) => {
+            removeOperation(queue, entry);
+            entry.reject(error);
+          },
+        );
+    }
+  }
+
+  function scheduleOperation<T>(
+    queue: ScheduledOperation[],
+    pageId: number | undefined,
+    signal: AbortSignal,
+    operation: () => Promise<T>,
+  ) {
+    return new Promise<T>((resolve, reject) => {
+      const entry: ScheduledOperation = {
+        pageId,
+        signal,
+        operation,
+        resolve: (value) => resolve(value as T),
+        reject,
+        running: false,
+        cancel: () => {
+          removeOperation(queue, entry);
+          reject(signal.reason);
+        },
+      };
+      queue.push(entry);
+      signal.addEventListener('abort', entry.cancel, { once: true });
+      if (signal.aborted) entry.cancel();
+      else runScheduledOperations(queue);
+    });
+  }
+
+  function abortStalledTools(checkedClient: DevToolsClient, callLifetime: AbortController) {
+    if (checkedClient.getState() === 'stalled') callLifetime.abort();
+  }
 
   function ownerExited() {
     if (!ownerPid) return false;
@@ -149,6 +245,7 @@ export async function serveBrowserSession(
     return {
       state,
       resumed,
+      toolState: recoveryFailed ? 'failed' : client.getState(),
       strategy: 'held-connection',
       ownership: adapter.ownership ?? 'adapter',
       providerDeadlineKnown: hardDeadline !== undefined,
@@ -172,6 +269,13 @@ export async function serveBrowserSession(
       }
       let outcome: typeof reason | 'cleanup-failed' =
         acquisitionFailed && !managed ? 'cleanup-failed' : reason;
+      if (activeCalls.size) {
+        try {
+          await bounded(Promise.allSettled(activeCalls), 15_000);
+        } catch {
+          outcome = 'cleanup-failed';
+        }
+      }
       if (replacing) {
         try {
           await bounded(
@@ -263,17 +367,6 @@ export async function serveBrowserSession(
           resolved.wsEndpoint || resolved.browserUrl
             ? await createBrowserConnection(resolved, signal)
             : undefined;
-        const {
-          wsEndpoint: _ws,
-          browserUrl: _url,
-          wsHeaders: _headers,
-          userDataDir: _profile,
-          executablePath: _executable,
-          channel: _channel,
-          isolated: _isolated,
-          autoConnect: _autoConnect,
-          ...localConfig
-        } = directConfig;
         // Provider connections must not inherit local-launch/discovery flags.
         let nextClient: DevToolsClient | undefined;
         try {
@@ -308,6 +401,85 @@ export async function serveBrowserSession(
     browserUsed = true;
   }
 
+  async function recoverTools(signal: AbortSignal) {
+    if (recoveryFailed || !managed || !adapter.reconnect)
+      throw new BrowserSessionError(
+        'Browser tools are stalled. The action may have completed. Safe reattachment to the same live browser is unavailable; inspect it externally before explicitly starting another session. No action was replayed.',
+      );
+    recoveryFailed = true;
+    if (hardDeadline !== undefined && hardDeadline <= Date.now())
+      throw new BrowserSessionError('The provider browser deadline has expired.');
+    const recoverySignal = AbortSignal.any([signal, AbortSignal.timeout(10_000)]);
+    console.error('[pi-browser-use] recovering browser tool execution (phase=recovery)');
+    replacing = (async () => {
+      const resolved = await abortable(
+        adapter.reconnect!(managed!, recoverySignal),
+        recoverySignal,
+      );
+      recoverySignal.throwIfAborted();
+      validateBrowserBinding({ ...managed!, connection: resolved });
+      await abortable(closeBrowser(client, connection), recoverySignal);
+      recoverySignal.throwIfAborted();
+      connection = await createBrowserConnection(resolved, recoverySignal);
+      recoverySignal.throwIfAborted();
+      client = new DevToolsClient({
+        ...localConfig,
+        sessionMode: 'existing',
+        wsEndpoint: connection.wsEndpoint,
+      });
+      await client.connect(recoverySignal);
+      const pages = await client.callTool('list_pages', {}, recoverySignal);
+      if (pages.isError) throw new BrowserSessionError('Browser inspection failed after recovery.');
+      if (marker) {
+        const text = pages.content?.map((item) => item.text ?? '').join('\n') ?? '';
+        const match = new RegExp(
+          `^(\\d+): about:blank#pi-retained-session-${marker.nonce}(?: |$)`,
+          'm',
+        ).exec(text);
+        if (!match) throw new BrowserSessionError('The original browser marker was lost.');
+        const pageId = Number(match[1]);
+        if (
+          scriptValue(
+            await client.callTool(
+              'evaluate_script',
+              {
+                pageId,
+                function: `() => globalThis.__piBrowserRetention === ${JSON.stringify(marker.nonce)}`,
+              },
+              recoverySignal,
+            ),
+          ) !== true
+        )
+          throw new BrowserSessionError('The original browser marker was lost.');
+        marker = { ...marker, pageId };
+      }
+      recoverySignal.throwIfAborted();
+      managed!.connection = resolved;
+      await options.onAcquire?.(managed!);
+      recoverySignal.throwIfAborted();
+      toolLifetime = new AbortController();
+      recoveryFailed = false;
+    })();
+    try {
+      await abortable(replacing, recoverySignal);
+    } catch {
+      console.error('[pi-browser-use] browser tool recovery failed (phase=recovery)');
+      throw new BrowserSessionError(
+        'Browser tool recovery failed. The action may have completed; inspect the original browser externally. No action was replayed.',
+      );
+    } finally {
+      // A late completion cannot start another attempt or publish a recovered session.
+      void replacing
+        .finally(() => {
+          replacing = undefined;
+        })
+        .catch(() => {});
+    }
+    throw new BrowserSessionError(
+      'The MCP subprocess was replaced and inspection of the same live browser succeeded. No action was replayed. Page IDs and element UIDs may have changed: call browser_list_pages, then browser_take_snapshot and inspect the actual state before continuing.',
+    );
+  }
+
   async function verify(signal: AbortSignal) {
     if (connection && !connection.alive)
       throw new BrowserSessionError(
@@ -326,22 +498,14 @@ export async function serveBrowserSession(
     }
     if (hardDeadline !== undefined && hardDeadline <= Date.now())
       throw new BrowserSessionError('The provider browser deadline has expired.');
-    if (
-      marker &&
-      scriptValue(
-        await client.callTool(
-          'evaluate_script',
-          {
-            pageId: marker.pageId,
-            function: `() => globalThis.__piBrowserRetention === ${JSON.stringify(marker.nonce)}`,
-          },
-          signal,
-        ),
-      ) !== true
-    )
-      throw new BrowserSessionError(
-        'The original live browser was lost. Profile restoration is not live-session recovery.',
-      );
+    if (marker) {
+      const snapshot = await client.callTool('take_snapshot', { pageId: marker.pageId }, signal);
+      const text = snapshot.content?.map((item) => item.text ?? '').join('\n') ?? '';
+      if (snapshot.isError || !text.includes(`Pi live browser marker: ${marker.nonce}`))
+        throw new BrowserSessionError(
+          'The original live browser was lost. Profile restoration is not live-session recovery.',
+        );
+    }
   }
 
   async function removeMarker(signal: AbortSignal) {
@@ -416,7 +580,7 @@ export async function serveBrowserSession(
             'evaluate_script',
             {
               pageId: marker.pageId,
-              function: `() => { history.replaceState(null, "", ${JSON.stringify(url)}); globalThis.__piBrowserRetention = ${JSON.stringify(nonce)}; return true; }`,
+              function: `() => { history.replaceState(null, "", ${JSON.stringify(url)}); globalThis.__piBrowserRetention = ${JSON.stringify(nonce)}; document.body.textContent = ${JSON.stringify(`Pi live browser marker: ${nonce}`)}; return true; }`,
             },
             signal,
           ),
@@ -453,9 +617,30 @@ export async function serveBrowserSession(
         Array.isArray(input.args)
       )
         throw new BrowserSessionError('Invalid browser tool request.');
-      await ensureBrowser(signal);
-      if (marker || connection) await verify(signal);
-      return client.callTool(input.name, input.args as Record<string, unknown>, signal);
+      if (recoveryFailed || client.getState() === 'stalled') return recoverTools(signal);
+      const callLifetime = toolLifetime;
+      const executionSignal = AbortSignal.any([
+        signal,
+        callLifetime.signal,
+        AbortSignal.timeout(50_000),
+      ]);
+      await ensureBrowser(executionSignal);
+      if (marker || connection) await verify(executionSignal);
+      await client.ensureReady(executionSignal);
+      executionSignal.throwIfAborted();
+      const executingClient = client;
+      const name = input.name;
+      const args = input.args as Record<string, unknown>;
+      return () => {
+        const operation = executingClient.callTool(name, args, executionSignal);
+        activeCalls.add(operation);
+        const finish = () => {
+          activeCalls.delete(operation);
+          abortStalledTools(executingClient, callLifetime);
+        };
+        void operation.then(finish, finish);
+        return operation;
+      };
     }
     throw new BrowserSessionError('Unknown browser session operation.');
   }
@@ -471,11 +656,9 @@ export async function serveBrowserSession(
       return;
     }
     const abort = new AbortController();
-    const signal = AbortSignal.any([
-      abort.signal,
-      lifetime.signal,
-      AbortSignal.timeout(OPERATION_MS),
-    ]);
+    const requestSignal = AbortSignal.any([abort.signal, AbortSignal.timeout(OPERATION_MS)]);
+    const signal = AbortSignal.any([requestSignal, lifetime.signal]);
+    let phase = 'queue';
     res.once('close', () => {
       if (!res.writableEnded) abort.abort();
     });
@@ -494,12 +677,54 @@ export async function serveBrowserSession(
       if (!input || typeof input !== 'object' || Array.isArray(input))
         throw new BrowserSessionError('Invalid browser session request.');
       if (owner && input.owner === owner) lastSeen = Date.now();
-      const work = mutations.then(() => {
+      const isToolCall = input.action === 'call';
+      if (isToolCall && pendingToolCalls >= MAX_TOOL_CALLS)
+        throw new BrowserSessionError(
+          'Browser session is busy (8 pending tool calls). This action was not dispatched. Wait for active operations before retrying.',
+        );
+      if (isToolCall) pendingToolCalls++;
+      const admittedLifetime = toolLifetime;
+      const abortedAtAdmission = admittedLifetime.signal.aborted;
+      const execute = async () => {
         signal.throwIfAborted();
-        return dispatch(input, signal);
+        if (
+          isToolCall &&
+          (admittedLifetime !== toolLifetime ||
+            (!abortedAtAdmission && admittedLifetime.signal.aborted))
+        )
+          throw new BrowserSessionError(
+            'The browser connection changed while this request was queued. This action was not dispatched. Call browser_list_pages and browser_take_snapshot before continuing.',
+          );
+        phase = 'execution';
+        try {
+          const prepared = await dispatch(input, signal);
+          return { result: isToolCall ? (prepared as () => Promise<unknown>)() : prepared };
+        } finally {
+          abortStalledTools(client, admittedLifetime);
+        }
+      };
+      const prepare = () =>
+        scheduleOperation(preparation, undefined, signal, execute).then(({ result }) => result);
+      const args = input.args as Record<string, unknown> | undefined;
+      const pageId =
+        isToolCall &&
+        typeof input.name === 'string' &&
+        toolConcurrency[input.name] === 'page' &&
+        Number.isSafeInteger(args?.pageId) &&
+        !recoveryFailed &&
+        client.getState() !== 'stalled' &&
+        !admittedLifetime.signal.aborted
+          ? (args!.pageId as number)
+          : undefined;
+      // Match MCP's page/exclusive ordering before dispatch so queued calls remain cancellable.
+      const work = (
+        input.action === 'heartbeat'
+          ? dispatch(input, signal)
+          : scheduleOperation(scheduled, pageId, signal, prepare)
+      ).finally(() => {
+        if (isToolCall) pendingToolCalls--;
       });
-      mutations = work.catch(() => {});
-      const result = await work;
+      const result = await abortable(work, requestSignal);
       const body = JSON.stringify({ result });
       if (Buffer.byteLength(body) > MAX_BYTES)
         throw new BrowserSessionError('Browser result exceeded the session transport limit.');
@@ -507,7 +732,7 @@ export async function serveBrowserSession(
     } catch (error) {
       if (!(error instanceof BrowserSessionError))
         console.error(
-          `[pi-browser-use] browser session operation failed (category=${classifyError(error).errorCategory})`,
+          `[pi-browser-use] browser session operation failed (phase=${phase}, category=${classifyError(error).errorCategory})`,
         );
       res.statusCode = 409;
       res.end(
@@ -528,27 +753,28 @@ export async function serveBrowserSession(
   const sweep = setInterval(() => {
     if (stopped || sweepScheduled) return;
     sweepScheduled = true;
-    mutations = mutations
-      .then(async () => {
-        if (!attachedOnce && Date.now() - startedAt < OPERATION_MS) return;
-        // Heartbeats track client liveness; they never extend the retention deadline.
-        if (owner && (ownerExited() || Date.now() - lastSeen > 30_000)) owner = undefined;
-        const expired = hardDeadline !== undefined && Date.now() >= hardDeadline;
-        if (connection && !connection.alive) await stop('lost');
-        else if (expired || (!owner && (!expiresAt || Date.now() >= expiresAt)))
-          await stop(expired || expiresAt ? 'expired' : 'closed');
-        else if (!owner && marker && !connection) {
-          try {
-            await bounded(
-              verify(AbortSignal.any([lifetime.signal, AbortSignal.timeout(5000)])),
-              5000,
-            );
-          } catch {
-            await stop('lost');
-          }
+    void scheduleOperation(preparation, undefined, lifetime.signal, async () => {
+      if (!attachedOnce && Date.now() - startedAt < OPERATION_MS) return;
+      // Heartbeats track client liveness; they never extend the retention deadline.
+      if (owner && (ownerExited() || Date.now() - lastSeen > 30_000)) owner = undefined;
+      const expired = hardDeadline !== undefined && Date.now() >= hardDeadline;
+      if (connection && !connection.alive) await stop('lost');
+      else if (expired || (!owner && (!expiresAt || Date.now() >= expiresAt)))
+        await stop(expired || expiresAt ? 'expired' : 'closed');
+      else if (!owner && marker && !connection) {
+        try {
+          await bounded(
+            verify(AbortSignal.any([lifetime.signal, AbortSignal.timeout(5000)])),
+            5000,
+          );
+        } catch {
+          await stop('lost');
         }
+      }
+    })
+      .catch(() => {
+        if (!stopped) console.error('[pi-browser-use] browser session expiry cleanup failed');
       })
-      .catch(() => console.error('[pi-browser-use] browser session expiry cleanup failed'))
       .finally(() => {
         sweepScheduled = false;
       });

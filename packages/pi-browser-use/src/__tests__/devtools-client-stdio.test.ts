@@ -58,11 +58,15 @@ describe('DevToolsClient real stdio transport', () => {
     );
   });
 
-  it('initializes the real MCP subprocess and lists tools with ambient npx absent', async () => {
+  it.each([
+    true,
+    false,
+  ])('initializes real MCP tools with ambient npx absent and page routing %s', async (experimentalPageIdRouting) => {
     process.env.PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
     const client = new DevToolsClient({
       headless: true,
       sessionMode: 'isolated',
+      experimentalPageIdRouting,
       ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}),
     });
 
@@ -71,6 +75,10 @@ describe('DevToolsClient real stdio transport', () => {
 
       expect(tools.length).toBeGreaterThan(0);
       expect(tools.some((tool) => tool.name === 'navigate_page')).toBe(true);
+      const click = tools.find((tool) => tool.name === 'click');
+      expect(click?.inputSchema.required?.includes('pageId') ?? false).toBe(
+        experimentalPageIdRouting,
+      );
     } finally {
       await client.close();
     }

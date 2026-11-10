@@ -66,6 +66,7 @@ export async function createBrowserAdapter(
     typeof adapter.acquire !== 'function' ||
     typeof adapter.release !== 'function' ||
     (adapter.describe !== undefined && typeof adapter.describe !== 'function') ||
+    (adapter.reconnect !== undefined && typeof adapter.reconnect !== 'function') ||
     (adapter.retain !== undefined && typeof adapter.retain !== 'function') ||
     (adapter.ownership !== undefined &&
       !['local', 'external', 'adapter'].includes(adapter.ownership))

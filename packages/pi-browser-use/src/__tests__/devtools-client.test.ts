@@ -27,8 +27,12 @@ const mockListTools = vi.fn((opts?: { cursor?: string }) => {
     nextCursor: undefined,
   });
 });
-const mockCallTool = vi.fn((_req: { name: string; arguments: Record<string, unknown> }) =>
-  Promise.resolve({ content: [{ type: 'text', text: 'done' }] }),
+const mockCallTool = vi.fn(
+  (
+    _req: { name: string; arguments: Record<string, unknown> },
+    _schema?: unknown,
+    _options?: { signal?: AbortSignal; timeout: number },
+  ) => Promise.resolve({ content: [{ type: 'text', text: 'done' }] }),
 );
 
 vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
@@ -294,7 +298,7 @@ describe('DevToolsClient', () => {
       expect(mockCallTool).toHaveBeenCalledWith(
         { name: 'click', arguments: { uid: '1_2' } },
         undefined,
-        { timeout: 60_000 },
+        { timeout: 50_000, signal: expect.any(AbortSignal) },
       );
       expect(result.content).toEqual([{ type: 'text', text: 'done' }]);
     });
@@ -388,9 +392,73 @@ describe('DevToolsClient', () => {
       await client.callTool('click', {}, controller.signal);
 
       expect(mockCallTool).toHaveBeenCalledWith({ name: 'click', arguments: {} }, undefined, {
-        signal: controller.signal,
-        timeout: 60_000,
+        signal: expect.any(AbortSignal),
+        timeout: 50_000,
       });
+    });
+
+    it.each([
+      undefined,
+      0,
+      60000,
+      200,
+    ])('bounds navigation waits inside the request deadline: %s', async (timeout) => {
+      const client = new DevToolsClient();
+      const args = { url: 'https://example.com', ...(timeout === undefined ? {} : { timeout }) };
+      await client.callTool('navigate_page', args);
+      expect(mockCallTool.mock.calls[0]![0].arguments.timeout).toBe(timeout === 200 ? 200 : 40000);
+      expect(args.timeout).toBe(timeout);
+      await client.close();
+    });
+
+    it.each([
+      false,
+      true,
+    ])('fences timed-out tools even when transport closes or ping succeeds: %s', async (disconnected) => {
+      const client = new DevToolsClient();
+      mockCallTool.mockImplementationOnce(async () => {
+        if (disconnected) mockTransports[0]!.onclose?.();
+        throw Object.assign(new Error('private'), { code: -32001 });
+      });
+      await expect(client.callTool('click', {})).rejects.toMatchObject({
+        errorCategory: 'timeout',
+      });
+      expect(client.getState()).toBe('stalled');
+      for (const name of ['evaluate_script', 'list_pages'])
+        await expect(client.callTool(name, {})).rejects.toThrow('Browser tools are stalled');
+      expect(await client.ping()).toBe(false);
+      expect(mockCallTool).toHaveBeenCalledOnce();
+      expect(mockClientConnect).toHaveBeenCalledOnce();
+      expect(mockClientPing).not.toHaveBeenCalled();
+      await client.close();
+    });
+
+    it('propagates cancellation and fences an uncertain dispatched action', async () => {
+      const client = new DevToolsClient();
+      const controller = new AbortController();
+      mockCallTool.mockImplementationOnce(async (_request, _schema, options) => {
+        controller.abort();
+        options!.signal!.throwIfAborted();
+        return { content: [] };
+      });
+      await expect(client.callTool('click', {}, controller.signal)).rejects.toMatchObject({
+        name: 'AbortError',
+      });
+      expect(client.getState()).toBe('stalled');
+      await expect(client.callTool('list_pages', {})).rejects.toThrow('Browser tools are stalled');
+      expect(mockCallTool).toHaveBeenCalledOnce();
+      await client.close();
+    });
+
+    it('does not dispatch or fence a request cancelled before execution', async () => {
+      const client = new DevToolsClient();
+      await client.connect();
+      await expect(client.callTool('click', {}, AbortSignal.abort())).rejects.toMatchObject({
+        name: 'AbortError',
+      });
+      expect(mockCallTool).not.toHaveBeenCalled();
+      expect(client.getState()).toBe('ready');
+      await client.close();
     });
 
     it('does not replay a tool that loses its connection during dispatch', async () => {

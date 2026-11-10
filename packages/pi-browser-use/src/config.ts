@@ -195,6 +195,7 @@ export function resolveConfig(config?: BrowserUseConfig): BrowserUseConfig {
             'channel',
             'slim',
             'experimentalpageidrouting',
+            'pageidrouting',
           ].includes(arg.split('=')[0]!.replaceAll('-', '').toLowerCase().replace(/^no/, '')),
       )
     ) {
@@ -261,7 +262,7 @@ export function configToArgs(config: BrowserUseConfig): string[] {
   if (resolved.experimentalVision) args.push('--experimental-vision');
   if (resolved.experimentalScreencast) args.push('--experimental-screencast');
   if (resolved.experimentalMemory) args.push('--experimental-memory');
-  if (resolved.experimentalPageIdRouting) args.push('--experimental-page-id-routing');
+  args.push(resolved.experimentalPageIdRouting ? '--page-id-routing' : '--no-page-id-routing');
 
   if (resolved.usageStatistics === false) args.push('--no-usage-statistics');
   if (resolved.performanceCrux === false) args.push('--no-performance-crux');
