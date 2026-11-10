@@ -83,6 +83,8 @@ describe('browser session configuration', () => {
       '-e=/another/chrome',
       '--experimental-page-id-routing=false',
       '--no-experimental-page-id-routing',
+      '--page-id-routing=false',
+      '--no-page-id-routing',
       '--slim',
       '--no-ws-endpoint',
     ]) {
@@ -203,7 +205,7 @@ describe('configToArgs', () => {
   it('enables page ID routing and network header redaction by default', () => {
     const args = configToArgs({});
 
-    expect(args).toContain('--experimental-page-id-routing');
+    expect(args).toContain('--page-id-routing');
     expect(args).toContain('--redact-network-headers');
     expect(args).not.toContain('--accept-insecure-certs');
   });
@@ -225,7 +227,7 @@ describe('configToArgs', () => {
       redactNetworkHeaders: false,
     });
 
-    expect(args).not.toContain('--experimental-page-id-routing');
+    expect(args).toContain('--no-page-id-routing');
     expect(args).not.toContain('--redact-network-headers');
   });
 
@@ -239,7 +241,7 @@ describe('configToArgs', () => {
   });
 
   it('disables page ID routing automatically in slim mode', () => {
-    expect(configToArgs({ slim: true })).not.toContain('--experimental-page-id-routing');
+    expect(configToArgs({ slim: true })).toContain('--no-page-id-routing');
   });
 
   it('rejects explicitly enabled page ID routing in slim mode', () => {

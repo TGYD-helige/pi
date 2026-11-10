@@ -26,7 +26,7 @@ bun add @amaster.ai/pi-browser-use
 
 Requires Node.js `^20.19.0 || ^22.12.0 || >=23`, Chrome (stable or newer), and `@earendil-works/pi-coding-agent >= 0.74.0`.
 
-`chrome-devtools-mcp` uses the compatible `^1.6.0` range and its installed entrypoint is resolved when the extension connects. A missing or malformed installation fails connection; the extension does not download a replacement at connection time. Connection failures expose only allowlisted system error codes or Chrome startup categories, not raw subprocess stderr.
+`chrome-devtools-mcp` uses the compatible `^1.12.0` range and its installed entrypoint is resolved when the extension connects. A missing or malformed installation fails connection; the extension does not download a replacement at connection time. Connection failures expose only allowlisted system error codes or Chrome startup categories, not raw subprocess stderr.
 
 Hosts where `process.execPath` is not a directly executable Node runtime can set `PI_BROWSER_USE_NODE` to the Node command used for the MCP subprocess.
 
@@ -197,6 +197,8 @@ The common `BrowserAdapter` interface provides `acquire`, optional `describe`/`r
 MCP/CDP transport cleanup closes plugin-launched processes and detaches external connections. The direct adapter has no additional resource to release; managed adapters then stop only the instances they own. The session manager owns cross-process retention, marker verification, deadlines, and cancellation. `session.enabled: false` keeps ordinary direct connections without a holding worker. The named Browserless provider and direct CDP connections share the same connection lifecycle; this does not enable Browserless persistent-profile REST sessions or add a paid idle retention window.
 
 ### Tool timeouts and recovery
+
+MCP 1.12 supports parallel execution for eligible tools on different pages. Retained sessions currently serialize their requests, and `evaluate_script` remains exclusive upstream, so upgrading alone does not eliminate stalled-call blocking. The bounded recovery below still applies.
 
 Navigation, new-page and text-wait timeouts are capped at 40000 ms (including omitted or zero/default values); smaller explicit values are preserved. Tool requests have a 50000 ms deadline, inside the session's 60000 ms operation and 65000 ms client transport deadlines. A timeout or cancellation after dispatch leaves the action's outcome uncertain. Pi never automatically replays that action, and a successful MCP ping does not clear a stalled tool session. `/browser-session status` includes `toolState` so a live browser can be distinguished from working browser tools.
 
@@ -429,7 +431,7 @@ To load even the core upstream tool schemas only when needed, explicitly set `"t
 | `experimentalVision` | `boolean` | `true` | Enable vision tools (click_at) |
 | `experimentalScreencast` | `boolean` | `false` | Enable screencast |
 | `experimentalMemory` | `boolean` | `false` | Enable memory snapshots |
-| `experimentalPageIdRouting` | `boolean` | `true` | Add a required `pageId` to page-scoped tools and route directly to that page |
+| `experimentalPageIdRouting` | `boolean` | `true` | Add a required `pageId` to page-scoped tools and route directly to that page; maps to upstream `--page-id-routing` |
 
 ### Privacy
 
