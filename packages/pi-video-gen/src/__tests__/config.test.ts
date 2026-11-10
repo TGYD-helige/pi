@@ -202,6 +202,17 @@ describe('config validation & loud project read', () => {
       },
     ],
     [
+      'customProviders.bad.models[0].capabilities.durationValues',
+      {
+        customProviders: {
+          bad: {
+            api: 'ark',
+            models: [{ id: 'm', capabilities: { durations: [4, 8], durationValues: [4, 9] } }],
+          },
+        },
+      },
+    ],
+    [
       'customProviders.bad.models[0].capabilities.durations',
       {
         customProviders: {
@@ -299,6 +310,39 @@ describe('resolveModel', () => {
     expect(() => resolveProvider({ providers: { newapi: { apiKey: 'k' } } }, 'newapi')).toThrow(
       /providers.newapi.baseUrl/,
     );
+  });
+
+  it('inherits exact duration choices and selects a valid custom default', () => {
+    const settings = {
+      customProviders: {
+        proxy: {
+          api: 'openrouter' as const,
+          apiKey: 'k',
+          models: [
+            { id: 'google/veo-3.1', alias: 'veo-proxy', capabilities: { durationValues: [4, 6] } },
+          ],
+        },
+      },
+    };
+    const resolved = resolveModel(settings, 'veo-proxy');
+    expect(resolved?.entry.capabilities.durationValues).toEqual([4, 6]);
+    expect(resolved?.entry.defaultDurationSec).toBe(4);
+  });
+
+  it('rejects a custom default excluded by inherited exact duration choices', () => {
+    expect(() =>
+      resolveModel(
+        {
+          customProviders: {
+            proxy: {
+              api: 'openrouter',
+              models: [{ id: 'google/veo-3.1', alias: 'veo-proxy', defaultDurationSec: 5 }],
+            },
+          },
+        },
+        'veo-proxy',
+      ),
+    ).toThrow(/defaultDurationSec must be one of 4, 6, 8/);
   });
 
   it('custom models with unknown ids get conservative capabilities', () => {

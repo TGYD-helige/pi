@@ -149,6 +149,7 @@ export const BUILT_IN_VIDEO_MODELS: BuiltInVideoModel[] = [
     capabilities: {
       maxReferenceImages: 2,
       durations: [4, 8],
+      durationValues: [4, 6, 8],
       resolutions: ['720p', '1080p', '4K'],
       aspectRatios: ['16:9', '9:16'],
       nativeAudio: true,
@@ -206,6 +207,7 @@ export const BUILT_IN_VIDEO_MODELS: BuiltInVideoModel[] = [
     capabilities: {
       maxReferenceImages: 2,
       durations: [4, 8],
+      durationValues: [4, 6, 8],
       resolutions: ['720p', '1080p', '4K'],
       aspectRatios: ['16:9', '9:16'],
       nativeAudio: true,
@@ -224,6 +226,7 @@ export const BUILT_IN_VIDEO_MODELS: BuiltInVideoModel[] = [
     capabilities: {
       maxReferenceImages: 2,
       durations: [4, 8],
+      durationValues: [4, 6, 8],
       resolutions: ['720p', '1080p'],
       aspectRatios: ['16:9', '9:16'],
       nativeAudio: true,

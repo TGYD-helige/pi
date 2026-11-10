@@ -285,10 +285,18 @@ function buildGenerateParams(caps: VideoModelCapabilities | null) {
       : {}),
     durationSec: Type.Optional(
       Type.Integer({
-        ...(caps ? { minimum: caps.durations[0], maximum: caps.durations[1] } : {}),
-        description: caps
-          ? `Clip duration in seconds, integer ${caps.durations[0]}-${caps.durations[1]} for the active model.`
-          : 'Clip duration in seconds (model-dependent).',
+        ...(caps
+          ? {
+              minimum: caps.durations[0],
+              maximum: caps.durations[1],
+              ...(caps.durationValues ? { enum: caps.durationValues } : {}),
+            }
+          : {}),
+        description: caps?.durationValues
+          ? `Clip duration in seconds: ${caps.durationValues.join(', ')} for the active model.`
+          : caps
+            ? `Clip duration in seconds, integer ${caps.durations[0]}-${caps.durations[1]} for the active model.`
+            : 'Clip duration in seconds (model-dependent).',
       }),
     ),
     aspectRatio: caps
@@ -442,6 +450,15 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
       }
       return errResult(
         `durationSec must be ${caps.durations[0]}-${caps.durations[1]}s for ${resolved.entry.id} (got ${toolParams.durationSec}).`,
+      );
+    }
+    if (
+      toolParams.durationSec != null &&
+      caps.durationValues &&
+      !caps.durationValues.includes(toolParams.durationSec)
+    ) {
+      return errResult(
+        `durationSec must be one of ${caps.durationValues.join(', ')}s for ${resolved.entry.id}.`,
       );
     }
     // Reject empty-string ratio before the truthy capability check — "" would
@@ -1015,7 +1032,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
       const c = resolved.entry.capabilities;
       lines.push(
         `Provider: ${resolved.provider.style} (key ${resolved.provider.apiKey ? 'ready' : 'MISSING'})`,
-        `Durations: ${c.durations[0]}-${c.durations[1]}s; Resolutions: ${c.resolutions.join('/')}; Aspect ratios: ${c.aspectRatios.join(', ')}`,
+        `Durations: ${c.durationValues?.join(', ') ?? `${c.durations[0]}-${c.durations[1]}`}s; Resolutions: ${c.resolutions.join('/')}; Aspect ratios: ${c.aspectRatios.join(', ')}`,
         `Native audio: ${c.nativeAudio ? 'yes' : 'no'}; First+last frame: ${c.supportsFirstLastFrame ? 'yes' : 'no'}; Max reference images: ${c.maxReferenceImages}`,
         `Trusted asset references: ${resolved.provider.style === 'ark' ? c.referenceAssetModalities?.join(', ') || 'none' : 'none'}; Max videos: ${c.maxReferenceVideos ?? 0}; Max audios: ${c.maxReferenceAudios ?? 0}`,
       );

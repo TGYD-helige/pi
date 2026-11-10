@@ -124,6 +124,37 @@ describe('runRender', () => {
     concatCalls = { inputs: [] };
   });
 
+  it('rejects a later unsupported Veo duration before any paid shot submits', async () => {
+    const frame = makeFrame(cwd, 'first.png');
+    const jobDir = makeJob(cwd, {
+      shots: [
+        {
+          id: 'valid',
+          firstFramePath: frame,
+          durationSec: 8,
+          prompt: { visuals: 'wide shot', action: 'waves' },
+        },
+        {
+          id: 'invalid',
+          firstFramePath: frame,
+          durationSec: 5,
+          prompt: { visuals: 'wide shot', action: 'waves' },
+        },
+      ],
+    });
+    const resolved = resolveModel({
+      defaultModel: 'veo-3.1',
+      providers: { openrouter: { apiKey: 'k' } },
+    })!;
+    await expect(
+      runRender({
+        renderSpecPath: join(jobDir, 'render-input.json'),
+        ...baseOpts(cwd, mockAdapter(calls), concatCalls, resolved),
+      }),
+    ).rejects.toThrow(/4, 6, 8/);
+    expect(calls.submit).toBe(0);
+  });
+
   it('uses local shots without a model and reuses a verified final video', async () => {
     const clip = join(cwd, 'existing.mp4');
     writeFileSync(clip, fakeMp4());

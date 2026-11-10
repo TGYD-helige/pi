@@ -14,6 +14,7 @@ import type {
   VideoFileMeta,
   VideoProviderAdapter,
 } from '../types.js';
+import { findBuiltInModel } from './models.js';
 import { requestFingerprint } from './request.js';
 import { downloadFile } from './task.js';
 
@@ -78,10 +79,11 @@ export const openrouterAdapter: VideoProviderAdapter = {
       throw missingKeyError('openrouter', 'OPENROUTER_API_KEY', provider.apiKeyPath);
     }
 
+    const durationValues = findBuiltInModel(remoteModelId)?.capabilities.durationValues;
     if (
-      /^google\/veo-3\.1(?:-fast|-lite)?$/.test(remoteModelId) &&
+      durationValues &&
       params.durationSec != null &&
-      ![4, 6, 8].includes(params.durationSec)
+      !durationValues.includes(params.durationSec)
     ) {
       throw new VideoGenError(
         'Veo 3.1 models require durationSec to be 4, 6, or 8 seconds.',

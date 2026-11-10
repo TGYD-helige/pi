@@ -31,6 +31,8 @@ export type VideoModelCapabilities = {
   maxReferenceAudios?: number | undefined;
   /** Inclusive [min, max] clip duration in seconds. */
   durations: [number, number];
+  /** Exact allowed durations for models with discrete choices within the range. */
+  durationValues?: number[] | undefined;
   resolutions: string[];
   aspectRatios: string[];
   /** Model generates synchronized speech/SFX/BGM natively (e.g. Seedance 2.0 `generate_audio`). */

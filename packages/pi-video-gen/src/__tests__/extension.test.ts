@@ -535,6 +535,29 @@ describe('pi-video-gen extension', () => {
     }
   });
 
+  it('advertises and validates the exact Veo duration choices before network calls', async () => {
+    mkdirSync(join(home, '.pi', 'agent'), { recursive: true });
+    writeFileSync(
+      join(home, '.pi', 'agent', 'settings.json'),
+      JSON.stringify({
+        'pi-video-gen': { defaultModel: 'veo-3.1', providers: { openrouter: { apiKey: 'k' } } },
+      }),
+    );
+    await startSession(cwd);
+    const tool = tools.get('video_generate')!;
+    expect(tool.parameters.properties?.durationSec).toHaveProperty('enum', [4, 6, 8]);
+    const result = await tool.execute(
+      'bad-duration',
+      { ...VALID_GENERATE_PARAMS, durationSec: 5 },
+      undefined,
+      undefined,
+      fakeCtx(cwd),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toMatch(/4, 6, 8/);
+    expect(safeFetchMock).not.toHaveBeenCalled();
+  });
+
   it('video_generate rejects out-of-range duration before any network call', async () => {
     // give it a key so validation reaches the duration check
     mkdirSync(join(home, '.pi', 'agent'), { recursive: true });

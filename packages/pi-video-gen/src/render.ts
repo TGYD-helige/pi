@@ -475,6 +475,12 @@ export async function runRender(opts: {
       throw new VideoGenError(`Shot "${shot.id}": ${referenceError}`, 'render: invalid references');
     }
     const d = shot.durationSec ?? resolved!.entry.defaultDurationSec;
+    if (caps!.durationValues && !caps!.durationValues.includes(d)) {
+      throw new VideoGenError(
+        `Shot "${shot.id}" durationSec must be one of ${caps!.durationValues.join(', ')}s for ${resolved!.entry.id}.`,
+        'render: bad duration',
+      );
+    }
     if (d < caps!.durations[0] || d > caps!.durations[1]) {
       throw new VideoGenError(
         `Shot "${shot.id}" durationSec ${d}s is outside ${caps!.durations[0]}-${caps!.durations[1]}s for ${resolved!.entry.id}.`,

@@ -152,6 +152,22 @@ function validateCapabilities(value: unknown, path: string): void {
       );
     }
   }
+  if (
+    caps.durationValues !== undefined &&
+    (!Array.isArray(caps.durationValues) ||
+      caps.durationValues.length === 0 ||
+      caps.durationValues.some(
+        (item) =>
+          !Number.isSafeInteger(item) ||
+          item <= 0 ||
+          (Array.isArray(caps.durations) && (item < caps.durations[0] || item > caps.durations[1])),
+      ))
+  ) {
+    throw new VideoGenError(
+      `${path}.durationValues must contain positive integers within capabilities.durations.`,
+      `config: invalid ${path}.durationValues`,
+    );
+  }
   if (caps.resolutions !== undefined) stringArray(caps.resolutions, `${path}.resolutions`);
   if (caps.aspectRatios !== undefined) stringArray(caps.aspectRatios, `${path}.aspectRatios`);
   if (caps.referenceAssetModalities !== undefined) {
@@ -361,6 +377,10 @@ function resolveCustomModel(settings: VideoGenSettings, wanted: string): Resolve
         ...(builtIn?.capabilities ?? CONSERVATIVE_CUSTOM_CAPABILITIES),
         ...(model.capabilities ?? {}),
       };
+      validateCapabilities(
+        capabilities,
+        `customProviders.${providerName}.models.${model.id}.capabilities`,
+      );
       const defaultResolution = inheritDefault(
         model.defaultResolution,
         builtIn?.defaultResolution,
@@ -376,9 +396,21 @@ function resolveCustomModel(settings: VideoGenSettings, wanted: string): Resolve
       const defaultDurationSec = inheritDefault(
         model.defaultDurationSec,
         builtIn?.defaultDurationSec,
-        (v) => v >= capabilities.durations[0] && v <= capabilities.durations[1],
-        capabilities.durations[0],
+        (v) =>
+          v >= capabilities.durations[0] &&
+          v <= capabilities.durations[1] &&
+          (!capabilities.durationValues || capabilities.durationValues.includes(v)),
+        capabilities.durationValues?.[0] ?? capabilities.durations[0],
       );
+      if (
+        capabilities.durationValues &&
+        !capabilities.durationValues.includes(defaultDurationSec)
+      ) {
+        throw new VideoGenError(
+          `customProviders.${providerName} defaultDurationSec must be one of ${capabilities.durationValues.join(', ')}.`,
+          'config: invalid discrete default duration',
+        );
+      }
       return {
         entry: {
           id: model.id,

@@ -199,6 +199,7 @@ describe('resolveImageToolCapabilities', () => {
     const c = resolveImageToolCapabilities({ defaultModel: 'seedream-5.5' });
     expect(c.api).toBe('ark');
     expect(c.model).toBeNull();
+    expect(buildImageGuidelines(c).join(' ')).not.toContain('`n`');
     const props = buildImageToolParameters(c).properties;
     expect(props).not.toHaveProperty('n');
     expect(props).not.toHaveProperty('quality');
@@ -670,7 +671,8 @@ describe('buildImageGuidelines', () => {
     for (const c of cases) {
       const text = buildImageGuidelines(c).join('\n');
       expect(text).toMatch(/icon|logo|svg/i);
-      expect(text).toMatch(/\bn\b/);
+      if (c.api === 'ark') expect(text).not.toContain('`n`');
+      else expect(text).toContain('`n`');
     }
   });
 
