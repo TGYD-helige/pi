@@ -329,18 +329,56 @@ describe('resolveModel', () => {
     expect(resolved?.entry.defaultDurationSec).toBe(4);
   });
 
-  it('rejects a custom default excluded by inherited exact duration choices', () => {
+  it('preserves existing custom duration ranges and defaults without explicit discrete choices', () => {
+    const byRange = resolveModel(
+      {
+        customProviders: {
+          proxy: {
+            api: 'openrouter',
+            models: [
+              { id: 'google/veo-3.1', alias: 'relay', capabilities: { durations: [5, 10] } },
+            ],
+          },
+        },
+      },
+      'relay',
+    );
+    expect(byRange?.entry.capabilities.durationValues).toBeUndefined();
+    expect(byRange?.entry.capabilities.durations).toEqual([5, 10]);
+    const byDefault = resolveModel(
+      {
+        customProviders: {
+          proxy: {
+            api: 'openrouter',
+            models: [{ id: 'google/veo-3.1', alias: 'relay', defaultDurationSec: 5 }],
+          },
+        },
+      },
+      'relay',
+    );
+    expect(byDefault?.entry.defaultDurationSec).toBe(5);
+    expect(byDefault?.entry.capabilities.durationValues).toBeUndefined();
+  });
+
+  it('rejects a custom default excluded by explicit exact duration choices', () => {
     expect(() =>
       resolveModel(
         {
           customProviders: {
             proxy: {
               api: 'openrouter',
-              models: [{ id: 'google/veo-3.1', alias: 'veo-proxy', defaultDurationSec: 5 }],
+              models: [
+                {
+                  id: 'google/veo-3.1',
+                  alias: 'relay',
+                  capabilities: { durationValues: [4, 6, 8] },
+                  defaultDurationSec: 5,
+                },
+              ],
             },
           },
         },
-        'veo-proxy',
+        'relay',
       ),
     ).toThrow(/defaultDurationSec must be one of 4, 6, 8/);
   });

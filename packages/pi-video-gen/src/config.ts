@@ -377,6 +377,15 @@ function resolveCustomModel(settings: VideoGenSettings, wanted: string): Resolve
         ...(builtIn?.capabilities ?? CONSERVATIVE_CUSTOM_CAPABILITIES),
         ...(model.capabilities ?? {}),
       };
+      // Preserve explicit duration contracts from settings written before discrete choices existed.
+      if (
+        model.capabilities?.durationValues === undefined &&
+        (model.capabilities?.durations !== undefined ||
+          (model.defaultDurationSec !== undefined &&
+            capabilities.durationValues &&
+            !capabilities.durationValues.includes(model.defaultDurationSec)))
+      )
+        capabilities.durationValues = undefined;
       validateCapabilities(
         capabilities,
         `customProviders.${providerName}.models.${model.id}.capabilities`,

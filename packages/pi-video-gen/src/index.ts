@@ -453,6 +453,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
       );
     }
     if (
+      !toolParams.jobId &&
       toolParams.durationSec != null &&
       caps.durationValues &&
       !caps.durationValues.includes(toolParams.durationSec)

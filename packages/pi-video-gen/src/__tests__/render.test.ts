@@ -157,17 +157,19 @@ describe('runRender', () => {
   });
 
   it.each([
-    'seedance-2.0',
-    'happyhorse-1.1',
-    'veo-3.1',
-  ])('resumes paid jobs saved before the %s capability update', async (model) => {
+    ['seedance-2.0', 8],
+    ['happyhorse-1.1', 8],
+    ['veo-3.1', 8],
+    ['veo-3.1', 5],
+    ['veo-3.1', 7],
+  ] as const)('resumes paid jobs saved before the %s capability update (%ss)', async (model, duration) => {
     const frame = makeFrame(cwd, 'legacy.png');
     const spec = {
       shots: [
         {
           id: 'paid',
           firstFramePath: frame,
-          durationSec: 8,
+          durationSec: duration,
           prompt: { visuals: 'wide shot', action: 'waves' },
         },
       ],
@@ -178,10 +180,24 @@ describe('runRender', () => {
       providers: { ark: { apiKey: 'k' }, dashscope: { apiKey: 'k' }, openrouter: { apiKey: 'k' } },
     })!;
     const opts = baseOpts(cwd, mockAdapter(calls), concatCalls, resolved);
+    const initialResolved =
+      model === 'veo-3.1'
+        ? {
+            ...resolved,
+            entry: {
+              ...resolved.entry,
+              capabilities: {
+                ...resolved.entry.capabilities,
+                durationValues: undefined,
+                durations: [5, 8] as [number, number],
+              },
+            },
+          }
+        : resolved;
     await expect(
       runRender({
         renderSpecPath: join(jobDir, 'render-input.json'),
-        ...opts,
+        ...baseOpts(cwd, mockAdapter(calls), concatCalls, initialResolved),
         concatImpl: (async () => {
           throw new CancelledError();
         }) as never,

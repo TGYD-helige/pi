@@ -496,12 +496,6 @@ export async function runRender(opts: {
       throw new VideoGenError(`Shot "${shot.id}": ${referenceError}`, 'render: invalid references');
     }
     const d = shot.durationSec ?? resolved!.entry.defaultDurationSec;
-    if (caps!.durationValues && !caps!.durationValues.includes(d)) {
-      throw new VideoGenError(
-        `Shot "${shot.id}" durationSec must be one of ${caps!.durationValues.join(', ')}s for ${resolved!.entry.id}.`,
-        'render: bad duration',
-      );
-    }
     if (d < caps!.durations[0] || d > caps!.durations[1]) {
       throw new VideoGenError(
         `Shot "${shot.id}" durationSec ${d}s is outside ${caps!.durations[0]}-${caps!.durations[1]}s for ${resolved!.entry.id}.`,
@@ -557,26 +551,40 @@ export async function runRender(opts: {
     let manifest = loadRenderJob(jobDir);
     let projectQc: Pick<RenderRunResult, 'qcFrames' | 'qcReportPath'> | undefined;
 
-    if (manifest) {
-      // 3a. resume: verify the whole input fingerprint before trusting anything
-      if (manifest.specFingerprint !== fingerprint) {
-        const oldCaps =
-          generated.length && resolved ? previousCatalogCapabilities(resolved) : undefined;
-        const matchesLegacy =
-          generated.length &&
-          resolved &&
-          (manifest.specFingerprint ===
-            specFingerprint(specRaw, resolved, resolved.entry.capabilities) ||
-            (oldCaps && manifest.specFingerprint === specFingerprint(specRaw, resolved, oldCaps)));
-        if (!matchesLegacy) {
-          throw new VideoGenError(
-            'render-input.json or the model/provider config changed since this job was created. Revisions require a NEW job directory (rerunning the same path only resumes identical input).',
-            'render: spec drift',
-          );
-        }
-        manifest.specFingerprint = fingerprint;
-        saveRenderJob(jobDir, manifest);
+    if (manifest && manifest.specFingerprint !== fingerprint) {
+      const oldCaps =
+        generated.length && resolved ? previousCatalogCapabilities(resolved) : undefined;
+      const matchesLegacy =
+        generated.length &&
+        resolved &&
+        (manifest.specFingerprint ===
+          specFingerprint(specRaw, resolved, resolved.entry.capabilities) ||
+          (oldCaps && manifest.specFingerprint === specFingerprint(specRaw, resolved, oldCaps)));
+      if (!matchesLegacy) {
+        throw new VideoGenError(
+          'render-input.json or the model/provider config changed since this job was created. Revisions require a NEW job directory (rerunning the same path only resumes identical input).',
+          'render: spec drift',
+        );
       }
+      manifest.specFingerprint = fingerprint;
+      saveRenderJob(jobDir, manifest);
+    }
+    for (const shot of generated) {
+      const state = manifest?.shots[shot.id];
+      const duration = shot.durationSec ?? resolved!.entry.defaultDurationSec;
+      if (
+        caps!.durationValues &&
+        !caps!.durationValues.includes(duration) &&
+        !state?.handle &&
+        state?.state !== 'done'
+      ) {
+        throw new VideoGenError(
+          `Shot "${shot.id}" durationSec must be one of ${caps!.durationValues.join(', ')}s for ${resolved!.entry.id}.`,
+          'render: bad duration',
+        );
+      }
+    }
+    if (manifest) {
       const expectedShotIds = spec.shots.map((shot) => shot.id);
       if (!sameKeys(Object.keys(manifest.shots), expectedShotIds)) {
         throw new VideoGenError(
