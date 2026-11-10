@@ -49,6 +49,7 @@ import {
   runProject,
 } from './project-render.js';
 import { assemblePrompt, validateFilmPrompt, validateShotPrompt } from './prompt.js';
+import { findBuiltInModel } from './providers/models.js';
 import {
   normalizeReferenceAssets,
   referenceAssetPreflightError,
@@ -147,7 +148,7 @@ function specFingerprint(
 // The preceding catalog was part of persisted fingerprints; retain its exact metadata for recovery.
 function previousCatalogCapabilities(resolved: ResolvedModel): VideoModelCapabilities[] {
   const { durationValues: _unused, ...caps } = resolved.entry.capabilities;
-  switch (resolved.remoteId) {
+  switch (findBuiltInModel(resolved.remoteId)?.id ?? resolved.remoteId) {
     case 'doubao-seedance-2-0-260128':
       return [{ ...caps, resolutions: caps.resolutions.filter((value) => value !== '4k') }];
     case 'happyhorse-1.1':

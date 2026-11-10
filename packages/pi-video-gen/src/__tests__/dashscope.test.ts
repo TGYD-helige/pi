@@ -36,6 +36,8 @@ describe('dashscopeAdapter.submit', () => {
   it.each([
     'wan3.0-video',
     'wan3.0-video-prime',
+    'wan-3.0',
+    'WAN-3.0-PRIME',
   ])('submits %s with unchanged ID, first/last media and audio control', async (model) => {
     let body: Record<string, any> = {};
     const handle = await dashscopeAdapter.submit(

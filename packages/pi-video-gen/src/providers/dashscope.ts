@@ -14,6 +14,7 @@ import type {
   VideoFileMeta,
   VideoProviderAdapter,
 } from '../types.js';
+import { findBuiltInModel } from './models.js';
 import { requestFingerprint } from './request.js';
 import { downloadFile } from './task.js';
 
@@ -84,7 +85,9 @@ export const dashscopeAdapter: VideoProviderAdapter = {
     if (!provider.apiKey) {
       throw missingKeyError('dashscope', 'DASHSCOPE_API_KEY', provider.apiKeyPath);
     }
-    const isWan3 = /^wan3\.0-video(?:-prime)?$/i.test(remoteModelId);
+    const isWan3 = /^wan3\.0-video(?:-prime)?$/i.test(
+      findBuiltInModel(remoteModelId)?.id ?? remoteModelId,
+    );
     if (params.lastFramePath && !isWan3) {
       throw new VideoGenError(
         'HappyHorse does not support last-frame interpolation. Remove lastFramePath.',

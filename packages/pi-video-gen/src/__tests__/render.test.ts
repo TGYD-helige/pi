@@ -163,7 +163,8 @@ describe('runRender', () => {
     ['veo-3.1', 5],
     ['veo-3.1', 7],
     ['veo-3.1', 5, true],
-  ] as const)('resumes paid jobs saved before the %s capability update (%ss)', async (model, duration, customRange: boolean = false) => {
+    ['veo-3.1', 5, false, true],
+  ] as const)('resumes paid jobs saved before the %s capability update (%ss)', async (model, duration, customRange: boolean = false, remoteAlias: boolean = false) => {
     const frame = makeFrame(cwd, 'legacy.png');
     const spec = {
       shots: [
@@ -177,7 +178,7 @@ describe('runRender', () => {
     };
     const jobDir = makeJob(cwd, spec);
     const resolved = resolveModel(
-      customRange
+      customRange || remoteAlias
         ? {
             defaultModel: 'relay',
             customProviders: {
@@ -186,9 +187,9 @@ describe('runRender', () => {
                 apiKey: 'k',
                 models: [
                   {
-                    id: 'google/veo-3.1',
+                    id: remoteAlias ? 'VeO-3.1' : 'google/veo-3.1',
                     alias: 'relay',
-                    capabilities: { durations: [5, 10] },
+                    capabilities: { durations: customRange ? [5, 10] : [5, 8] },
                     defaultDurationSec: 5,
                   },
                 ],

@@ -55,12 +55,15 @@ function jsonResponse(status: number, body: unknown): Response {
 }
 
 describe('arkAdapter.submit', () => {
-  it('uses adaptive ratio for Seedance 2.5 frame conditioning while preserving text-only ratios', async () => {
+  it.each([
+    'doubao-seedance-2-5-260628',
+    'SeEdAnCe-2.5',
+  ])('uses adaptive ratio for %s frame conditioning while preserving text-only ratios', async (model) => {
     for (const firstFramePath of [undefined, join(suiteDir, 'frame.png')]) {
       let body: Record<string, unknown> = {};
       await arkAdapter.submit(
         provider,
-        'doubao-seedance-2-5-260628',
+        model,
         {
           prompt: 'waves',
           firstFramePath,
@@ -72,6 +75,7 @@ describe('arkAdapter.submit', () => {
           return jsonResponse(200, { id: 'seedance-25' });
         }),
       );
+      expect(body.model).toBe(model);
       expect(body.ratio).toBe(firstFramePath ? 'adaptive' : '16:9');
       expect(body.duration).toBe(30);
     }

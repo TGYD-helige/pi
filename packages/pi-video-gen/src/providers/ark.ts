@@ -15,6 +15,7 @@ import type {
   VideoFileMeta,
   VideoProviderAdapter,
 } from '../types.js';
+import { findBuiltInModel } from './models.js';
 import { requestFingerprint } from './request.js';
 import { downloadFile } from './task.js';
 
@@ -157,7 +158,10 @@ export const arkAdapter: VideoProviderAdapter = {
       watermark: false,
     };
     if (params.resolution) body.resolution = params.resolution;
-    if (/^doubao-seedance-2-5-/.test(remoteModelId) && params.firstFramePath) {
+    if (
+      /^doubao-seedance-2-5-/.test(findBuiltInModel(remoteModelId)?.id ?? remoteModelId) &&
+      params.firstFramePath
+    ) {
       body.ratio = 'adaptive';
     } else if (params.aspectRatio) body.ratio = params.aspectRatio;
     if (params.durationSec != null) body.duration = params.durationSec;
