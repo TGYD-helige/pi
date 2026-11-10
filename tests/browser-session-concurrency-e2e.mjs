@@ -88,6 +88,11 @@ try {
     }, scriptAbort.signal).catch(() => undefined);
     pending.push(script);
     await cancelQueued(scriptAbort, script);
+    const afterCancelStart = performance.now();
+    const unblocked = await call('take_snapshot', { pageId: secondId }, AbortSignal.timeout(2000));
+    const afterCancelMs = Math.round(performance.now() - afterCancelStart);
+    assert.match(JSON.stringify(unblocked), /Independent page content/);
+    assert.ok(!slowResponse.writableEnded, 'Cancelling an exclusive request must unblock other pages immediately');
     slowResponse.end('<p>Navigation complete</p>');
     assert.ok((await navigation).result);
     assert.match(JSON.stringify(await samePage), /Navigation complete/, 'Same-page inspection must follow navigation');
@@ -97,7 +102,7 @@ try {
     });
     const inspectedText = inspected.result.content.map((item) => item.text ?? '').join('\n');
     assert.equal(JSON.parse(/```json\s*([\s\S]*?)\s*```/.exec(inspectedText)[1]), false);
-    console.log(JSON.stringify({ kind, snapshotMs, samePageOrdered: true, cancelledWriteRan: false }));
+    console.log(JSON.stringify({ kind, snapshotMs, afterCancelMs, samePageOrdered: true, cancelledWriteRan: false }));
     await session.stop();
     session = undefined;
   }

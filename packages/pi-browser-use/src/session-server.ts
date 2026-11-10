@@ -119,31 +119,88 @@ export async function serveBrowserSession(
   let stopped = false;
   let stopping: Promise<void> | undefined;
   let sweepScheduled = false;
-  let mutations = Promise.resolve<unknown>(undefined);
   const activeCalls = new Set<Promise<unknown>>();
   let pendingToolCalls = 0;
   let toolLifetime = new AbortController();
   const lifetime = new AbortController();
-  const pageOperations = new Map<number, Promise<unknown>>();
-  let exclusiveOperation = Promise.resolve<unknown>(undefined);
+  type ScheduledOperation = {
+    pageId: number | undefined;
+    running: boolean;
+    signal: AbortSignal;
+    operation: () => Promise<unknown>;
+    resolve: (value: unknown) => void;
+    reject: (reason: unknown) => void;
+    cancel: () => void;
+  };
+  const scheduled: ScheduledOperation[] = [];
+  const preparation: ScheduledOperation[] = [];
 
-  function scheduleOperation(pageId: number | undefined, operation: () => Promise<unknown>) {
-    const earlier =
-      pageId === undefined
-        ? [exclusiveOperation, ...pageOperations.values()]
-        : [exclusiveOperation, pageOperations.get(pageId)];
-    const work = Promise.allSettled(earlier).then(operation);
-    const settled = work.then(
-      () => {},
-      () => {},
-    );
-    if (pageId === undefined) exclusiveOperation = settled;
-    else pageOperations.set(pageId, settled);
-    void settled.then(() => {
-      if (pageId !== undefined && pageOperations.get(pageId) === settled)
-        pageOperations.delete(pageId);
+  function removeOperation(queue: ScheduledOperation[], entry: ScheduledOperation) {
+    const index = queue.indexOf(entry);
+    if (index < 0) return;
+    queue.splice(index, 1);
+    entry.signal.removeEventListener('abort', entry.cancel);
+    runScheduledOperations(queue);
+  }
+
+  function runScheduledOperations(queue: ScheduledOperation[]) {
+    for (const entry of queue) {
+      if (entry.running) continue;
+      const predecessors = queue.slice(0, queue.indexOf(entry));
+      if (
+        predecessors.some(
+          (previous) =>
+            previous.pageId === undefined ||
+            entry.pageId === undefined ||
+            previous.pageId === entry.pageId,
+        )
+      )
+        continue;
+      entry.running = true;
+      entry.signal.removeEventListener('abort', entry.cancel);
+      void Promise.resolve()
+        .then(entry.operation)
+        .then(
+          (result) => {
+            removeOperation(queue, entry);
+            entry.resolve(result);
+          },
+          (error) => {
+            removeOperation(queue, entry);
+            entry.reject(error);
+          },
+        );
+    }
+  }
+
+  function scheduleOperation<T>(
+    queue: ScheduledOperation[],
+    pageId: number | undefined,
+    signal: AbortSignal,
+    operation: () => Promise<T>,
+  ) {
+    return new Promise<T>((resolve, reject) => {
+      const entry: ScheduledOperation = {
+        pageId,
+        signal,
+        operation,
+        resolve: (value) => resolve(value as T),
+        reject,
+        running: false,
+        cancel: () => {
+          removeOperation(queue, entry);
+          reject(signal.reason);
+        },
+      };
+      queue.push(entry);
+      signal.addEventListener('abort', entry.cancel, { once: true });
+      if (signal.aborted) entry.cancel();
+      else runScheduledOperations(queue);
     });
-    return work;
+  }
+
+  function abortStalledTools(checkedClient: DevToolsClient, callLifetime: AbortController) {
+    if (checkedClient.getState() === 'stalled') callLifetime.abort();
   }
 
   function ownerExited() {
@@ -579,7 +636,7 @@ export async function serveBrowserSession(
         activeCalls.add(operation);
         const finish = () => {
           activeCalls.delete(operation);
-          if (executingClient.getState() === 'stalled') callLifetime.abort();
+          abortStalledTools(executingClient, callLifetime);
         };
         void operation.then(finish, finish);
         return operation;
@@ -639,14 +696,15 @@ export async function serveBrowserSession(
             'The browser connection changed while this request was queued. This action was not dispatched. Call browser_list_pages and browser_take_snapshot before continuing.',
           );
         phase = 'execution';
-        const prepared = await dispatch(input, signal);
-        return { result: isToolCall ? (prepared as () => Promise<unknown>)() : prepared };
+        try {
+          const prepared = await dispatch(input, signal);
+          return { result: isToolCall ? (prepared as () => Promise<unknown>)() : prepared };
+        } finally {
+          abortStalledTools(client, admittedLifetime);
+        }
       };
-      const prepare = () => {
-        const prepared = mutations.then(execute);
-        mutations = prepared.catch(() => {});
-        return prepared.then(({ result }) => result);
-      };
+      const prepare = () =>
+        scheduleOperation(preparation, undefined, signal, execute).then(({ result }) => result);
       const args = input.args as Record<string, unknown> | undefined;
       const pageId =
         isToolCall &&
@@ -660,7 +718,9 @@ export async function serveBrowserSession(
           : undefined;
       // Match MCP's page/exclusive ordering before dispatch so queued calls remain cancellable.
       const work = (
-        input.action === 'heartbeat' ? dispatch(input, signal) : scheduleOperation(pageId, prepare)
+        input.action === 'heartbeat'
+          ? dispatch(input, signal)
+          : scheduleOperation(scheduled, pageId, signal, prepare)
       ).finally(() => {
         if (isToolCall) pendingToolCalls--;
       });
@@ -693,27 +753,28 @@ export async function serveBrowserSession(
   const sweep = setInterval(() => {
     if (stopped || sweepScheduled) return;
     sweepScheduled = true;
-    mutations = mutations
-      .then(async () => {
-        if (!attachedOnce && Date.now() - startedAt < OPERATION_MS) return;
-        // Heartbeats track client liveness; they never extend the retention deadline.
-        if (owner && (ownerExited() || Date.now() - lastSeen > 30_000)) owner = undefined;
-        const expired = hardDeadline !== undefined && Date.now() >= hardDeadline;
-        if (connection && !connection.alive) await stop('lost');
-        else if (expired || (!owner && (!expiresAt || Date.now() >= expiresAt)))
-          await stop(expired || expiresAt ? 'expired' : 'closed');
-        else if (!owner && marker && !connection) {
-          try {
-            await bounded(
-              verify(AbortSignal.any([lifetime.signal, AbortSignal.timeout(5000)])),
-              5000,
-            );
-          } catch {
-            await stop('lost');
-          }
+    void scheduleOperation(preparation, undefined, lifetime.signal, async () => {
+      if (!attachedOnce && Date.now() - startedAt < OPERATION_MS) return;
+      // Heartbeats track client liveness; they never extend the retention deadline.
+      if (owner && (ownerExited() || Date.now() - lastSeen > 30_000)) owner = undefined;
+      const expired = hardDeadline !== undefined && Date.now() >= hardDeadline;
+      if (connection && !connection.alive) await stop('lost');
+      else if (expired || (!owner && (!expiresAt || Date.now() >= expiresAt)))
+        await stop(expired || expiresAt ? 'expired' : 'closed');
+      else if (!owner && marker && !connection) {
+        try {
+          await bounded(
+            verify(AbortSignal.any([lifetime.signal, AbortSignal.timeout(5000)])),
+            5000,
+          );
+        } catch {
+          await stop('lost');
         }
+      }
+    })
+      .catch(() => {
+        if (!stopped) console.error('[pi-browser-use] browser session expiry cleanup failed');
       })
-      .catch(() => console.error('[pi-browser-use] browser session expiry cleanup failed'))
       .finally(() => {
         sweepScheduled = false;
       });

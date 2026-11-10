@@ -17,6 +17,7 @@ function deferred() {
 async function openSession(
   handler: DevToolsClient['callTool'],
   overrides: Partial<BrowserLifecycleAdapter> = {},
+  localMarker = false,
 ) {
   const token = randomBytes(32).toString('hex');
   const owner = randomBytes(32).toString('hex');
@@ -27,12 +28,28 @@ async function openSession(
   vi.spyOn(DevToolsClient.prototype, 'ensureReady').mockResolvedValue();
   const close = vi.spyOn(DevToolsClient.prototype, 'close').mockResolvedValue();
   const call = vi.spyOn(DevToolsClient.prototype, 'callTool').mockImplementation(handler);
-  const binding = { id: 'same-browser', connection: { wsEndpoint: 'ws://127.0.0.1:1' } };
+  const binding = {
+    id: 'same-browser',
+    connection: localMarker
+      ? { headless: true, sessionMode: 'isolated' as const }
+      : { wsEndpoint: 'ws://127.0.0.1:1' },
+  };
   const acquire = vi.fn(async () => binding);
   const server = await serveBrowserSession(
-    { session: { enabled: true, key: 'concurrent-test', retentionMs: 30000 } },
+    {
+      headless: true,
+      sessionMode: 'isolated',
+      session: { enabled: true, key: 'concurrent-test', retentionMs: 30000 },
+    },
     token,
-    { adapter: { acquire, async release() {}, ...overrides } },
+    {
+      adapter: {
+        ...(localMarker ? { ownership: 'local' as const } : {}),
+        acquire,
+        async release() {},
+        ...overrides,
+      },
+    },
   );
   const request = async (action: string, data: object = {}, signal = AbortSignal.timeout(2000)) => {
     const response = await fetch(`http://127.0.0.1:${server.port}/`, {
@@ -180,6 +197,199 @@ describe('browser session concurrency', () => {
       retained.resolve();
       await Promise.allSettled([first, retain, cancelled]);
       await session.server.stop();
+    }
+  });
+
+  it('removes a cancelled exclusive barrier so another page can progress', async () => {
+    const diagnostics = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const held = deferred();
+    const started = deferred();
+    let finished = false;
+    const session = await openSession(async (name, args) => {
+      if (name === 'wait_for') {
+        started.resolve();
+        await held.promise;
+        finished = true;
+      }
+      if (name === 'take_snapshot' && args.pageId === 1) expect(finished).toBe(true);
+      return { content: [] };
+    });
+    const first = session.request(
+      'call',
+      { name: 'wait_for', args: { pageId: 1, text: ['ready'] } },
+      AbortSignal.timeout(10000),
+    );
+    let cancelled: Promise<unknown> | undefined;
+    let surviving: Promise<unknown> | undefined;
+    try {
+      await started.promise;
+      const abort = new AbortController();
+      cancelled = session
+        .request(
+          'call',
+          { name: 'evaluate_script', args: { pageId: 1, function: '() => true' } },
+          abort.signal,
+        )
+        .catch(() => undefined);
+      await session.request('heartbeat');
+      abort.abort();
+      await cancelled;
+      await vi.waitFor(() =>
+        expect(diagnostics).toHaveBeenCalledWith(
+          '[pi-browser-use] browser session operation failed (phase=queue, category=cancelled)',
+        ),
+      );
+      surviving = session.request('call', { name: 'take_snapshot', args: { pageId: 1 } });
+      expect(await session.request('call', { name: 'take_snapshot', args: { pageId: 2 } })).toEqual(
+        { result: { content: [] } },
+      );
+      held.resolve();
+      expect(await surviving).toEqual({ result: { content: [] } });
+      expect(session.call.mock.calls.some(([name]) => name === 'evaluate_script')).toBe(false);
+    } finally {
+      held.resolve();
+      await Promise.allSettled([first, cancelled, surviving]);
+      await session.server.stop();
+    }
+  });
+
+  it.each([
+    'tool',
+    'preparation',
+  ] as const)('reuses admission slots released by cancellation during %s', async (stage) => {
+    const diagnostics = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const held = deferred();
+    const started = deferred();
+    const session = await openSession(
+      async (name) => {
+        if (name === 'wait_for' && stage === 'tool') {
+          started.resolve();
+          await held.promise;
+        }
+        return { content: [] };
+      },
+      {
+        async acquire() {
+          if (stage === 'preparation') {
+            started.resolve();
+            await held.promise;
+          }
+          return { id: 'same-browser', connection: { wsEndpoint: 'ws://127.0.0.1:1' } };
+        },
+      },
+    );
+    const first = session.request(
+      'call',
+      { name: 'wait_for', args: { pageId: 1, text: ['ready'] } },
+      AbortSignal.timeout(10000),
+    );
+    try {
+      await started.promise;
+      for (let index = 0; index < 7; index++) {
+        diagnostics.mockClear();
+        const abort = new AbortController();
+        const cancelled = session
+          .request(
+            'call',
+            { name: 'click', args: { pageId: stage === 'tool' ? 1 : index + 2, uid: 'old' } },
+            abort.signal,
+          )
+          .catch(() => undefined);
+        await session.request('heartbeat');
+        abort.abort();
+        await cancelled;
+        await vi.waitFor(() =>
+          expect(diagnostics).toHaveBeenCalledWith(
+            '[pi-browser-use] browser session operation failed (phase=queue, category=cancelled)',
+          ),
+        );
+      }
+      const independent = session.request('call', { name: 'take_snapshot', args: { pageId: 99 } });
+      if (stage === 'preparation') {
+        await session.request('heartbeat');
+        held.resolve();
+      }
+      expect(await independent).toEqual({ result: { content: [] } });
+      expect(session.call.mock.calls.some(([name]) => name === 'click')).toBe(false);
+    } finally {
+      held.resolve();
+      await first;
+      await session.server.stop();
+    }
+  });
+
+  it('cancels active siblings when marker preparation becomes stalled', async () => {
+    const started = deferred();
+    const verifying = deferred();
+    let nonce = '',
+      checks = 0;
+    let siblingSignal: AbortSignal | undefined;
+    const session = await openSession(
+      async (name, args, signal) => {
+        if (name === 'new_page')
+          return { content: [{ type: 'text', text: '99: about:blank [selected]' }] };
+        if (name === 'evaluate_script') {
+          nonce = /__piBrowserRetention = "([a-f0-9]+)"/.exec(String(args.function))?.[1] ?? nonce;
+          return { content: [{ type: 'text', text: '```json\ntrue\n```' }] };
+        }
+        if (name === 'take_snapshot' && args.pageId === 99) {
+          if (++checks > 1) {
+            verifying.resolve();
+            await new Promise((_resolve, reject) =>
+              signal!.addEventListener(
+                'abort',
+                () => {
+                  session.state.mockReturnValue('stalled');
+                  reject(signal!.reason);
+                },
+                { once: true },
+              ),
+            );
+          }
+          return { content: [{ type: 'text', text: `Pi live browser marker: ${nonce}` }] };
+        }
+        if (name === 'wait_for') {
+          siblingSignal = signal;
+          started.resolve();
+          await new Promise((_resolve, reject) =>
+            signal!.addEventListener('abort', () => reject(signal!.reason), { once: true }),
+          );
+        }
+        return { content: [] };
+      },
+      {},
+      true,
+    );
+    const requests: Promise<unknown>[] = [];
+    try {
+      await session.request('call', { name: 'list_pages', args: {} });
+      await session.request('retain');
+      requests.push(
+        session.request(
+          'call',
+          { name: 'wait_for', args: { pageId: 1, text: ['ready'] } },
+          AbortSignal.timeout(10000),
+        ),
+      );
+      await started.promise;
+      const abort = new AbortController();
+      requests.push(
+        session
+          .request('call', { name: 'take_snapshot', args: { pageId: 2 } }, abort.signal)
+          .catch(() => undefined),
+      );
+      await verifying.promise;
+      abort.abort();
+      await vi.waitFor(() => expect(siblingSignal?.aborted).toBe(true));
+      await Promise.all(requests);
+      expect(
+        session.call.mock.calls.some(
+          ([name, args]) => name === 'take_snapshot' && args.pageId === 2,
+        ),
+      ).toBe(false);
+    } finally {
+      await session.server.stop();
+      await Promise.allSettled(requests);
     }
   });
 
