@@ -234,6 +234,7 @@ describe('browser session shutdown', () => {
     const owner = randomBytes(32).toString('hex');
     const markerClosing = deferred();
     const markerClosed = deferred();
+    vi.spyOn(DevToolsClient.prototype, 'ensureReady').mockResolvedValue();
     const connect = vi.spyOn(DevToolsClient.prototype, 'connect').mockResolvedValue();
     const close = vi.spyOn(DevToolsClient.prototype, 'close').mockResolvedValue();
     const state = vi.spyOn(DevToolsClient.prototype, 'getState').mockReturnValue('ready');

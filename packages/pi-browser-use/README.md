@@ -198,7 +198,7 @@ MCP/CDP transport cleanup closes plugin-launched processes and detaches external
 
 ### Tool timeouts and recovery
 
-MCP 1.12 supports parallel execution for eligible tools on different pages. Retained sessions currently serialize their requests, and `evaluate_script` remains exclusive upstream, so upgrading alone does not eliminate stalled-call blocking. The bounded recovery below still applies.
+Retained sessions allow overlapping tool execution, with MCP 1.12 enforcing same-page and globally exclusive operation ordering. Browser initialization, identity checks, retention, release, detach, and recovery remain ordered; authenticated heartbeats stay responsive while tools run. A session accepts up to eight queued or running tool calls and rejects additional calls before dispatch. Identity checks still apply, so local marker-based verification and upstream exclusive tools such as `evaluate_script` can delay other operations. A stalled transport cancels sibling requests before bounded recovery; uncertain actions are never replayed.
 
 Navigation, new-page and text-wait timeouts are capped at 40000 ms (including omitted or zero/default values); smaller explicit values are preserved. Tool requests have a 50000 ms deadline, inside the session's 60000 ms operation and 65000 ms client transport deadlines. A timeout or cancellation after dispatch leaves the action's outcome uncertain. Pi never automatically replays that action, and a successful MCP ping does not clear a stalled tool session. `/browser-session status` includes `toolState` so a live browser can be distinguished from working browser tools.
 

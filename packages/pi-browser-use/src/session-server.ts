@@ -17,6 +17,7 @@ import { BrowserSessionError, scriptValue } from './session-control.js';
 
 const MAX_BYTES = 32 * 1024 * 1024;
 const OPERATION_MS = 60_000;
+const MAX_TOOL_CALLS = 8;
 
 async function bounded<T>(operation: Promise<T>, milliseconds: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -117,6 +118,9 @@ export async function serveBrowserSession(
   let stopping: Promise<void> | undefined;
   let sweepScheduled = false;
   let mutations = Promise.resolve<unknown>(undefined);
+  const activeCalls = new Set<Promise<unknown>>();
+  let pendingToolCalls = 0;
+  let toolLifetime = new AbortController();
   const lifetime = new AbortController();
 
   function ownerExited() {
@@ -185,6 +189,13 @@ export async function serveBrowserSession(
       }
       let outcome: typeof reason | 'cleanup-failed' =
         acquisitionFailed && !managed ? 'cleanup-failed' : reason;
+      if (activeCalls.size) {
+        try {
+          await bounded(Promise.allSettled(activeCalls), 15_000);
+        } catch {
+          outcome = 'cleanup-failed';
+        }
+      }
       if (replacing) {
         try {
           await bounded(
@@ -366,6 +377,7 @@ export async function serveBrowserSession(
       managed!.connection = resolved;
       await options.onAcquire?.(managed!);
       recoverySignal.throwIfAborted();
+      toolLifetime = new AbortController();
       recoveryFailed = false;
     })();
     try {
@@ -534,10 +546,29 @@ export async function serveBrowserSession(
       )
         throw new BrowserSessionError('Invalid browser tool request.');
       if (recoveryFailed || client.getState() === 'stalled') return recoverTools(signal);
-      const executionSignal = AbortSignal.any([signal, AbortSignal.timeout(50_000)]);
+      const callLifetime = toolLifetime;
+      const executionSignal = AbortSignal.any([
+        signal,
+        callLifetime.signal,
+        AbortSignal.timeout(50_000),
+      ]);
       await ensureBrowser(executionSignal);
       if (marker || connection) await verify(executionSignal);
-      return client.callTool(input.name, input.args as Record<string, unknown>, executionSignal);
+      await client.ensureReady(executionSignal);
+      executionSignal.throwIfAborted();
+      const executingClient = client;
+      const name = input.name;
+      const args = input.args as Record<string, unknown>;
+      return () => {
+        const operation = executingClient.callTool(name, args, executionSignal);
+        activeCalls.add(operation);
+        const finish = () => {
+          activeCalls.delete(operation);
+          if (executingClient.getState() === 'stalled') callLifetime.abort();
+        };
+        void operation.then(finish, finish);
+        return operation;
+      };
     }
     throw new BrowserSessionError('Unknown browser session operation.');
   }
@@ -574,12 +605,32 @@ export async function serveBrowserSession(
       if (!input || typeof input !== 'object' || Array.isArray(input))
         throw new BrowserSessionError('Invalid browser session request.');
       if (owner && input.owner === owner) lastSeen = Date.now();
-      const work = mutations.then(() => {
+      const isToolCall = input.action === 'call';
+      if (isToolCall && pendingToolCalls >= MAX_TOOL_CALLS)
+        throw new BrowserSessionError(
+          'Browser session is busy (8 pending tool calls). This action was not dispatched. Wait for active operations before retrying.',
+        );
+      if (isToolCall) pendingToolCalls++;
+      const execute = async () => {
+        signal.throwIfAborted();
+        if (!isToolCall || recoveryFailed || client.getState() === 'stalled')
+          await abortable(Promise.allSettled(activeCalls), signal);
         signal.throwIfAborted();
         phase = 'execution';
-        return dispatch(input, signal);
-      });
-      mutations = work.catch(() => {});
+        const prepared = await dispatch(input, signal);
+        return { result: isToolCall ? (prepared as () => Promise<unknown>)() : prepared };
+      };
+      const prepared =
+        input.action === 'heartbeat'
+          ? dispatch(input, signal).then((result) => ({ result }))
+          : mutations.then(execute);
+      // MCP owns tool/page ordering; this queue only protects preparation and lifecycle changes.
+      if (input.action !== 'heartbeat') mutations = prepared.catch(() => {});
+      const work = prepared
+        .then(({ result }) => result)
+        .finally(() => {
+          if (isToolCall) pendingToolCalls--;
+        });
       const result = await abortable(work, requestSignal);
       const body = JSON.stringify({ result });
       if (Buffer.byteLength(body) > MAX_BYTES)
