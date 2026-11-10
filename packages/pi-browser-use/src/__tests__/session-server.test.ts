@@ -27,6 +27,23 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
+function markerTools(alive: () => boolean = () => true) {
+  let nonce = '';
+  return async (name: string, args: Record<string, unknown>) => {
+    if (name === 'new_page')
+      return { content: [{ type: 'text', text: `2: ${args.url} [selected]` }] };
+    if (name === 'evaluate_script')
+      nonce ||= /__piBrowserRetention = "([a-f0-9]+)"/.exec(String(args.function))?.[1] ?? '';
+    const text =
+      name === 'take_snapshot'
+        ? alive()
+          ? `uid=1_0 StaticText "Pi live browser marker: ${nonce}"`
+          : `uid=1_0 RootWebArea url="about:blank#pi-retained-session-${nonce}"`
+        : `\`\`\`json\n${alive()}\n\`\`\``;
+    return { content: [{ type: 'text', text }] };
+  };
+}
+
 describe('browser session startup', () => {
   it('publishes a reachable control port when the first allocation is blocked', async () => {
     const token = randomBytes(32).toString('hex');
@@ -80,6 +97,8 @@ describe('browser session tool recovery', () => {
           nonce ||= /__piBrowserRetention = "([a-f0-9]+)"/.exec(String(args.function))?.[1] ?? '';
           return { content: [{ type: 'text', text: '```json\ntrue\n```' }] };
         }
+        if (name === 'take_snapshot')
+          return { content: [{ type: 'text', text: `Pi live browser marker: ${nonce}` }] };
         return { content: [{ type: 'text', text: `9: about:blank#pi-retained-session-${nonce}` }] };
       });
     const server = await serveBrowserSession(
@@ -245,14 +264,7 @@ describe('browser session shutdown', () => {
         if (cleanup === 'pending') await markerClosed.promise;
         if (cleanup === 'error') throw new Error('marker cleanup failed');
       });
-    vi.spyOn(DevToolsClient.prototype, 'callTool').mockImplementation(async (name, args) => ({
-      content: [
-        {
-          type: 'text',
-          text: name === 'new_page' ? `2: ${args.url} [selected]` : '```json\ntrue\n```',
-        },
-      ],
-    }));
+    vi.spyOn(DevToolsClient.prototype, 'callTool').mockImplementation(markerTools());
     const onStop = vi.fn();
     const server = await serveBrowserSession(
       {
@@ -459,22 +471,14 @@ describe('browser session shutdown', () => {
       call.mockRestore();
     }
   });
-  it('ends a detached local session when its live marker disappears before retention expires', async () => {
+  it('ends a detached local session when marker DOM disappears even if its URL remains', async () => {
     const token = randomBytes(32).toString('hex');
     const owner = randomBytes(32).toString('hex');
     let alive = true;
+    const outcomes: string[] = [];
     const call = vi
       .spyOn(DevToolsClient.prototype, 'callTool')
-      .mockImplementation(async (name, args) => ({
-        content: [
-          {
-            type: 'text',
-            text:
-              name === 'new_page' ? `2: ${args.url} [selected]` : `\`\`\`json\n${alive}\n\`\`\``,
-          },
-        ],
-      }));
-    const outcomes: string[] = [];
+      .mockImplementation(markerTools(() => alive));
     const server = await serveBrowserSession(
       {
         headless: true,
@@ -510,16 +514,7 @@ describe('browser session shutdown', () => {
   it('reports reattachment and expired retention accurately before the sweep', async () => {
     const token = randomBytes(32).toString('hex');
     const owner = randomBytes(32).toString('hex');
-    const call = vi
-      .spyOn(DevToolsClient.prototype, 'callTool')
-      .mockImplementation(async (name, args) => ({
-        content: [
-          {
-            type: 'text',
-            text: name === 'new_page' ? `2: ${args.url} [selected]` : '```json\ntrue\n```',
-          },
-        ],
-      }));
+    const call = vi.spyOn(DevToolsClient.prototype, 'callTool').mockImplementation(markerTools());
     const server = await serveBrowserSession(
       {
         headless: true,

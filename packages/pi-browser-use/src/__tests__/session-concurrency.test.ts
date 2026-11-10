@@ -238,6 +238,42 @@ describe('browser session concurrency', () => {
     }
   });
 
+  it('rejects requests admitted before a transport replacement instead of using stale identifiers', async () => {
+    const reconnecting = deferred();
+    const reconnected = deferred();
+    const session = await openSession(async () => ({ content: [] }), {
+      async reconnect() {
+        reconnecting.resolve();
+        await reconnected.promise;
+        return { wsEndpoint: 'ws://127.0.0.1:1' };
+      },
+    });
+    const requests: Promise<unknown>[] = [];
+    try {
+      await session.request('call', { name: 'list_pages', args: {} });
+      session.state.mockReturnValue('stalled');
+      requests.push(session.request('call', { name: 'list_pages', args: {} }));
+      await reconnecting.promise;
+      for (let pageId = 1; pageId <= 7; pageId++)
+        requests.push(session.request('call', { name: 'click', args: { pageId, uid: 'old_uid' } }));
+      expect(
+        await session.request('call', { name: 'click', args: { pageId: 8, uid: 'old_uid' } }),
+      ).toMatchObject({ error: expect.stringContaining('was not dispatched') });
+      reconnected.resolve();
+      const [notice, ...stale] = await Promise.all(requests);
+      expect(notice).toMatchObject({
+        error: expect.stringContaining('MCP subprocess was replaced'),
+      });
+      for (const result of stale)
+        expect(result).toMatchObject({ error: expect.stringContaining('was not dispatched') });
+      expect(session.call.mock.calls.some(([name]) => name === 'click')).toBe(false);
+    } finally {
+      reconnected.resolve();
+      await Promise.allSettled(requests);
+      await session.server.stop();
+    }
+  });
+
   it('settles cancelled tools before releasing the browser on shutdown', async () => {
     const entered = deferred();
     let finished = false;

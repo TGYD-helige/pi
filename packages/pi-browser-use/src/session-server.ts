@@ -14,6 +14,7 @@ import {
 } from './session-backend.js';
 import { createBrowserConnection, listenOnReachablePort } from './session-connection.js';
 import { BrowserSessionError, scriptValue } from './session-control.js';
+import { loadConcurrencyMap } from './tool-groups.js';
 
 const MAX_BYTES = 32 * 1024 * 1024;
 const OPERATION_MS = 60_000;
@@ -82,6 +83,7 @@ export async function serveBrowserSession(
     throw new BrowserSessionError('Browser session transport requires a random 32-byte hex token.');
   const retentionMs = session.retentionMs;
   const adapter = await createBrowserAdapter(config, options);
+  const toolConcurrency = await loadConcurrencyMap();
   let managed: ManagedBrowser | undefined;
   let acquiring: Promise<void> | undefined;
   let releasing: Promise<void> | undefined;
@@ -122,6 +124,27 @@ export async function serveBrowserSession(
   let pendingToolCalls = 0;
   let toolLifetime = new AbortController();
   const lifetime = new AbortController();
+  const pageOperations = new Map<number, Promise<unknown>>();
+  let exclusiveOperation = Promise.resolve<unknown>(undefined);
+
+  function scheduleOperation(pageId: number | undefined, operation: () => Promise<unknown>) {
+    const earlier =
+      pageId === undefined
+        ? [exclusiveOperation, ...pageOperations.values()]
+        : [exclusiveOperation, pageOperations.get(pageId)];
+    const work = Promise.allSettled(earlier).then(operation);
+    const settled = work.then(
+      () => {},
+      () => {},
+    );
+    if (pageId === undefined) exclusiveOperation = settled;
+    else pageOperations.set(pageId, settled);
+    void settled.then(() => {
+      if (pageId !== undefined && pageOperations.get(pageId) === settled)
+        pageOperations.delete(pageId);
+    });
+    return work;
+  }
 
   function ownerExited() {
     if (!ownerPid) return false;
@@ -418,22 +441,14 @@ export async function serveBrowserSession(
     }
     if (hardDeadline !== undefined && hardDeadline <= Date.now())
       throw new BrowserSessionError('The provider browser deadline has expired.');
-    if (
-      marker &&
-      scriptValue(
-        await client.callTool(
-          'evaluate_script',
-          {
-            pageId: marker.pageId,
-            function: `() => globalThis.__piBrowserRetention === ${JSON.stringify(marker.nonce)}`,
-          },
-          signal,
-        ),
-      ) !== true
-    )
-      throw new BrowserSessionError(
-        'The original live browser was lost. Profile restoration is not live-session recovery.',
-      );
+    if (marker) {
+      const snapshot = await client.callTool('take_snapshot', { pageId: marker.pageId }, signal);
+      const text = snapshot.content?.map((item) => item.text ?? '').join('\n') ?? '';
+      if (snapshot.isError || !text.includes(`Pi live browser marker: ${marker.nonce}`))
+        throw new BrowserSessionError(
+          'The original live browser was lost. Profile restoration is not live-session recovery.',
+        );
+    }
   }
 
   async function removeMarker(signal: AbortSignal) {
@@ -508,7 +523,7 @@ export async function serveBrowserSession(
             'evaluate_script',
             {
               pageId: marker.pageId,
-              function: `() => { history.replaceState(null, "", ${JSON.stringify(url)}); globalThis.__piBrowserRetention = ${JSON.stringify(nonce)}; return true; }`,
+              function: `() => { history.replaceState(null, "", ${JSON.stringify(url)}); globalThis.__piBrowserRetention = ${JSON.stringify(nonce)}; document.body.textContent = ${JSON.stringify(`Pi live browser marker: ${nonce}`)}; return true; }`,
             },
             signal,
           ),
@@ -611,26 +626,44 @@ export async function serveBrowserSession(
           'Browser session is busy (8 pending tool calls). This action was not dispatched. Wait for active operations before retrying.',
         );
       if (isToolCall) pendingToolCalls++;
+      const admittedLifetime = toolLifetime;
+      const abortedAtAdmission = admittedLifetime.signal.aborted;
       const execute = async () => {
         signal.throwIfAborted();
-        if (!isToolCall || recoveryFailed || client.getState() === 'stalled')
-          await abortable(Promise.allSettled(activeCalls), signal);
-        signal.throwIfAborted();
+        if (
+          isToolCall &&
+          (admittedLifetime !== toolLifetime ||
+            (!abortedAtAdmission && admittedLifetime.signal.aborted))
+        )
+          throw new BrowserSessionError(
+            'The browser connection changed while this request was queued. This action was not dispatched. Call browser_list_pages and browser_take_snapshot before continuing.',
+          );
         phase = 'execution';
         const prepared = await dispatch(input, signal);
         return { result: isToolCall ? (prepared as () => Promise<unknown>)() : prepared };
       };
-      const prepared =
-        input.action === 'heartbeat'
-          ? dispatch(input, signal).then((result) => ({ result }))
-          : mutations.then(execute);
-      // MCP owns tool/page ordering; this queue only protects preparation and lifecycle changes.
-      if (input.action !== 'heartbeat') mutations = prepared.catch(() => {});
-      const work = prepared
-        .then(({ result }) => result)
-        .finally(() => {
-          if (isToolCall) pendingToolCalls--;
-        });
+      const prepare = () => {
+        const prepared = mutations.then(execute);
+        mutations = prepared.catch(() => {});
+        return prepared.then(({ result }) => result);
+      };
+      const args = input.args as Record<string, unknown> | undefined;
+      const pageId =
+        isToolCall &&
+        typeof input.name === 'string' &&
+        toolConcurrency[input.name] === 'page' &&
+        Number.isSafeInteger(args?.pageId) &&
+        !recoveryFailed &&
+        client.getState() !== 'stalled' &&
+        !admittedLifetime.signal.aborted
+          ? (args!.pageId as number)
+          : undefined;
+      // Match MCP's page/exclusive ordering before dispatch so queued calls remain cancellable.
+      const work = (
+        input.action === 'heartbeat' ? dispatch(input, signal) : scheduleOperation(pageId, prepare)
+      ).finally(() => {
+        if (isToolCall) pendingToolCalls--;
+      });
       const result = await abortable(work, requestSignal);
       const body = JSON.stringify({ result });
       if (Buffer.byteLength(body) > MAX_BYTES)

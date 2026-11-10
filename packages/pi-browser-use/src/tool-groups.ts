@@ -54,20 +54,26 @@ export type CategoryMap = Readonly<Record<string, string>>;
 
 const require = createRequire(import.meta.url);
 
+async function loadUpstreamTools() {
+  const packageJsonPath = require.resolve('chrome-devtools-mcp/package.json');
+  const toolsUrl = pathToFileURL(
+    join(dirname(packageJsonPath), 'build', 'src', 'tools', 'tools.js'),
+  );
+  const mod = (await import(toolsUrl.href)) as {
+    createTools: (args: { slim: boolean }) => Array<{
+      name: string;
+      annotations?: { category?: string };
+      concurrency?: string;
+    }>;
+  };
+  return mod.createTools({ slim: false });
+}
+
 /** name → upstream category, read from the installed chrome-devtools-mcp. */
 export async function loadCategoryMap(): Promise<CategoryMap> {
   try {
-    const packageJsonPath = require.resolve('chrome-devtools-mcp/package.json');
-    const toolsUrl = pathToFileURL(
-      join(dirname(packageJsonPath), 'build', 'src', 'tools', 'tools.js'),
-    );
-    const mod = (await import(toolsUrl.href)) as {
-      createTools: (args: {
-        slim: boolean;
-      }) => Array<{ name: string; annotations?: { category?: string } }>;
-    };
     const map: Record<string, string> = {};
-    for (const tool of mod.createTools({ slim: false })) {
+    for (const tool of await loadUpstreamTools()) {
       map[tool.name] = tool.annotations?.category ?? 'other';
     }
     return map;
@@ -77,6 +83,20 @@ export async function loadCategoryMap(): Promise<CategoryMap> {
       `[pi-browser-use] failed to load upstream tool categories; grouping degraded: ${
         error instanceof Error ? error.message : String(error)
       }`,
+    );
+    return {};
+  }
+}
+
+/** Unknown tools stay exclusive if upstream scheduling metadata cannot be loaded. */
+export async function loadConcurrencyMap(): Promise<Readonly<Record<string, string>>> {
+  try {
+    return Object.fromEntries(
+      (await loadUpstreamTools()).map((tool) => [tool.name, tool.concurrency ?? 'exclusive']),
+    );
+  } catch {
+    console.error(
+      '[pi-browser-use] failed to load upstream scheduling metadata; tools will run serially',
     );
     return {};
   }
