@@ -6,17 +6,35 @@ Pi extension for video creation. `video_generate` calls a video model directly f
 
 | Wire format | Models | Status |
 |---|---|---|
-| `ark` (Volcengine Ark) | Seedance 2.0 standard / fast / mini | ✅ built-in |
-| `dashscope` (Alibaba) | HappyHorse 1.1 / 1.0 (t2v/i2v/r2v auto-routed) | ✅ built-in |
+| `ark` (Volcengine Ark) | Seedance 2.5 / 2.0 standard / fast / mini | ✅ built-in |
+| `dashscope` (Alibaba) | HappyHorse 1.1 / 1.0 (t2v/i2v/r2v auto-routed); Wan 3.0 / Prime | ✅ built-in |
 | `kling` (Kuaishou) | Kling 3.0 Turbo / 3.0 Omni (API 2.0) | ✅ built-in |
-| `minimax` | MiniMax-H3 (v2 API) | ✅ built-in |
-| `openrouter` | google/veo-3.1 (+ custom models) | ✅ built-in |
+| `minimax` | MiniMax-H3 / H3-Highspeed / H3-Lite / H3-Max (v2 API) | ✅ built-in |
+| `openrouter` | google/veo-3.1 / fast / lite; google/gemini-omni-1.1-flash / 1.2-flash (+ custom models) | ✅ built-in |
 | `newapi` | self-hosted NewAPI relay (Kling / Jimeng / Vidu / Gemini channels) | ✅ via `customProviders` — `baseUrl` **required** |
 | custom | your own endpoints | ✅ via `customProviders` |
 
-Registry entries are written against provider documentation (each adapter's header notes the source) and are pending live smoke tests against real accounts — verify with `/video-gen doctor` + one small paid clip before heavy use. Seedance 2.5 stays on the roadmap until its official API ID and parameter contract are published.
+Registry entries are written against provider documentation (each adapter's header notes the source) and are pending live smoke tests against real accounts — verify with `/video-gen doctor` + one small paid clip before heavy use.
 
-**Seedance trusted portrait assets**: Seedance may reject ordinary image/video references containing recognizable real people. For those shots, select a preset avatar or an Active authorized-person asset in the same Volcengine Ark account/project used for generation, then pass its `asset-...` ID (or `asset://asset-...` URI) through `referenceAssets`. The extension supports trusted `image`, `video`, and `audio` assets for the built-in Seedance 2.0 models and maps them to Ark's `asset://` request format. Prompt text refers to their order as `Image 1`, `Video 1`, and `Audio 1` — never by Asset ID.
+**New model selection**: Set `defaultModel` to a versioned alias below in settings. Existing defaults and aliases retain their previous targets.
+
+| Alias | Remote model ID | Output supported by this extension |
+|---|---|---|
+| `seedance-2.5` | `doubao-seedance-2-5-260628` | 4–30s; 480p/720p/1080p; image/video/audio trusted assets, up to 30/10/10 respectively |
+| `minimax-h3-highspeed`, `minimax-h3-lite` | `MiniMax-H3-Highspeed`, `MiniMax-H3-Lite` | 4–15s; 480P/768P |
+| `minimax-h3-max` | `MiniMax-H3-Max` | 5–15s; 480P/768P |
+| `veo-3.1`, `veo-3.1-fast` | `google/veo-3.1`, `google/veo-3.1-fast` | Exactly 4/6/8s; 720p/1080p/4K; 16:9 or 9:16 |
+| `veo-3.1-lite` | `google/veo-3.1-lite` | Exactly 4/6/8s; 720p/1080p; 16:9 or 9:16 |
+| `gemini-omni-1.1-flash`, `gemini-omni-1.2-flash` | `google/gemini-omni-1.1-flash`, `google/gemini-omni-1.2-flash` | 3–10s / 3–15s; 360p/720p/1080p/4K; 16:9 or 9:16 |
+| `wan-3.0`, `wan-3.0-prime` | `wan3.0-video`, `wan3.0-video-prime` | 2–30s; 480P/720P/1080P; native audio; first/last frames or up to 10 reference images |
+
+Seedance 2.0 standard additionally exposes 4k, and HappyHorse 1.1 exposes 480P. OpenRouter reference-image inputs retain the extension's conservative two-image limit; provider-specific combinations of duration, resolution, audio and reference mode may impose further constraints.
+
+**Seedance 2.5** ([official guide](https://docs.volcengine.com/docs/ark/seedance-2-5?lang=zh)): first/last-frame generation automatically sends `ratio=adaptive` to preserve the input frame shape. The existing tool supports explicit clip durations and reference generation; video editing/extension requiring `duration=-1` is not exposed. 1080p output uses 10-bit H.265/HEVC; check player and assembly compatibility.
+
+**Wan 3.0** ([official API](https://help.aliyun.com/en/model-studio/wan3-video-generation-api-reference)): configure `providers.dashscope.baseUrl` with the workspace endpoint documented for your account/region, such as `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com`. Frames and reference images cannot be mixed; a last frame requires a first frame. The adapter keeps the model ID unchanged and maps the native-audio decision to `parameters.audio`. Video/audio/file/link reference inputs and smart duration are not exposed by the existing tool.
+
+**Seedance trusted portrait assets**: Seedance may reject ordinary image/video references containing recognizable real people. For those shots, select a preset avatar or an Active authorized-person asset in the same Volcengine Ark account/project used for generation, then pass its `asset-...` ID (or `asset://asset-...` URI) through `referenceAssets`. The extension supports trusted `image`, `video`, and `audio` assets for the built-in Seedance 2.0 and 2.5 models and maps them to Ark's `asset://` request format. Prompt text refers to their order as `Image 1`, `Video 1`, and `Audio 1` — never by Asset ID.
 
 This package ships dated snapshots of the public material cards and preset persona library under `skills/video-gen/references/`, including the Asset IDs needed by `referenceAssets`. Volcengine does not document those IDs as permanent or cross-account, so retry with an ID copied from the active account's library if a snapshot ID is rejected. Private or authorized-person assets always require the user to provide the current account/project's actual ID. Identity verification, authorization H5 flows, activation, uploading, and asset-library management remain outside this package. See Volcengine's [preset-avatar guide](https://docs.volcengine.com/docs/82379/2608626?lang=zh#preset-avatar), [authorized-person asset guide](https://docs.volcengine.com/docs/82379/2223965?lang=zh), and [Seedance request format](https://console.volcengine.com/ark/region:cn-beijing/docs/82379/2333589?projectName=default&lang=zh#d9a7d853).
 
@@ -81,7 +99,7 @@ Global settings (`~/.pi/agent/settings.json`):
 }
 ```
 
-**MiniMax notes** (v2 API, [create](https://platform.minimax.io/docs/api-reference/video-generation-v2-create) / [query](https://platform.minimax.io/docs/api-reference/video-generation-v2-query)): MiniMax-H3 speaks a multimodal task API — prompt + frames ride in one `content` array with `first_frame` / `last_frame` / `reference_image` roles (first/last frames and reference images are mutually exclusive; a last frame requires a first frame). Resolution is `768P` or `2K`, duration 4–15s, ratio `16:9|4:3|1:1|3:4|9:16|21:9` — required and non-adaptive for text-to-video, ignored (forced adaptive) once a first frame is present. There is no audio toggle, no idempotency key and no documented cancel endpoint, so ambiguous submits are parked for manual resolution rather than auto-retried. Auth is a plain Bearer key (`providers.minimax.apiKey`, env `MINIMAX_API_KEY`), and keys are region-locked: the default endpoint is international `api.minimax.io` — mainland-China keys need `providers.minimax.baseUrl` set to `https://api.minimaxi.com` (and vice versa a 401 means wrong region). Result URLs are time-limited; clips are downloaded immediately, and tasks stay queryable for 7 days.
+**MiniMax notes** (v2 API, [create](https://platform.minimax.io/docs/api-reference/video-generation-v2-create) / [query](https://platform.minimax.io/docs/api-reference/video-generation-v2-query)): MiniMax-H3 speaks a multimodal task API — prompt + frames ride in one `content` array with `first_frame` / `last_frame` / `reference_image` roles (first/last frames and reference images are mutually exclusive; a last frame requires a first frame). H3 resolution is `768P` or `2K`, duration 4–15s; Highspeed/Lite use `480P` or `768P`, 4–15s; Max uses `480P` or `768P`, 5–15s. All use ratio `16:9|4:3|1:1|3:4|9:16|21:9` — required and non-adaptive for text-to-video, ignored (forced adaptive) once a first frame is present. There is no audio toggle, no idempotency key and no documented cancel endpoint, so ambiguous submits are parked for manual resolution rather than auto-retried. Auth is a plain Bearer key (`providers.minimax.apiKey`, env `MINIMAX_API_KEY`), and keys are region-locked: the default endpoint is international `api.minimax.io` — mainland-China keys need `providers.minimax.baseUrl` set to `https://api.minimaxi.com` (and vice versa a 401 means wrong region). Result URLs are time-limited; clips are downloaded immediately, and tasks stay queryable for 7 days.
 
 **Kling notes** (verified against kling.ai/document-api via browser, 2026-07): current Kling API 2.0 uses a plain API key (`providers.kling.apiKey`, env `KLING_API_KEY`) — the JWT ak/sk scheme is legacy. The model lives in the URL path (`kling-3.0-turbo` / `kling-3.0`); default base is `api-singapore.klingai.com` (regional endpoints via `baseUrl`). Kling 3.0 Omni supports last-frame, native audio and 4k; Turbo is first-frame-only and silent. Submits carry `external_task_id` (our request fingerprint), so ambiguous failures are looked up first; an inconclusive lookup is parked for manual resolution rather than blindly resubmitted.
 

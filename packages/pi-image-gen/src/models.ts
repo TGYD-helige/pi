@@ -13,8 +13,8 @@ export type BuiltInModelEntry = {
   /**
    * The model's capability contract — drives the tool schema (which params
    * exist, their enums/patterns) and pre-flight validation before any paid
-   * call. Every built-in entry must declare one (enforced by the registry
-   * test); custom models may inherit it by id (see config.ts).
+   * call. Entries with verified limits declare one; custom models may inherit
+   * it by id (see config.ts).
    */
   capabilities?: ImageModelCapabilities;
 };
@@ -39,7 +39,7 @@ const QWEN3_SIZE_RANGE: NonNullable<ImageModelCapabilities['sizeRange']> = {
 
 const MB = 1024 * 1024;
 
-// Shared by gpt-image-2 and both GPT Image 2.5 tiers (same parameter surface).
+// Shared raster size and reference-image limits for GPT Image 2 / 2.5 / 2.6.
 const GPT_IMAGE_CAPABILITIES: ImageModelCapabilities = {
   sizeRange: {
     separator: 'x',
@@ -78,21 +78,32 @@ const GEMINI_ASPECTS_14 = [
 ];
 
 /**
- * Capability values reflect the official provider docs as of 2026-09:
- * - GPT Image 2.5 / 2: https://developers.openai.com/api/docs/guides/image-generation
+ * Capability values reflect the official provider docs as of 2026-11:
+ * - GPT Image 2.6 / 2.5 / 2: https://developers.openai.com/api/docs/guides/image-generation
  * - Gemini: https://ai.google.dev/gemini-api/docs/image-generation
  * - Qwen 3.0: https://help.aliyun.com/zh/model-studio/qwen-image-generation-and-editing-api-reference
  * - Qwen 2.0: https://help.aliyun.com/zh/model-studio/qwen-image-api (+ qwen-image-edit-api)
  * - Seedream: https://www.volcengine.com/docs/82379/1824121 (+ /1666946)
  */
 export const BUILT_IN_MODELS: BuiltInModelEntry[] = [
-  // OpenAI image generation. GPT Image 2.5 (2026-09-08) is the current line —
+  // OpenAI image generation. GPT Image 2.6 (2026-11-04) is the current line —
   // flare is the default tier, sunburst the precision tier; both share
-  // gpt-image-2's parameter surface. All accept arbitrary WxH beyond the
+  // gpt-image-2's raster size limits. All accept arbitrary WxH beyond the
   // standard sizes: both edges divisible by 16, ratio ≤ 3:1, total pixels
   // 655,360–8,294,400, longest edge ≤ 3840; "auto" lets the model pick.
   // Reference images: png/webp/jpg, ≤ 50MB each, up to 16. gpt-image-2 itself
   // is still fully supported with no announced shutdown.
+  {
+    id: 'gpt-image-2.6-flare',
+    aliases: ['gpt-image-2.6'], // the generic 2.6 id points at the default tier
+    provider: 'openai',
+    capabilities: GPT_IMAGE_CAPABILITIES,
+  },
+  {
+    id: 'gpt-image-2.6-sunburst',
+    provider: 'openai',
+    capabilities: GPT_IMAGE_CAPABILITIES,
+  },
   {
     id: 'gpt-image-2.5-flare',
     aliases: ['gpt-image-2.5'], // the generic 2.5 id points at the default tier
@@ -114,10 +125,11 @@ export const BUILT_IN_MODELS: BuiltInModelEntry[] = [
   // knob — output shape is aspectRatio + imageSize tier (uppercase "K").
   // Per https://ai.google.dev/gemini-api/docs/image-generation:
   //   Nano Banana Pro      → gemini-3-pro-image
+  //   Nano Banana 2.1      → gemini-nano-banana-2.1
   //   Nano Banana 2        → gemini-3.1-flash-image
   //   Nano Banana 2 Lite   → gemini-3.1-flash-lite-image
-  //   Nano Banana          → gemini-2.5-flash-image (deprecated — shuts down
-  //     2026-10-02; Google recommends migrating to gemini-3.1-flash-lite-image)
+  //   Nano Banana          → gemini-2.5-flash-image (shutdown date:
+  //     2026-10-02; retained for compatible gateways)
   // Input formats PNG/JPEG/WEBP/HEIC/HEIF; inline requests cap at 100MB total
   // (raised from 20MB in 2026-01).
   {
@@ -126,6 +138,19 @@ export const BUILT_IN_MODELS: BuiltInModelEntry[] = [
     provider: 'gemini',
     capabilities: {
       aspectRatios: GEMINI_ASPECTS_10,
+      imageSizes: ['1K', '2K', '4K'],
+      nMax: 8,
+      maxReferenceImages: 14,
+      inputFormats: GEMINI_INPUT_FORMATS,
+      inputMaxBytes: 100 * MB,
+    },
+  },
+  {
+    id: 'gemini-nano-banana-2.1',
+    aliases: ['nano-banana-2.1'],
+    provider: 'gemini',
+    capabilities: {
+      aspectRatios: GEMINI_ASPECTS_14,
       imageSizes: ['1K', '2K', '4K'],
       nMax: 8,
       maxReferenceImages: 14,
@@ -204,6 +229,30 @@ export const BUILT_IN_MODELS: BuiltInModelEntry[] = [
     },
   },
   {
+    id: 'qwen-image-2.1-pro',
+    provider: 'dashscope',
+    capabilities: {
+      sizeRange: QWEN3_SIZE_RANGE,
+      nMax: 6,
+      maxReferenceImages: 10,
+      inputFormats: QWEN_INPUT_FORMATS,
+      inputMaxBytes: 10 * MB,
+      inputDimAdvice: 'reference images work best with both dimensions between 384 and 2048 px',
+    },
+  },
+  {
+    id: 'qwen-image-2.1-turbo',
+    provider: 'dashscope',
+    capabilities: {
+      sizeRange: QWEN3_SIZE_RANGE,
+      nMax: 6,
+      maxReferenceImages: 10,
+      inputFormats: QWEN_INPUT_FORMATS,
+      inputMaxBytes: 10 * MB,
+      inputDimAdvice: 'reference images work best with both dimensions between 384 and 2048 px',
+    },
+  },
+  {
     id: 'qwen-image-2.0-pro',
     provider: 'dashscope',
     capabilities: {
@@ -238,12 +287,35 @@ export const BUILT_IN_MODELS: BuiltInModelEntry[] = [
   // older -260128 id no longer appears) and treat doubao-seedream-5-0-260128
   // and doubao-seedream-5-0-lite-260128 as the SAME model — hence the merged
   // entry below. The retired ids stay as aliases so existing configs resolve.
+  // User-supplied API ID; leave capabilities unset until provider limits are published.
+  { id: 'seedream-5.5', provider: 'ark' },
   {
     id: 'doubao-seedream-5-0-pro-260628',
     aliases: ['seedream-5-pro', 'doubao-seedream-5-0-pro-260128'],
     provider: 'ark',
     capabilities: {
       // 5.0 pro accepts 1K/1.5K/2K tiers; pixel range 1280x720–2048x2048-class.
+      sizeRange: {
+        separator: 'x',
+        tiers: ['1K', '1.5K', '2K'],
+        minArea: 921_600,
+        maxArea: 4_624_220,
+        minRatio: 1 / 16,
+        maxRatio: 16,
+      },
+      nMax: 1, // no count knob — sequential_image_generation is not exposed
+      maxReferenceImages: 10,
+      inputFormats: SEEDREAM_INPUT_FORMATS,
+      inputMaxBytes: 30 * MB,
+      inputDimAdvice: SEEDREAM_DIM_ADVICE,
+    },
+  },
+  {
+    id: 'doubao-seedream-5-0-flash-260915',
+    aliases: ['seedream-5-flash'],
+    provider: 'ark',
+    capabilities: {
+      // 5.0 flash accepts 1K/1.5K/2K tiers; pixel range 1280x720–2048x2048-class.
       sizeRange: {
         separator: 'x',
         tiers: ['1K', '1.5K', '2K'],

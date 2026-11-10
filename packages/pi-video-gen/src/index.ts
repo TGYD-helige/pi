@@ -1050,6 +1050,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
         "Before composing prompts for video_generate or video_render, read the video-gen skill, then call video_capabilities to learn the active model's duration range, aspect ratios, audio support, and first/last-frame support — do not assume.",
         'Fill the structured prompt fields; never a pre-joined string. visuals + action are always required; style + scene are required when no firstFrame anchors the clip; use effects for transformations or lighting shifts a static frame cannot carry.',
         'Video generation is paid and slow. State the expected clip count and duration to the user and use existing explicit approval for this unchanged request or get confirmation before the first paid call.',
+        'For Veo 3.1, Veo 3.1 Fast, and Veo 3.1 Lite, use a duration of exactly 4, 6, or 8 seconds.',
         'Only pass lastFrame when the user needs first+last-frame interpolation and the active model supports it.',
         'For Seedance references containing recognizable real people, use a preset-avatar or authorized-person Asset ID from the current account/project. Pass it through referenceAssets and refer to it in the prompt as Image 1, Video 1, or Audio 1 — never as the Asset ID.',
         'Treat user approval as scoped to the exact asset list, provider/account context, model, clip count, and duration; ask again when any of those change.',

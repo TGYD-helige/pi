@@ -6,16 +6,16 @@ Pi extension that adds an `image_generate` tool. Supported providers:
 
 | Provider                       | Model id (alias)                              | Env var               |
 | ------------------------------ | --------------------------------------------- | --------------------- |
-| OpenAI                         | `gpt-image-2.5-flare` (alias `gpt-image-2.5`), `gpt-image-2.5-sunburst`, `gpt-image-2` | `OPENAI_API_KEY`      |
-| Google Gemini ("Nano Banana")  | `gemini-3-pro-image` (alias `nano-banana-pro`), `gemini-3.1-flash-image` (alias `nano-banana-2`), `gemini-3.1-flash-lite-image` (alias `nano-banana-2-lite`), `gemini-2.5-flash-image` (alias `nano-banana`, **deprecated — shuts down 2026-10-02; use `gemini-3.1-flash-lite-image` instead**) | `GEMINI_API_KEY` |
-| Alibaba DashScope (Qwen-Image) | `qwen-image-3.0-pro`, `qwen-image-3.0`, `qwen-image-2.0-pro`, `qwen-image-2.0` | `DASHSCOPE_API_KEY`   |
-| Volcengine Ark (ByteDance Seedream) | `doubao-seedream-5-0-pro-260628` (alias `seedream-5-pro`, retired id `doubao-seedream-5-0-pro-260128` still resolves), `doubao-seedream-5-0-260128` (aliases `seedream-5`, `seedream`; the same model also answers to `doubao-seedream-5-0-lite-260128` / `seedream-5-lite`), `doubao-seedream-4-5-251128` (alias `seedream-4-5`), `doubao-seedream-4-0-250828` (alias `seedream-4`) | `ARK_API_KEY`         |
+| OpenAI                         | `gpt-image-2.6-flare` (alias `gpt-image-2.6`), `gpt-image-2.6-sunburst`, `gpt-image-2.5-flare` (alias `gpt-image-2.5`), `gpt-image-2.5-sunburst`, `gpt-image-2` | `OPENAI_API_KEY`      |
+| Google Gemini ("Nano Banana")  | `gemini-nano-banana-2.1` (alias `nano-banana-2.1`), `gemini-3-pro-image` (alias `nano-banana-pro`), `gemini-3.1-flash-image` (alias `nano-banana-2`), `gemini-3.1-flash-lite-image` (alias `nano-banana-2-lite`), `gemini-2.5-flash-image` (alias `nano-banana`, **shutdown date passed (2026-10-02); migrate to `gemini-3.1-flash-lite-image` instead**) | `GEMINI_API_KEY` |
+| Alibaba DashScope (Qwen-Image) | `qwen-image-3.0-pro`, `qwen-image-3.0`, `qwen-image-2.1-pro`, `qwen-image-2.1-turbo`, `qwen-image-2.0-pro`, `qwen-image-2.0` | `DASHSCOPE_API_KEY`   |
+| Volcengine Ark (ByteDance Seedream) | `seedream-5.5` (API ID supplied by the user; limits pending verification), `doubao-seedream-5-0-pro-260628` (alias `seedream-5-pro`, retired id `doubao-seedream-5-0-pro-260128` still resolves), `doubao-seedream-5-0-flash-260915` (alias `seedream-5-flash`), `doubao-seedream-5-0-260128` (aliases `seedream-5`, `seedream`; the same model also answers to `doubao-seedream-5-0-lite-260128` / `seedream-5-lite`), `doubao-seedream-4-5-251128` (alias `seedream-4-5`), `doubao-seedream-4-0-250828` (alias `seedream-4`) | `ARK_API_KEY`         |
 | OpenRouter                     | any (use `openrouter/<vendor>/<id>`)          | `OPENROUTER_API_KEY`  |
 | Custom providers               | whatever you declare in settings              | (your choice, via `$VAR`) |
 
 Upstream API docs (handy when debugging gateway behavior or adding new models):
 
-- OpenAI GPT Image (2.5 and 2) — [developers.openai.com/api/docs/guides/image-generation](https://developers.openai.com/api/docs/guides/image-generation)
+- OpenAI GPT Image — [developers.openai.com/api/docs/guides/image-generation](https://developers.openai.com/api/docs/guides/image-generation)
 - Google Gemini image generation — [ai.google.dev/gemini-api/docs/image-generation](https://ai.google.dev/gemini-api/docs/image-generation)
 - Alibaba Qwen-Image 3.0 (generation & editing) — [help.aliyun.com/zh/model-studio/qwen-image-generation-and-editing-api-reference](https://help.aliyun.com/zh/model-studio/qwen-image-generation-and-editing-api-reference)
 - Alibaba DashScope Qwen-Image 2.0 (text-to-image) — [help.aliyun.com/zh/model-studio/qwen-image-api](https://help.aliyun.com/zh/model-studio/qwen-image-api)
@@ -23,7 +23,11 @@ Upstream API docs (handy when debugging gateway behavior or adding new models):
 - Volcengine Ark Seedream — [volcengine.com/docs/82379/1824121](https://www.volcengine.com/docs/82379/1824121)
 - OpenRouter image API — [openrouter.ai/docs/api/api-reference/images/create-images](https://openrouter.ai/docs/api/api-reference/images/create-images)
 
+> Seedream 5.5 uses the supplied API model ID `seedream-5.5` on the Ark wire format. Its [official release page](https://seed.bytedance.com/zh/seedream5_5) describes multi-turn editing and transparent assets, but its API ID and limits have not been independently verified against public API documentation or a live request. Set `defaultModel` to `seedream-5.5`; override `providers.ark.baseUrl` if your gateway serves it. No 5.0 capability limits are inherited; omit `size` to use the provider default, and declare verified limits through `customProviders` when needed. Existing `seedream` aliases keep their previous targets.
+
 The env-var names match [pi.dev's provider table](https://pi.dev/docs/latest/providers) — if the agent already has a key set for a provider, this extension will reuse it. You don't need to introduce a new variable.
+
+GPT Image 2.6 uses the existing raster generation and reference-image editing workflow. SVG, animated GIF, markup-guided editing, and the `complexity` parameter are not exposed by this extension.
 
 The active model is **fixed in settings.json**. The `image_generate` tool intentionally does **not** take a `model` parameter — point your project at one model, get consistent output. To switch models, edit settings and run `/image-gen reload`.
 
@@ -172,7 +176,7 @@ export ARK_API_KEY=...
 { "pi-image-gen": { "defaultModel": "seedream" } }
 ```
 
-> Supported `size` values are model-dependent, and the tool schema tells the agent the exact form for the active model: a tier token (`1K`/`1.5K`/`2K`/`3K`/`4K` — the list differs per model) or an explicit `"<w>x<h>"` pixel string, never mixed. Seedream 5.0 / 4.5 enforce a 2K pixel floor (`1024x1024` fails with `InvalidParameter`); 5.0 pro accepts `1K`/`1.5K`/`2K` down to 921,600 px; 4.0 accepts 1K. Full sizing matrix in the [official docs](https://www.volcengine.com/docs/82379/1824121). Seedream has **no `n` parameter** — the API generates one image per request (multi-image is the `sequential_image_generation` mechanism, not exposed here), so `n` is hidden for these models. The extension always sends `watermark: false` — Seedream's watermark switch defaults to `true` and would otherwise stamp an "AI 生成" badge in the corner of every image.
+> Supported `size` values are model-dependent, and the tool schema tells the agent the exact form for the active model: a tier token (`1K`/`1.5K`/`2K`/`3K`/`4K` — the list differs per model) or an explicit `"<w>x<h>"` pixel string, never mixed. Seedream 5.0 / 4.5 enforce a 2K pixel floor (`1024x1024` fails with `InvalidParameter`); 5.0 pro/flash accept `1K`/`1.5K`/`2K` down to 921,600 px; 4.0 accepts 1K. Full sizing matrix in the [official docs](https://www.volcengine.com/docs/82379/1824121). Seedream has **no `n` parameter** — the API generates one image per request (multi-image is the `sequential_image_generation` mechanism, not exposed here), so `n` is hidden for these models. The extension always sends `watermark: false` — Seedream's watermark switch defaults to `true` and would otherwise stamp an "AI 生成" badge in the corner of every image.
 
 The default base URL is `https://ark.cn-beijing.volces.com/api/v3`. To use a different region (e.g. `ap-southeast`), override it:
 
@@ -337,17 +341,17 @@ Returns the absolute file path(s) of saved images. Files land in `outputDir` (de
 **The schema is model-aware.** Every built-in model carries a capability contract sourced from the official API docs, and the tool is registered with parameters shaped by that contract (on session start, and again after `/image-gen reload`) — so the agent sees exactly the knobs the active model honors, with the documented values in enums and descriptions. The contract is **advice, not a gate**: numeric limits (size ranges, `n` ceilings, reference-image counts and byte ceilings) are stated in the descriptions but never hard-enforced client-side — a self-hosted deployment or gateway may legitimately diverge from the cloud platform's documented limits, and the provider's own error is the backstop. The only client-side rejections are parameter combinations the adapters would silently drop (a pixel `size` sent to a Gemini model, or `aspectRatio` sent to a pixel-size model — the provider never sees those, so it can't complain).
 
 - `size` follows the model's documented form:
-  - **Qwen** (`qwen-image-*`): `"<width>*<height>"` (asterisk, e.g. `"2048*2048"`), total pixels 512²–2048²; 3.0 models additionally cap aspect ratio at 1:8–8:1. The x-form is normalized automatically as a safety net.
+  - **Qwen** (`qwen-image-*`): `"<width>*<height>"` (asterisk, e.g. `"2048*2048"`), total pixels 512²–2048²; 3.0 and 2.1 models additionally cap aspect ratio at 1:8–8:1. The x-form is normalized automatically as a safety net.
   - **Seedream** (`doubao-seedream-*`): a tier token from the model's list (`1K`/`1.5K`/`2K`/`3K`/`4K`) **or** an explicit `"<w>x<h>"` within the model's pixel window (2K floor on 5.0/4.5).
-  - **gpt-image** (`gpt-image-2.5-*`, `gpt-image-2`): `"auto"` or `"<w>x<h>"` — arbitrary sizes allowed (both edges divisible by 16, ratio ≤ 3:1, 655,360–8,294,400 px, longest edge ≤ 3840), beyond the standard `1024x1024`/`1536x1024`/`1024x1536`.
+  - **gpt-image** (`gpt-image-2.6-*`, `gpt-image-2.5-*`, `gpt-image-2`): `"auto"` or `"<w>x<h>"` — arbitrary sizes allowed (both edges divisible by 16, ratio ≤ 3:1, 655,360–8,294,400 px, longest edge ≤ 3840), beyond the standard `1024x1024`/`1536x1024`/`1024x1536`.
   - Omit `size` to use the model's own default (qwen-image-3.0 auto-picks from the prompt).
 - `aspectRatio` / `imageSize` replace `size` for **Gemini** models (they have no pixel-size knob): `aspectRatio` is an enum from the model's vocabulary (10–14 values), `imageSize` an enum of the model's tiers (`1K`/`2K`/`4K`; hidden when the model is fixed at one tier, as `gemini-3.1-flash-lite-image` and `gemini-2.5-flash-image` are).
 - `n` carries the model's documented ceiling in its description (qwen 6, gpt-image 10) and is **hidden for Seedream** — that API has no count parameter, so `n` would be silently dropped.
-- `image` spells out the active model's documented reference-image contract in its description (formats, max count, per-image byte ceiling, dimension advice): qwen documents ≤ 3 images (JPG/JPEG/PNG/BMP/TIFF/WEBP/GIF, ≤ 10MB each), Seedream ≤ 10–14 (incl. HEIC/HEIF, ≤ 30MB), gpt-image ≤ 16 (png/webp/jpg, ≤ 50MB), Gemini ≤ 3–14 (≤ 100MB). These are descriptions of the cloud platform's limits, not client-side gates — the provider enforces its own rules.
-- `quality` appears **only** for a **built-in gpt-image** route — the built-in OpenAI provider on `gpt-image-*`, or an OpenRouter route whose model id is gpt-image (e.g. `openrouter/openai/gpt-image-2`). Only there is it constrained to the enum `low`/`medium`/`high`/`auto` (the vocabulary those APIs document). It is **omitted from the schema entirely** for:
+- `image` spells out the active model's documented reference-image contract in its description (formats, max count, per-image byte ceiling, dimension advice): qwen documents ≤ 3 images, or ≤ 10 on the 2.1 series (JPG/JPEG/PNG/BMP/TIFF/WEBP/GIF, ≤ 10MB each), Seedream ≤ 10–14 (incl. HEIC/HEIF, ≤ 30MB), gpt-image ≤ 16 (png/webp/jpg, ≤ 50MB), Gemini ≤ 3–14 (≤ 100MB). These are descriptions of the cloud platform's limits, not client-side gates — the provider enforces its own rules.
+- `quality` appears **only** for a **built-in gpt-image** route — the built-in OpenAI provider on `gpt-image-*`, or an OpenRouter route whose model id is gpt-image (e.g. `openrouter/openai/gpt-image-2`). Only there is it constrained to `low`/`medium`/`high`/`auto`; GPT Image 2.5 and 2.6 additionally expose `xhigh` and `max`. It is **omitted from the schema entirely** for:
   - Gemini, DashScope/Qwen, and Ark/Seedream — their image APIs have no `quality` field (Seedream varies quality by `size` resolution tier instead);
   - **non-gpt-image routes** on the OpenAI/OpenRouter wire — e.g. built-in `openai/dall-e-3` (which uses `standard`/`hd`) or an OpenRouter route to a non-OpenAI model like Seedream — because the enum above is gpt-image's vocabulary, not the wire format's; and
-  - **any custom provider**, including OpenAI-*compatible* ones — a self-hosted or third-party model may use a different quality vocabulary (e.g. DALL·E 3's `standard`/`hd`) or none at all, so the OpenAI wire format alone does **not** imply the four values above. Passing an unsupported value would only surface as a provider-side 400.
+  - **any custom provider**, including OpenAI-*compatible* ones — a self-hosted or third-party model may use a different quality vocabulary (e.g. DALL·E 3's `standard`/`hd`) or none at all, so the OpenAI wire format alone does **not** imply the quality values above. Passing an unsupported value would only surface as a provider-side 400.
 
   If `defaultModel` is unset or misconfigured, `quality` stays present (the tool remains fully featured and `execute` surfaces a friendly config error). Use `"low"` for fast drafts and a higher level for final assets or dense text.
 
@@ -397,7 +401,7 @@ Provider behavior:
 
 | Provider | Image input route |
 |---|---|
-| OpenAI (`gpt-image-2.5-*`, `gpt-image-2`) | `POST /v1/images/edits` (multipart). Supports multi-image. |
+| OpenAI (`gpt-image-2.6-*`, `gpt-image-2.5-*`, `gpt-image-2`) | `POST /v1/images/edits` (multipart). Supports multi-image. |
 | Gemini (`gemini-3-pro-image`, `gemini-3.1-flash-image`, `gemini-3.1-flash-lite-image`, `gemini-2.5-flash-image`) | `inline_data` parts prepended to the user message. Supports multi-image. |
 | DashScope (`qwen-image-3.0-pro`, `qwen-image-3.0`, `qwen-image-2.0-pro`, `qwen-image-2.0`) | `image` parts in `messages[].content`. Up to 3 images. |
 | OpenRouter | `POST /api/v1/images` with `input_references` JSON. Supports multi-image. |

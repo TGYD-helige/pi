@@ -388,7 +388,7 @@ describe('listModelRegistry', () => {
     expect(info.models.filter((m) => m.provider === 'dashscope').every((m) => !m.keyReady)).toBe(
       true,
     );
-    expect(info.models).toHaveLength(9);
+    expect(info.models).toHaveLength(19);
   });
 
   it('includes custom provider models in the registry view', () => {

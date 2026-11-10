@@ -33,6 +33,59 @@ describe('openrouterAdapter.submit', () => {
     writeFileSync(join(suiteDir, 'frame.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
   });
 
+  it.each([
+    'google/veo-3.1',
+    'google/veo-3.1-fast',
+    'google/veo-3.1-lite',
+  ])('rejects unsupported discrete durations for %s before a paid submit', async (model) => {
+    let called = false;
+    await expect(
+      openrouterAdapter.submit(
+        provider,
+        model,
+        { prompt: 'waves', durationSec: 5 },
+        mockFetch(() => {
+          called = true;
+          return jsonResponse(202, { id: 'unexpected' });
+        }),
+      ),
+    ).rejects.toThrow(/4, 6, or 8/);
+    expect(called).toBe(false);
+  });
+
+  it.each([
+    'google/veo-3.1-fast',
+    'google/veo-3.1-lite',
+    'google/gemini-omni-1.1-flash',
+    'google/gemini-omni-1.2-flash',
+  ])('submits %s through the shared video endpoint', async (model) => {
+    let body: Record<string, unknown> = {};
+    const handle = await openrouterAdapter.submit(
+      provider,
+      model,
+      {
+        prompt: 'waves',
+        durationSec: 8,
+        resolution: '1080p',
+        aspectRatio: '9:16',
+        generateAudio: true,
+      },
+      mockFetch((_url, init) => {
+        body = JSON.parse(String(init?.body));
+        return jsonResponse(202, { id: 'new-video' });
+      }),
+    );
+    expect(handle.taskId).toBe('new-video');
+    expect(body).toEqual({
+      model,
+      prompt: 'waves',
+      duration: 8,
+      resolution: '1080p',
+      aspect_ratio: '9:16',
+      generate_audio: true,
+    });
+  });
+
   it('builds the body with frame_images + input_references and reads id', async () => {
     let seen:
       | { url: string; headers: Record<string, string>; body: Record<string, unknown> }

@@ -48,6 +48,66 @@ describe('generateImage', () => {
     }
     tmpDirs.length = 0;
   });
+  it.each([
+    ['gpt-image-2.6', 'gpt-image-2.6-flare', 'openai'],
+    ['gpt-image-2.6-sunburst', 'gpt-image-2.6-sunburst', 'openai'],
+    ['nano-banana-2.1', 'gemini-nano-banana-2.1', 'gemini'],
+    ['qwen-image-2.1-pro', 'qwen-image-2.1-pro', 'dashscope'],
+    ['qwen-image-2.1-turbo', 'qwen-image-2.1-turbo', 'dashscope'],
+    ['seedream-5-flash', 'doubao-seedream-5-0-flash-260915', 'ark'],
+    ['seedream-5.5', 'seedream-5.5', 'ark'],
+  ])('generates and saves an image using %s', async (defaultModel, remoteId, provider) => {
+    const cwd = makeTmpDir();
+    for (const key of ['OPENAI_API_KEY', 'GEMINI_API_KEY', 'DASHSCOPE_API_KEY', 'ARK_API_KEY']) {
+      vi.stubEnv(key, 'test-key');
+    }
+    const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+      const body = JSON.parse(String(init?.body));
+      if (provider === 'gemini') {
+        expect(String(input)).toContain(`/models/${remoteId}:generateContent`);
+        expect(body.generationConfig.imageConfig.imageSize).toBe('2K');
+        return fakeJsonResponse({
+          candidates: [
+            {
+              content: {
+                parts: [
+                  { inlineData: { mimeType: 'image/png', data: PNG_BYTES.toString('base64') } },
+                ],
+              },
+            },
+          ],
+        });
+      }
+      expect(body.model).toBe(remoteId);
+      if (provider === 'dashscope') {
+        return fakeJsonResponse({
+          output: {
+            choices: [
+              {
+                message: {
+                  content: [{ image: `data:image/png;base64,${PNG_BYTES.toString('base64')}` }],
+                },
+              },
+            ],
+          },
+        });
+      }
+      if (provider === 'openai') expect(body.quality).toBe('max');
+      return fakeJsonResponse({ data: [{ b64_json: PNG_BYTES.toString('base64') }] });
+    });
+    const result = await generateImage(
+      {
+        prompt: 'a beaver',
+        ...(provider === 'gemini' ? { imageSize: '2K' } : {}),
+        ...(provider === 'openai' ? { quality: 'max' } : {}),
+      },
+      { cwd, settings: { defaultModel }, fetchImpl },
+    );
+    expect(result.provider).toBe(provider);
+    expect(result.images).toHaveLength(1);
+    expect(readFileSync(result.images[0]!.path)).toEqual(PNG_BYTES);
+  });
+
   it('saves an image returned as base64 to outputDir and returns its path', async () => {
     const cwd = makeTmpDir();
     vi.stubEnv('OPENAI_API_KEY', 'sk-test');

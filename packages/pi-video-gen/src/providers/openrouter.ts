@@ -78,6 +78,17 @@ export const openrouterAdapter: VideoProviderAdapter = {
       throw missingKeyError('openrouter', 'OPENROUTER_API_KEY', provider.apiKeyPath);
     }
 
+    if (
+      /^google\/veo-3\.1(?:-fast|-lite)?$/.test(remoteModelId) &&
+      params.durationSec != null &&
+      ![4, 6, 8].includes(params.durationSec)
+    ) {
+      throw new VideoGenError(
+        'Veo 3.1 models require durationSec to be 4, 6, or 8 seconds.',
+        'openrouter: unsupported Veo duration',
+      );
+    }
+
     const body: Record<string, unknown> = { model: remoteModelId, prompt: params.prompt };
     if (params.durationSec != null) body.duration = params.durationSec;
     if (params.resolution) body.resolution = params.resolution;

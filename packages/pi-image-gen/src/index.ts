@@ -256,7 +256,9 @@ export function resolveImageToolCapabilities(settings: ImageGenSettings): ImageT
   const { provider } = resolved;
   const quality =
     provider.builtIn && honorsGptImageQuality(provider.api, resolved.remoteId)
-      ? QUALITY_VALUES
+      ? /(?:^|\/)gpt-image-2\.[56](?:-|$)/i.test(resolved.remoteId)
+        ? [...QUALITY_VALUES, 'xhigh', 'max']
+        : QUALITY_VALUES
       : null;
   return { api: provider.api, quality, model: resolved.capabilities ?? null };
 }
@@ -313,7 +315,7 @@ export function buildImageToolParameters(caps: ImageToolCapabilities): Type.TObj
           : IMAGE_PARAM_BASE,
       }),
     ),
-    ...(!model || model.nMax > 1
+    ...(caps.api !== 'ark' && (!model || model.nMax > 1)
       ? {
           n: Type.Optional(
             Type.Number({

@@ -30,6 +30,27 @@ function jsonResponse(status: number, body: unknown): Response {
 }
 
 describe('minimaxAdapter.submit (v2)', () => {
+  it.each([
+    'MiniMax-H3-Highspeed',
+    'MiniMax-H3-Lite',
+    'MiniMax-H3-Max',
+  ])('sends %s with its lower-resolution profile', async (model) => {
+    let body: Record<string, unknown> = {};
+    const handle = await minimaxAdapter.submit(
+      provider,
+      model,
+      { prompt: 'waves', durationSec: 5, resolution: '480P', aspectRatio: '16:9' },
+      mockFetch((_url, init) => {
+        body = JSON.parse(String(init?.body));
+        return jsonResponse(200, { task_id: 'variant-1' });
+      }),
+    );
+    expect(handle.taskId).toBe('variant-1');
+    expect(body.model).toBe(model);
+    expect(body.resolution).toBe('480P');
+    expect(body.duration).toBe(5);
+  });
+
   it('retains timeout classification while preserving paid-submit uncertainty', async () => {
     const result = await minimaxAdapter
       .submit(

@@ -157,7 +157,9 @@ export const arkAdapter: VideoProviderAdapter = {
       watermark: false,
     };
     if (params.resolution) body.resolution = params.resolution;
-    if (params.aspectRatio) body.ratio = params.aspectRatio;
+    if (/^doubao-seedance-2-5-/.test(remoteModelId) && params.firstFramePath) {
+      body.ratio = 'adaptive';
+    } else if (params.aspectRatio) body.ratio = params.aspectRatio;
     if (params.durationSec != null) body.duration = params.durationSec;
     if (params.generateAudio != null) body.generate_audio = params.generateAudio;
 
