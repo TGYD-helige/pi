@@ -535,6 +535,82 @@ describe('pi-video-gen extension', () => {
     }
   });
 
+  it('submits custom Veo duration overrides through the resolved provider', async () => {
+    mkdirSync(join(home, '.pi', 'agent'), { recursive: true });
+    writeFileSync(
+      join(home, '.pi', 'agent', 'settings.json'),
+      JSON.stringify({
+        'pi-video-gen': {
+          defaultModel: 'relay-veo',
+          customProviders: {
+            relay: {
+              api: 'openrouter',
+              apiKey: 'k',
+              models: [
+                {
+                  id: 'google/veo-3.1',
+                  alias: 'relay-veo',
+                  capabilities: { durationValues: [5] },
+                  defaultDurationSec: 5,
+                },
+              ],
+            },
+          },
+        },
+      }),
+    );
+    await startSession(cwd);
+    let submitted: Record<string, unknown> | undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url, init) => {
+        if (init?.method === 'POST') {
+          submitted = JSON.parse(String(init.body));
+          return new Response(JSON.stringify({ id: 'relay-task' }), { status: 202 });
+        }
+        return new Response(JSON.stringify({ status: 'failed', error: 'fixture finished' }));
+      }),
+    );
+    try {
+      const tool = tools.get('video_generate')!;
+      expect(tool.parameters.properties?.durationSec).toHaveProperty('enum', [5]);
+      await tool.execute(
+        'custom-duration',
+        { ...VALID_GENERATE_PARAMS, durationSec: 5 },
+        undefined,
+        undefined,
+        fakeCtx(cwd),
+      );
+      expect(submitted?.model).toBe('google/veo-3.1');
+      expect(submitted?.duration).toBe(5);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('advertises and validates the exact Veo duration choices before network calls', async () => {
+    mkdirSync(join(home, '.pi', 'agent'), { recursive: true });
+    writeFileSync(
+      join(home, '.pi', 'agent', 'settings.json'),
+      JSON.stringify({
+        'pi-video-gen': { defaultModel: 'veo-3.1', providers: { openrouter: { apiKey: 'k' } } },
+      }),
+    );
+    await startSession(cwd);
+    const tool = tools.get('video_generate')!;
+    expect(tool.parameters.properties?.durationSec).toHaveProperty('enum', [4, 6, 8]);
+    const result = await tool.execute(
+      'bad-duration',
+      { ...VALID_GENERATE_PARAMS, durationSec: 5 },
+      undefined,
+      undefined,
+      fakeCtx(cwd),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toMatch(/4, 6, 8/);
+    expect(safeFetchMock).not.toHaveBeenCalled();
+  });
+
   it('video_generate rejects out-of-range duration before any network call', async () => {
     // give it a key so validation reaches the duration check
     mkdirSync(join(home, '.pi', 'agent'), { recursive: true });

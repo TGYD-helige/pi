@@ -285,10 +285,18 @@ function buildGenerateParams(caps: VideoModelCapabilities | null) {
       : {}),
     durationSec: Type.Optional(
       Type.Integer({
-        ...(caps ? { minimum: caps.durations[0], maximum: caps.durations[1] } : {}),
-        description: caps
-          ? `Clip duration in seconds, integer ${caps.durations[0]}-${caps.durations[1]} for the active model.`
-          : 'Clip duration in seconds (model-dependent).',
+        ...(caps
+          ? {
+              minimum: caps.durations[0],
+              maximum: caps.durations[1],
+              ...(caps.durationValues ? { enum: caps.durationValues } : {}),
+            }
+          : {}),
+        description: caps?.durationValues
+          ? `Clip duration in seconds: ${caps.durationValues.join(', ')} for the active model.`
+          : caps
+            ? `Clip duration in seconds, integer ${caps.durations[0]}-${caps.durations[1]} for the active model.`
+            : 'Clip duration in seconds (model-dependent).',
       }),
     ),
     aspectRatio: caps
@@ -442,6 +450,16 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
       }
       return errResult(
         `durationSec must be ${caps.durations[0]}-${caps.durations[1]}s for ${resolved.entry.id} (got ${toolParams.durationSec}).`,
+      );
+    }
+    if (
+      !toolParams.jobId &&
+      toolParams.durationSec != null &&
+      caps.durationValues &&
+      !caps.durationValues.includes(toolParams.durationSec)
+    ) {
+      return errResult(
+        `durationSec must be one of ${caps.durationValues.join(', ')}s for ${resolved.entry.id}.`,
       );
     }
     // Reject empty-string ratio before the truthy capability check — "" would
@@ -1015,7 +1033,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
       const c = resolved.entry.capabilities;
       lines.push(
         `Provider: ${resolved.provider.style} (key ${resolved.provider.apiKey ? 'ready' : 'MISSING'})`,
-        `Durations: ${c.durations[0]}-${c.durations[1]}s; Resolutions: ${c.resolutions.join('/')}; Aspect ratios: ${c.aspectRatios.join(', ')}`,
+        `Durations: ${c.durationValues?.join(', ') ?? `${c.durations[0]}-${c.durations[1]}`}s; Resolutions: ${c.resolutions.join('/')}; Aspect ratios: ${c.aspectRatios.join(', ')}`,
         `Native audio: ${c.nativeAudio ? 'yes' : 'no'}; First+last frame: ${c.supportsFirstLastFrame ? 'yes' : 'no'}; Max reference images: ${c.maxReferenceImages}`,
         `Trusted asset references: ${resolved.provider.style === 'ark' ? c.referenceAssetModalities?.join(', ') || 'none' : 'none'}; Max videos: ${c.maxReferenceVideos ?? 0}; Max audios: ${c.maxReferenceAudios ?? 0}`,
       );
@@ -1050,6 +1068,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
         "Before composing prompts for video_generate or video_render, read the video-gen skill, then call video_capabilities to learn the active model's duration range, aspect ratios, audio support, and first/last-frame support — do not assume.",
         'Fill the structured prompt fields; never a pre-joined string. visuals + action are always required; style + scene are required when no firstFrame anchors the clip; use effects for transformations or lighting shifts a static frame cannot carry.',
         'Video generation is paid and slow. State the expected clip count and duration to the user and use existing explicit approval for this unchanged request or get confirmation before the first paid call.',
+        'For Veo 3.1, Veo 3.1 Fast, and Veo 3.1 Lite, use a duration of exactly 4, 6, or 8 seconds.',
         'Only pass lastFrame when the user needs first+last-frame interpolation and the active model supports it.',
         'For Seedance references containing recognizable real people, use a preset-avatar or authorized-person Asset ID from the current account/project. Pass it through referenceAssets and refer to it in the prompt as Image 1, Video 1, or Audio 1 — never as the Asset ID.',
         'Treat user approval as scoped to the exact asset list, provider/account context, model, clip count, and duration; ask again when any of those change.',

@@ -55,6 +55,32 @@ function jsonResponse(status: number, body: unknown): Response {
 }
 
 describe('arkAdapter.submit', () => {
+  it.each([
+    'doubao-seedance-2-5-260628',
+    'SeEdAnCe-2.5',
+  ])('uses adaptive ratio for %s frame conditioning while preserving text-only ratios', async (model) => {
+    for (const firstFramePath of [undefined, join(suiteDir, 'frame.png')]) {
+      let body: Record<string, unknown> = {};
+      await arkAdapter.submit(
+        provider,
+        model,
+        {
+          prompt: 'waves',
+          firstFramePath,
+          aspectRatio: '16:9',
+          durationSec: 30,
+        },
+        mockFetch((_url, init) => {
+          body = JSON.parse(String(init?.body));
+          return jsonResponse(200, { id: 'seedance-25' });
+        }),
+      );
+      expect(body.model).toBe(model);
+      expect(body.ratio).toBe(firstFramePath ? 'adaptive' : '16:9');
+      expect(body.duration).toBe(30);
+    }
+  });
+
   it('builds the task body with roles and structured params', async () => {
     let seen: { url: string; body: Record<string, unknown> } | undefined;
     const fetchImpl = mockFetch((url, init) => {

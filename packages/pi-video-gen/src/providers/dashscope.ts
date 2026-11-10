@@ -14,23 +14,24 @@ import type {
   VideoFileMeta,
   VideoProviderAdapter,
 } from '../types.js';
+import { findBuiltInModel } from './models.js';
 import { requestFingerprint } from './request.js';
 import { downloadFile } from './task.js';
 
 /**
- * Alibaba DashScope video generation (HappyHorse series).
+ * Alibaba DashScope video generation (HappyHorse and Wan 3.0).
  *
  *   POST {baseUrl}/api/v1/services/aigc/video-generation/video-synthesis
  *        (headers: X-DashScope-Async: enable)   → output.task_id
  *   GET  {baseUrl}/api/v1/tasks/{taskId}       → output.task_status / video_url
  *   POST {baseUrl}/api/v1/tasks/{taskId}/cancel (generic DashScope task API)
  *
- * Model family routing (one logical model id maps to three real ones):
+ * HappyHorse family routing (Wan 3.0 keeps its model id unchanged):
  *   no images            → {family}-t2v
  *   firstFramePath       → {family}-i2v   (exactly ONE first frame, ratio follows image)
  *   referenceImagePaths  → {family}-r2v   (1-9 reference images, prompt uses [Image N])
  * firstFrame + references together are NOT supported (i2v and r2v are distinct
- * endpoints); last-frame interpolation does not exist on HappyHorse.
+ * modes); only Wan 3.0 supports last-frame interpolation and parameters.audio.
  *
  * Workspace note: the default baseUrl is the classic dashscope.aliyuncs.com,
  * which needs NO workspace id. New Bailian workspaces use a per-workspace
@@ -84,15 +85,24 @@ export const dashscopeAdapter: VideoProviderAdapter = {
     if (!provider.apiKey) {
       throw missingKeyError('dashscope', 'DASHSCOPE_API_KEY', provider.apiKeyPath);
     }
-    if (params.lastFramePath) {
+    const isWan3 = /^wan3\.0-video(?:-prime)?$/i.test(
+      findBuiltInModel(remoteModelId)?.id ?? remoteModelId,
+    );
+    if (params.lastFramePath && !isWan3) {
       throw new VideoGenError(
         'HappyHorse does not support last-frame interpolation. Remove lastFramePath.',
         'dashscope: last frame unsupported',
       );
     }
-    if (params.firstFramePath && params.referenceImagePaths?.length) {
+    if (params.lastFramePath && !params.firstFramePath) {
       throw new VideoGenError(
-        'HappyHorse supports either a first frame (i2v) OR reference images (r2v), not both in one call.',
+        'A last frame requires a first frame.',
+        'dashscope: last frame without first frame',
+      );
+    }
+    if ((params.firstFramePath || params.lastFramePath) && params.referenceImagePaths?.length) {
+      throw new VideoGenError(
+        'Use either a first frame (and optional last frame) OR reference images, not both in one call.',
         'dashscope: mixed frame and references',
       );
     }
@@ -103,21 +113,25 @@ export const dashscopeAdapter: VideoProviderAdapter = {
     const media: Record<string, unknown>[] = [];
     let model: string;
     if (params.referenceImagePaths?.length) {
-      model = `${family}-r2v`;
+      model = isWan3 ? remoteModelId : `${family}-r2v`;
       for (const path of params.referenceImagePaths) {
         media.push({ type: 'reference_image', url: await imageFileToDataUri(path) });
       }
     } else if (params.firstFramePath) {
-      model = `${family}-i2v`;
+      model = isWan3 ? remoteModelId : `${family}-i2v`;
       media.push({ type: 'first_frame', url: await imageFileToDataUri(params.firstFramePath) });
+      if (params.lastFramePath)
+        media.push({ type: 'last_frame', url: await imageFileToDataUri(params.lastFramePath) });
     } else {
-      model = `${family}-t2v`;
+      model = isWan3 ? remoteModelId : `${family}-t2v`;
     }
 
     const parameters: Record<string, unknown> = { watermark: false };
+    if (isWan3 && params.generateAudio != null) parameters.audio = params.generateAudio;
     if (params.resolution) parameters.resolution = params.resolution;
     // i2v follows the frame's aspect ratio — ratio is rejected there.
-    if (params.aspectRatio && model !== `${family}-i2v`) parameters.ratio = params.aspectRatio;
+    if (params.aspectRatio && (isWan3 || model !== `${family}-i2v`))
+      parameters.ratio = params.aspectRatio;
     if (params.durationSec != null) parameters.duration = params.durationSec;
 
     const body = {

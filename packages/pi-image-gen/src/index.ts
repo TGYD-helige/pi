@@ -256,7 +256,9 @@ export function resolveImageToolCapabilities(settings: ImageGenSettings): ImageT
   const { provider } = resolved;
   const quality =
     provider.builtIn && honorsGptImageQuality(provider.api, resolved.remoteId)
-      ? QUALITY_VALUES
+      ? /(?:^|\/)gpt-image-2\.[56](?:-|$)/i.test(resolved.remoteId)
+        ? [...QUALITY_VALUES, 'xhigh', 'max']
+        : QUALITY_VALUES
       : null;
   return { api: provider.api, quality, model: resolved.capabilities ?? null };
 }
@@ -313,7 +315,7 @@ export function buildImageToolParameters(caps: ImageToolCapabilities): Type.TObj
           : IMAGE_PARAM_BASE,
       }),
     ),
-    ...(!model || model.nMax > 1
+    ...(caps.api !== 'ark' && (!model || model.nMax > 1)
       ? {
           n: Type.Optional(
             Type.Number({
@@ -361,8 +363,7 @@ export function buildImageToolParameters(caps: ImageToolCapabilities): Type.TObj
       ? {
           quality: Type.Optional(
             StringEnum(caps.quality, {
-              description:
-                'Quality level honored by the active provider (OpenAI gpt-image / OpenRouter): "low", "medium", "high", or "auto". Start with the default or requested setting; adjust for observed detail or legibility problems.',
+              description: `Quality level honored by the active provider: ${caps.quality.join(', ')}. Start with the default or requested setting; adjust for observed detail or legibility problems.`,
             }),
           ),
         }
@@ -384,7 +385,7 @@ export function buildImageToolParameters(caps: ImageToolCapabilities): Type.TObj
  * model cannot use.
  */
 export function buildImageGuidelines(caps: ImageToolCapabilities): string[] {
-  const showN = !caps.model || caps.model.nMax > 1;
+  const showN = caps.api !== 'ark' && (!caps.model || caps.model.nMax > 1);
   const guidelines = [
     'Read the `image-gen` skill bundled with this package before using image_generate; it contains the prompt-shaping workflow.',
     'Use image_generate for bitmap assets: photos, illustrations, textures, sprites, product/UI mockups, concept art. Do NOT use it for icons, logos, or diagrams that should match existing repo-native SVG/vector/CSS/canvas assets — edit or write those directly instead.',

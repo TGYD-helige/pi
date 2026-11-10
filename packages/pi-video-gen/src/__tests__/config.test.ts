@@ -202,6 +202,17 @@ describe('config validation & loud project read', () => {
       },
     ],
     [
+      'customProviders.bad.models[0].capabilities.durationValues',
+      {
+        customProviders: {
+          bad: {
+            api: 'ark',
+            models: [{ id: 'm', capabilities: { durations: [4, 8], durationValues: [4, 9] } }],
+          },
+        },
+      },
+    ],
+    [
       'customProviders.bad.models[0].capabilities.durations',
       {
         customProviders: {
@@ -301,6 +312,77 @@ describe('resolveModel', () => {
     );
   });
 
+  it('inherits exact duration choices and selects a valid custom default', () => {
+    const settings = {
+      customProviders: {
+        proxy: {
+          api: 'openrouter' as const,
+          apiKey: 'k',
+          models: [
+            { id: 'google/veo-3.1', alias: 'veo-proxy', capabilities: { durationValues: [4, 6] } },
+          ],
+        },
+      },
+    };
+    const resolved = resolveModel(settings, 'veo-proxy');
+    expect(resolved?.entry.capabilities.durationValues).toEqual([4, 6]);
+    expect(resolved?.entry.defaultDurationSec).toBe(4);
+  });
+
+  it('preserves existing custom duration ranges and defaults without explicit discrete choices', () => {
+    const byRange = resolveModel(
+      {
+        customProviders: {
+          proxy: {
+            api: 'openrouter',
+            models: [
+              { id: 'google/veo-3.1', alias: 'relay', capabilities: { durations: [5, 10] } },
+            ],
+          },
+        },
+      },
+      'relay',
+    );
+    expect(byRange?.entry.capabilities.durationValues).toBeUndefined();
+    expect(byRange?.entry.capabilities.durations).toEqual([5, 10]);
+    const byDefault = resolveModel(
+      {
+        customProviders: {
+          proxy: {
+            api: 'openrouter',
+            models: [{ id: 'google/veo-3.1', alias: 'relay', defaultDurationSec: 5 }],
+          },
+        },
+      },
+      'relay',
+    );
+    expect(byDefault?.entry.defaultDurationSec).toBe(5);
+    expect(byDefault?.entry.capabilities.durationValues).toBeUndefined();
+  });
+
+  it('rejects a custom default excluded by explicit exact duration choices', () => {
+    expect(() =>
+      resolveModel(
+        {
+          customProviders: {
+            proxy: {
+              api: 'openrouter',
+              models: [
+                {
+                  id: 'google/veo-3.1',
+                  alias: 'relay',
+                  capabilities: { durationValues: [4, 6, 8] },
+                  defaultDurationSec: 5,
+                },
+              ],
+            },
+          },
+        },
+        'relay',
+      ),
+    ).toThrow(/defaultDurationSec must be one of 4, 6, 8/);
+  });
+
   it('custom models with unknown ids get conservative capabilities', () => {
     const resolved = resolveModel(
       {
@@ -388,7 +470,7 @@ describe('listModelRegistry', () => {
     expect(info.models.filter((m) => m.provider === 'dashscope').every((m) => !m.keyReady)).toBe(
       true,
     );
-    expect(info.models).toHaveLength(9);
+    expect(info.models).toHaveLength(19);
   });
 
   it('includes custom provider models in the registry view', () => {

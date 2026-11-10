@@ -49,6 +49,7 @@ import {
   runProject,
 } from './project-render.js';
 import { assemblePrompt, validateFilmPrompt, validateShotPrompt } from './prompt.js';
+import { findBuiltInModel } from './providers/models.js';
 import {
   normalizeReferenceAssets,
   referenceAssetPreflightError,
@@ -66,6 +67,7 @@ import type {
   ResolvedModel,
   ShotPrompt,
   VideoGenSettings,
+  VideoModelCapabilities,
   VideoProviderAdapter,
 } from './types.js';
 
@@ -120,7 +122,11 @@ function sha256hex(content: string | Buffer): string {
   return createHash('sha256').update(content).digest('hex');
 }
 
-function specFingerprint(specRaw: string, resolved?: ResolvedModel): string {
+function specFingerprint(
+  specRaw: string,
+  resolved?: ResolvedModel,
+  legacyCapabilities?: VideoModelCapabilities,
+): string {
   if (!resolved) return sha256hex(JSON.stringify({ spec: specRaw, mode: 'local' }));
   return sha256hex(
     JSON.stringify({
@@ -132,10 +138,31 @@ function specFingerprint(specRaw: string, resolved?: ResolvedModel): string {
         resolution: resolved.entry.defaultResolution,
         aspectRatio: resolved.entry.defaultAspectRatio,
         durationSec: resolved.entry.defaultDurationSec,
+        ...(!legacyCapabilities ? { generateAudio: resolved.entry.capabilities.nativeAudio } : {}),
       },
-      capabilities: resolved.entry.capabilities,
+      ...(legacyCapabilities ? { capabilities: legacyCapabilities } : {}),
     }),
   );
+}
+
+// The preceding catalog was part of persisted fingerprints; retain its exact metadata for recovery.
+function previousCatalogCapabilities(resolved: ResolvedModel): VideoModelCapabilities[] {
+  const { durationValues: _unused, ...caps } = resolved.entry.capabilities;
+  switch (findBuiltInModel(resolved.remoteId)?.id ?? resolved.remoteId) {
+    case 'doubao-seedance-2-0-260128':
+      return [{ ...caps, resolutions: caps.resolutions.filter((value) => value !== '4k') }];
+    case 'happyhorse-1.1':
+      return [{ ...caps, resolutions: caps.resolutions.filter((value) => value !== '480P') }];
+    case 'google/veo-3.1': {
+      // Keep explicit custom overrides when reconstructing each changed catalog field (at most 8 candidates).
+      const durationVariants: VideoModelCapabilities[] = [caps, { ...caps, durations: [5, 8] }];
+      return durationVariants
+        .flatMap((value) => [value, { ...value, resolutions: ['720p'] }])
+        .flatMap((value) => [value, { ...value, aspectRatios: ['16:9'] }]);
+    }
+    default:
+      return [];
+  }
 }
 
 function expectedSnapshotKeys(spec: RenderInput, cwd: string): string[] {
@@ -530,14 +557,41 @@ export async function runRender(opts: {
     let manifest = loadRenderJob(jobDir);
     let projectQc: Pick<RenderRunResult, 'qcFrames' | 'qcReportPath'> | undefined;
 
-    if (manifest) {
-      // 3a. resume: verify the whole input fingerprint before trusting anything
-      if (manifest.specFingerprint !== fingerprint) {
+    if (manifest && manifest.specFingerprint !== fingerprint) {
+      const savedFingerprint = manifest.specFingerprint;
+      const oldCaps =
+        generated.length && resolved ? previousCatalogCapabilities(resolved) : undefined;
+      const matchesLegacy =
+        generated.length &&
+        resolved &&
+        (manifest.specFingerprint ===
+          specFingerprint(specRaw, resolved, resolved.entry.capabilities) ||
+          oldCaps?.some((caps) => savedFingerprint === specFingerprint(specRaw, resolved, caps)));
+      if (!matchesLegacy) {
         throw new VideoGenError(
           'render-input.json or the model/provider config changed since this job was created. Revisions require a NEW job directory (rerunning the same path only resumes identical input).',
           'render: spec drift',
         );
       }
+      manifest.specFingerprint = fingerprint;
+      saveRenderJob(jobDir, manifest);
+    }
+    for (const shot of generated) {
+      const state = manifest?.shots[shot.id];
+      const duration = shot.durationSec ?? resolved!.entry.defaultDurationSec;
+      if (
+        caps!.durationValues &&
+        !caps!.durationValues.includes(duration) &&
+        !state?.handle &&
+        state?.state !== 'done'
+      ) {
+        throw new VideoGenError(
+          `Shot "${shot.id}" durationSec must be one of ${caps!.durationValues.join(', ')}s for ${resolved!.entry.id}.`,
+          'render: bad duration',
+        );
+      }
+    }
+    if (manifest) {
       const expectedShotIds = spec.shots.map((shot) => shot.id);
       if (!sameKeys(Object.keys(manifest.shots), expectedShotIds)) {
         throw new VideoGenError(

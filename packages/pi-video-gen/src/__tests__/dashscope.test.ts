@@ -33,6 +33,90 @@ describe('dashscopeAdapter.submit', () => {
     writeFileSync(join(suiteDir, 'frame.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
   });
 
+  it.each([
+    'wan3.0-video',
+    'wan3.0-video-prime',
+    'wan-3.0',
+    'WAN-3.0-PRIME',
+  ])('submits %s with unchanged ID, first/last media and audio control', async (model) => {
+    let body: Record<string, any> = {};
+    const handle = await dashscopeAdapter.submit(
+      provider,
+      model,
+      {
+        prompt: 'waves',
+        firstFramePath: join(suiteDir, 'frame.png'),
+        lastFramePath: join(suiteDir, 'frame.png'),
+        durationSec: 30,
+        resolution: '480P',
+        aspectRatio: '16:9',
+        generateAudio: false,
+      },
+      mockFetch((_url, init) => {
+        body = JSON.parse(String(init?.body));
+        return jsonResponse(200, { output: { task_id: 'wan-1' } });
+      }),
+    );
+    expect(handle.taskId).toBe('wan-1');
+    expect(body.model).toBe(model);
+    expect(body.input.media.map((m: { type: string }) => m.type)).toEqual([
+      'first_frame',
+      'last_frame',
+    ]);
+    expect(body.parameters).toEqual({
+      watermark: false,
+      duration: 30,
+      resolution: '480P',
+      ratio: '16:9',
+      audio: false,
+    });
+  });
+
+  it.each([
+    false,
+    true,
+  ])('Wan text/reference mode keeps one model ID (reference=%s)', async (references) => {
+    let body: Record<string, any> = {};
+    await dashscopeAdapter.submit(
+      provider,
+      'wan3.0-video',
+      {
+        prompt: 'waves',
+        referenceImagePaths: references ? [join(suiteDir, 'frame.png')] : [],
+        generateAudio: true,
+      },
+      mockFetch((_url, init) => {
+        body = JSON.parse(String(init?.body));
+        return jsonResponse(200, { output: { task_id: 'wan-ref' } });
+      }),
+    );
+    expect(body.model).toBe('wan3.0-video');
+    expect(body.input.media?.[0]?.type).toBe(references ? 'reference_image' : undefined);
+    expect(body.parameters.audio).toBe(true);
+  });
+
+  it('rejects invalid Wan frame combinations before submission', async () => {
+    const fetchImpl = mockFetch(() => {
+      throw new Error('must not submit');
+    });
+    await expect(
+      dashscopeAdapter.submit(
+        provider,
+        'wan3.0-video',
+        { prompt: 'waves', lastFramePath: 'last.png' },
+        fetchImpl,
+      ),
+    ).rejects.toThrow(/requires a first frame/);
+    await expect(
+      dashscopeAdapter.submit(
+        provider,
+        'wan3.0-video',
+        { prompt: 'waves', firstFramePath: 'first.png', referenceImagePaths: ['ref.png'] },
+        fetchImpl,
+      ),
+    ).rejects.toThrow(/not both/);
+  });
+
   it('t2v: no media, structured parameters, async header', async () => {
     let seen:
       | { url: string; headers: Record<string, string>; body: Record<string, never> }

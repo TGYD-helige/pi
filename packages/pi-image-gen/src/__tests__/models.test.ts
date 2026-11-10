@@ -2,6 +2,34 @@ import { describe, expect, it } from 'vitest';
 import { BUILT_IN_MODELS, findBuiltInModel } from '../models.js';
 
 describe('BUILT_IN_MODELS registry', () => {
+  it('resolves new image models and their documented reference limits', () => {
+    for (const [id, alias, provider, references] of [
+      ['gpt-image-2.6-flare', 'gpt-image-2.6', 'openai', 16],
+      ['gpt-image-2.6-sunburst', 'gpt-image-2.6-sunburst', 'openai', 16],
+      ['gemini-nano-banana-2.1', 'nano-banana-2.1', 'gemini', 14],
+      ['qwen-image-2.1-pro', 'qwen-image-2.1-pro', 'dashscope', 10],
+      ['qwen-image-2.1-turbo', 'qwen-image-2.1-turbo', 'dashscope', 10],
+      ['doubao-seedream-5-0-flash-260915', 'seedream-5-flash', 'ark', 10],
+    ] as const) {
+      const entry = findBuiltInModel(alias);
+      expect(entry?.id, alias).toBe(id);
+      expect(entry?.provider, id).toBe(provider);
+      expect(entry?.capabilities?.maxReferenceImages, id).toBe(references);
+    }
+    expect(findBuiltInModel('nano-banana-2.1')?.capabilities?.imageSizes).toEqual([
+      '1K',
+      '2K',
+      '4K',
+    ]);
+  });
+
+  it('routes the supplied Seedream 5.5 ID without claiming unverified model limits', () => {
+    const entry = findBuiltInModel('seedream-5.5');
+    expect(entry?.id).toBe('seedream-5.5');
+    expect(entry?.provider).toBe('ark');
+    expect(entry?.capabilities).toBeUndefined();
+  });
+
   it('has unique ids and no alias collisions across the id/alias namespace', () => {
     const seen = new Map<string, string>();
     for (const entry of BUILT_IN_MODELS) {
@@ -13,14 +41,16 @@ describe('BUILT_IN_MODELS registry', () => {
     }
   });
 
-  it('every entry declares a capability contract', () => {
+  it('verified entries declare a capability contract', () => {
     for (const entry of BUILT_IN_MODELS) {
+      if (entry.id === 'seedream-5.5') continue;
       expect(entry.capabilities, `${entry.id} is missing capabilities`).toBeDefined();
     }
   });
 
   it('capability contracts are internally sane', () => {
     for (const entry of BUILT_IN_MODELS) {
+      if (entry.id === 'seedream-5.5') continue;
       const caps = entry.capabilities!;
       expect(caps.nMax, entry.id).toBeGreaterThanOrEqual(1);
       expect(caps.maxReferenceImages, entry.id).toBeGreaterThanOrEqual(0);

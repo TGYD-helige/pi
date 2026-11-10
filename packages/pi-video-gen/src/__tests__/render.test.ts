@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
@@ -122,6 +123,151 @@ describe('runRender', () => {
     mkdirSync(cwd, { recursive: true });
     calls = { submit: 0, download: 0, params: [] };
     concatCalls = { inputs: [] };
+  });
+
+  it('rejects a later unsupported Veo duration before any paid shot submits', async () => {
+    const frame = makeFrame(cwd, 'first.png');
+    const jobDir = makeJob(cwd, {
+      shots: [
+        {
+          id: 'valid',
+          firstFramePath: frame,
+          durationSec: 8,
+          prompt: { visuals: 'wide shot', action: 'waves' },
+        },
+        {
+          id: 'invalid',
+          firstFramePath: frame,
+          durationSec: 5,
+          prompt: { visuals: 'wide shot', action: 'waves' },
+        },
+      ],
+    });
+    const resolved = resolveModel({
+      defaultModel: 'veo-3.1',
+      providers: { openrouter: { apiKey: 'k' } },
+    })!;
+    await expect(
+      runRender({
+        renderSpecPath: join(jobDir, 'render-input.json'),
+        ...baseOpts(cwd, mockAdapter(calls), concatCalls, resolved),
+      }),
+    ).rejects.toThrow(/4, 6, 8/);
+    expect(calls.submit).toBe(0);
+  });
+
+  it.each([
+    ['seedance-2.0', 8],
+    ['happyhorse-1.1', 8],
+    ['veo-3.1', 8],
+    ['veo-3.1', 5],
+    ['veo-3.1', 7],
+    ['veo-3.1', 5, true],
+    ['veo-3.1', 5, false, true],
+  ] as const)('resumes paid jobs saved before the %s capability update (%ss)', async (model, duration, customRange: boolean = false, remoteAlias: boolean = false) => {
+    const frame = makeFrame(cwd, 'legacy.png');
+    const spec = {
+      shots: [
+        {
+          id: 'paid',
+          firstFramePath: frame,
+          durationSec: duration,
+          prompt: { visuals: 'wide shot', action: 'waves' },
+        },
+      ],
+    };
+    const jobDir = makeJob(cwd, spec);
+    const resolved = resolveModel(
+      customRange || remoteAlias
+        ? {
+            defaultModel: 'relay',
+            customProviders: {
+              relay: {
+                api: 'openrouter',
+                apiKey: 'k',
+                models: [
+                  {
+                    id: remoteAlias ? 'VeO-3.1' : 'google/veo-3.1',
+                    alias: 'relay',
+                    capabilities: { durations: customRange ? [5, 10] : [5, 8] },
+                    defaultDurationSec: 5,
+                  },
+                ],
+              },
+            },
+          }
+        : {
+            defaultModel: model,
+            providers: {
+              ark: { apiKey: 'k' },
+              dashscope: { apiKey: 'k' },
+              openrouter: { apiKey: 'k' },
+            },
+          },
+    )!;
+    const opts = baseOpts(cwd, mockAdapter(calls), concatCalls, resolved);
+    const initialResolved =
+      model === 'veo-3.1'
+        ? {
+            ...resolved,
+            entry: {
+              ...resolved.entry,
+              capabilities: {
+                ...resolved.entry.capabilities,
+                durationValues: undefined,
+                durations: (customRange ? [5, 10] : [5, 8]) as [number, number],
+              },
+            },
+          }
+        : resolved;
+    await expect(
+      runRender({
+        renderSpecPath: join(jobDir, 'render-input.json'),
+        ...baseOpts(cwd, mockAdapter(calls), concatCalls, initialResolved),
+        concatImpl: (async () => {
+          throw new CancelledError();
+        }) as never,
+      }),
+    ).rejects.toThrow();
+    expect(calls.submit).toBe(1);
+    const manifest = loadRenderJob(jobDir)!;
+    const { durationValues: _unused, ...capabilities } = resolved.entry.capabilities;
+    if (model === 'seedance-2.0') capabilities.resolutions = ['480p', '720p', '1080p'];
+    if (model === 'happyhorse-1.1') capabilities.resolutions = ['720P', '1080P'];
+    if (model === 'veo-3.1') {
+      capabilities.durations = customRange ? [5, 10] : [5, 8];
+      capabilities.resolutions = ['720p'];
+      capabilities.aspectRatios = ['16:9'];
+    }
+    // Persisted fingerprint format from the previous release, including advisory capabilities.
+    manifest.specFingerprint = createHash('sha256')
+      .update(
+        JSON.stringify({
+          spec: JSON.stringify(spec),
+          model: resolved.remoteId,
+          provider: resolved.provider.style,
+          baseUrl: resolved.provider.baseUrl,
+          defaults: {
+            resolution: resolved.entry.defaultResolution,
+            aspectRatio: resolved.entry.defaultAspectRatio,
+            durationSec: resolved.entry.defaultDurationSec,
+          },
+          capabilities,
+        }),
+      )
+      .digest('hex');
+    saveRenderJob(jobDir, manifest);
+    await runRender({ renderSpecPath: join(jobDir, 'render-input.json'), ...opts });
+    expect(calls.submit).toBe(1);
+    expect(concatCalls.inputs).toHaveLength(1);
+    writeFileSync(
+      join(jobDir, 'render-input.json'),
+      JSON.stringify({ shots: [{ ...spec.shots[0], durationSec: 6 }] }),
+    );
+    await expect(
+      runRender({ renderSpecPath: join(jobDir, 'render-input.json'), ...opts }),
+    ).rejects.toThrow(/config changed/);
+    expect(calls.submit).toBe(1);
   });
 
   it('uses local shots without a model and reuses a verified final video', async () => {

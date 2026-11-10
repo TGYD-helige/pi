@@ -2,12 +2,39 @@ import { describe, expect, it } from 'vitest';
 import { BUILT_IN_VIDEO_MODELS, findBuiltInModel } from '../providers/models.js';
 
 describe('model registry', () => {
+  it('resolves the current video releases with provider-specific defaults', () => {
+    for (const [alias, id, provider, resolution, maxDuration] of [
+      ['seedance-2.5', 'doubao-seedance-2-5-260628', 'ark', '720p', 30],
+      ['minimax-h3-highspeed', 'MiniMax-H3-Highspeed', 'minimax', '768P', 15],
+      ['minimax-h3-lite', 'MiniMax-H3-Lite', 'minimax', '768P', 15],
+      ['minimax-h3-max', 'MiniMax-H3-Max', 'minimax', '768P', 15],
+      ['veo-3.1-fast', 'google/veo-3.1-fast', 'openrouter', '720p', 8],
+      ['veo-3.1-lite', 'google/veo-3.1-lite', 'openrouter', '720p', 8],
+      ['gemini-omni-1.1-flash', 'google/gemini-omni-1.1-flash', 'openrouter', '720p', 10],
+      ['gemini-omni-1.2-flash', 'google/gemini-omni-1.2-flash', 'openrouter', '720p', 15],
+      ['wan-3.0', 'wan3.0-video', 'dashscope', '1080P', 30],
+      ['wan-3.0-prime', 'wan3.0-video-prime', 'dashscope', '1080P', 30],
+    ] as const) {
+      const model = findBuiltInModel(alias);
+      expect(model?.id, alias).toBe(id);
+      expect(model?.provider).toBe(provider);
+      expect(model?.defaultResolution).toBe(resolution);
+      expect(model?.capabilities.durations[1]).toBe(maxDuration);
+    }
+    expect(findBuiltInModel('seedance-2.5')?.capabilities.maxReferenceImages).toBe(30);
+    expect(findBuiltInModel('seedance-2.5')?.capabilities.maxReferenceVideos).toBe(10);
+    expect(findBuiltInModel('minimax-h3-max')?.capabilities.durations).toEqual([5, 15]);
+    expect(findBuiltInModel('happyhorse-1.1')?.capabilities.resolutions).toContain('480P');
+    expect(findBuiltInModel('seedance-2.0')?.capabilities.resolutions).toContain('4k');
+  });
+
   it('contains only smoke-testable models (no placeholders)', () => {
     expect(BUILT_IN_VIDEO_MODELS.length).toBeGreaterThanOrEqual(9);
     for (const m of BUILT_IN_VIDEO_MODELS) {
       expect(['ark', 'dashscope', 'kling', 'openrouter', 'minimax']).toContain(m.provider);
       expect(
-        m.id.startsWith('doubao-seedance-2-0-') ||
+        m.id.startsWith('doubao-seedance-') ||
+          m.id.startsWith('wan3.0-') ||
           m.id.startsWith('happyhorse-') ||
           m.id.startsWith('kling-') ||
           m.id.startsWith('google/') ||
@@ -59,13 +86,13 @@ describe('model registry', () => {
     }
   });
 
-  it('veo entry: openrouter provider, audio + flf, 5-8s', () => {
+  it('veo entry: openrouter provider, audio + flf, 4-8s', () => {
     const veo = findBuiltInModel('veo-3.1')!;
     expect(veo.id).toBe('google/veo-3.1');
     expect(veo.provider).toBe('openrouter');
     expect(veo.capabilities.nativeAudio).toBe(true);
     expect(veo.capabilities.supportsFirstLastFrame).toBe(true);
-    expect(veo.capabilities.durations).toEqual([5, 8]);
+    expect(veo.capabilities.durations).toEqual([4, 8]);
   });
 
   it('kling entries: turbo silent, omni audio-capable', () => {
@@ -117,7 +144,7 @@ describe('model registry', () => {
   });
 
   it('returns undefined for unknown ids', () => {
-    expect(findBuiltInModel('seedance-2.5')).toBeUndefined();
+    expect(findBuiltInModel('nonexistent-video-99')).toBeUndefined();
     expect(findBuiltInModel('')).toBeUndefined();
   });
 });

@@ -173,6 +173,38 @@ describe('resolveImageToolCapabilities', () => {
     vi.unstubAllEnvs();
   });
 
+  it('offers extended quality for GPT Image 2.5 and 2.6 without changing older or custom models', () => {
+    vi.stubEnv('OPENAI_API_KEY', 'sk-test');
+    vi.stubEnv('OPENROUTER_API_KEY', 'or-test');
+    for (const defaultModel of [
+      'gpt-image-2.5',
+      'gpt-image-2.6',
+      'openrouter/openai/gpt-image-2.6-sunburst',
+    ]) {
+      const c = resolveImageToolCapabilities({ defaultModel });
+      expect(c.quality).toEqual(['low', 'medium', 'high', 'auto', 'xhigh', 'max']);
+      const props = buildImageToolParameters(c).properties as Record<string, { enum?: unknown[] }>;
+      expect(props.quality?.enum).toContain('max');
+    }
+    expect(resolveImageToolCapabilities({ defaultModel: 'gpt-image-2' }).quality).toEqual([
+      'low',
+      'medium',
+      'high',
+      'auto',
+    ]);
+  });
+
+  it('keeps unsupported knobs hidden for Seedream 5.5 with unknown model limits', () => {
+    vi.stubEnv('ARK_API_KEY', 'test-key');
+    const c = resolveImageToolCapabilities({ defaultModel: 'seedream-5.5' });
+    expect(c.api).toBe('ark');
+    expect(c.model).toBeNull();
+    expect(buildImageGuidelines(c).join(' ')).not.toContain('`n`');
+    const props = buildImageToolParameters(c).properties;
+    expect(props).not.toHaveProperty('n');
+    expect(props).not.toHaveProperty('quality');
+  });
+
   it('exposes the quality enum for the built-in openai provider', () => {
     vi.stubEnv('OPENAI_API_KEY', 'sk-test');
     const c = resolveImageToolCapabilities({ defaultModel: 'gpt-image-2' });
@@ -316,7 +348,7 @@ describe('buildImageToolParameters', () => {
     ];
     for (const c of cases) {
       const props = buildImageToolParameters(c).properties as Record<string, unknown>;
-      for (const key of ['prompt', 'image', 'n', 'size', 'filename', 'outputDir']) {
+      for (const key of ['prompt', 'image', 'size', 'filename', 'outputDir']) {
         expect(props).toHaveProperty(key);
       }
     }
@@ -639,7 +671,8 @@ describe('buildImageGuidelines', () => {
     for (const c of cases) {
       const text = buildImageGuidelines(c).join('\n');
       expect(text).toMatch(/icon|logo|svg/i);
-      expect(text).toMatch(/\bn\b/);
+      if (c.api === 'ark') expect(text).not.toContain('`n`');
+      else expect(text).toContain('`n`');
     }
   });
 
