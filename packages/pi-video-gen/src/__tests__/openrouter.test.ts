@@ -33,24 +33,18 @@ describe('openrouterAdapter.submit', () => {
     writeFileSync(join(suiteDir, 'frame.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
   });
 
-  it.each([
-    'google/veo-3.1',
-    'google/veo-3.1-fast',
-    'google/veo-3.1-lite',
-  ])('rejects unsupported discrete durations for %s before a paid submit', async (model) => {
-    let called = false;
-    await expect(
-      openrouterAdapter.submit(
-        provider,
-        model,
-        { prompt: 'waves', durationSec: 5 },
-        mockFetch(() => {
-          called = true;
-          return jsonResponse(202, { id: 'unexpected' });
-        }),
-      ),
-    ).rejects.toThrow(/4, 6, or 8/);
-    expect(called).toBe(false);
+  it('honors caller-validated duration overrides without reloading built-in capabilities', async () => {
+    let body: Record<string, unknown> = {};
+    await openrouterAdapter.submit(
+      provider,
+      'google/veo-3.1',
+      { prompt: 'waves', durationSec: 5 },
+      mockFetch((_url, init) => {
+        body = JSON.parse(String(init?.body));
+        return jsonResponse(202, { id: 'relay-veo' });
+      }),
+    );
+    expect(body.duration).toBe(5);
   });
 
   it.each([

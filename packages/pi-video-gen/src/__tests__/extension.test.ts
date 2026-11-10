@@ -535,6 +535,59 @@ describe('pi-video-gen extension', () => {
     }
   });
 
+  it('submits custom Veo duration overrides through the resolved provider', async () => {
+    mkdirSync(join(home, '.pi', 'agent'), { recursive: true });
+    writeFileSync(
+      join(home, '.pi', 'agent', 'settings.json'),
+      JSON.stringify({
+        'pi-video-gen': {
+          defaultModel: 'relay-veo',
+          customProviders: {
+            relay: {
+              api: 'openrouter',
+              apiKey: 'k',
+              models: [
+                {
+                  id: 'google/veo-3.1',
+                  alias: 'relay-veo',
+                  capabilities: { durationValues: [5] },
+                  defaultDurationSec: 5,
+                },
+              ],
+            },
+          },
+        },
+      }),
+    );
+    await startSession(cwd);
+    let submitted: Record<string, unknown> | undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url, init) => {
+        if (init?.method === 'POST') {
+          submitted = JSON.parse(String(init.body));
+          return new Response(JSON.stringify({ id: 'relay-task' }), { status: 202 });
+        }
+        return new Response(JSON.stringify({ status: 'failed', error: 'fixture finished' }));
+      }),
+    );
+    try {
+      const tool = tools.get('video_generate')!;
+      expect(tool.parameters.properties?.durationSec).toHaveProperty('enum', [5]);
+      await tool.execute(
+        'custom-duration',
+        { ...VALID_GENERATE_PARAMS, durationSec: 5 },
+        undefined,
+        undefined,
+        fakeCtx(cwd),
+      );
+      expect(submitted?.model).toBe('google/veo-3.1');
+      expect(submitted?.duration).toBe(5);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('advertises and validates the exact Veo duration choices before network calls', async () => {
     mkdirSync(join(home, '.pi', 'agent'), { recursive: true });
     writeFileSync(

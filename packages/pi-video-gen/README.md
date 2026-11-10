@@ -194,6 +194,8 @@ For source-based product demonstrations, see [component integration](skills/vide
 └── final_video.mp4      # default concat mode; assembly modes return assembly/final_video.mp4
 ```
 
+Existing Seedance 2.0, HappyHorse 1.1 and Veo 3.1 render jobs remain resumable after this catalog upgrade. Rerun the same spec path with the same provider, defaults and input files; changing the model, endpoint, prompt, duration or native-audio default still requires a new job directory.
+
 Crash or cancel mid-render? Rerun the same spec path — generated-shot handles resume via `inspect` without re-billing, and local shots are checked against frozen content hashes. Completed jobs verify their final MP4 and QC hashes instead of recomposing. All-local jobs omit the model/provider from their fingerprint and need no API key. A legacy `done` render manifest without a saved final SHA-256 cannot verify its old film; create a new compose job from the saved clips. Cancelling stops local polling only; remote tasks may keep running and billable. If submit completion is ambiguous, use `/video-gen recover <jobId>` after checking the provider console.
 
 **Upgrading from the pre-structured format**: render jobs whose `render-input.json` still uses the old `videoPrompt` string can no longer be parsed or resumed (the structured `prompt` object replaced it deliberately, with no compatibility layer). If an in-flight paid task is stranded by the upgrade, download its clip manually from the provider console — task URLs expire (Ark: 24h). Single-clip jobs are unaffected: their frozen `input.json` is read, not re-parsed.
