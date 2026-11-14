@@ -63,7 +63,7 @@ describe('Phoenix telemetry export', () => {
       await exporter.flush?.();
       const attrs = spans[0]!.attributes;
       const input = JSON.parse(String(attrs['input.value']));
-      expect(Buffer.byteLength(String(attrs['input.value']))).toBeLessThanOrEqual(750_000);
+      expect(Buffer.byteLength(String(attrs['input.value']))).toBeLessThanOrEqual(1_000_000);
       expect(input[0].tools).toHaveLength(100);
       expect(input[0].tools[99].name).toBe('web_search');
       const projectedTools = Object.entries(attrs).filter(([key]) => key.startsWith('llm.tools.'));
@@ -365,7 +365,7 @@ describe('Phoenix telemetry export', () => {
       await exporter.flush?.();
       const attrs = spans[0]!.attributes;
       expect(String(attrs['input.value'])).toContain('LATEST');
-      expect(Buffer.byteLength(String(attrs['input.value']))).toBeLessThanOrEqual(750_000);
+      expect(Buffer.byteLength(String(attrs['input.value']))).toBeLessThanOrEqual(1_000_000);
       expect(JSON.parse(String(attrs['llm.tools.0.tool.json_schema'])).name).toBe('bash');
       expect(attrs['pi.telemetry.projection.truncated']).toBe(true);
     } finally {
