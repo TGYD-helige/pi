@@ -28,7 +28,7 @@ import {
   type SpanExporter,
   type SpanProcessor,
 } from '@opentelemetry/sdk-trace-base';
-import { stringList } from '../config.js';
+import { resolvePayloadLimits, stringList } from '../config.js';
 import type {
   RuntimeEventExporter,
   RuntimeLlmStreamEvent,
@@ -735,7 +735,7 @@ export class OtelRuntimeEventExporter implements RuntimeEventExporter {
             : JSON.stringify(value);
       }
     }
-    return toOtelAttributes(enriched);
+    return toOtelAttributes(enriched, this.config);
   }
 }
 
@@ -924,6 +924,7 @@ function buildTracerProvider(
 function normalizeExporterConfig(config: OtelExporterConfig): OtelExporterConfig {
   return {
     ...config,
+    ...resolvePayloadLimits(config),
     tags: stringList(config.tags),
     redactFields: stringList(config.redactFields),
     includePayloads: config.includePayloads === true,
@@ -1022,10 +1023,10 @@ async function waitForExport(operation: Promise<void>): Promise<boolean> {
 // OTEL attribute values are scalar (or homogeneous string arrays); objects
 // flatten to JSON strings, exactly like the previous hand-rolled serializer.
 // Strings are truncated at set time, so no byte accounting happens later.
-function toOtelAttributes(json: JsonObject): Attributes {
+function toOtelAttributes(json: JsonObject, config: OtelExporterConfig): Attributes {
   const attributes: Attributes = {};
   for (const [key, value] of Object.entries(json)) {
-    const converted = toOtelAttributeValue(value);
+    const converted = toOtelAttributeValue(value, config);
     if (converted !== undefined) {
       attributes[key] = converted;
     }
@@ -1033,7 +1034,10 @@ function toOtelAttributes(json: JsonObject): Attributes {
   return attributes;
 }
 
-function toOtelAttributeValue(value: JsonValue | undefined): AttributeValue | undefined {
+function toOtelAttributeValue(
+  value: JsonValue | undefined,
+  config: OtelExporterConfig,
+): AttributeValue | undefined {
   if (value === undefined) {
     return undefined;
   }
@@ -1044,12 +1048,16 @@ function toOtelAttributeValue(value: JsonValue | undefined): AttributeValue | un
     return value;
   }
   if (typeof value === 'string') {
-    return truncateAttributePayload(value);
+    return truncateAttributePayload(value, config.maxAttributeBytes, config.previewBytes);
   }
   // Real string arrays (e.g. langfuse.trace.tags) instead of a
   // JSON-stringified blob Langfuse cannot map.
   if (Array.isArray(value) && value.every((item) => typeof item === 'string')) {
     return value;
   }
-  return truncateAttributePayload(JSON.stringify(value));
+  return truncateAttributePayload(
+    JSON.stringify(value),
+    config.maxAttributeBytes,
+    config.previewBytes,
+  );
 }

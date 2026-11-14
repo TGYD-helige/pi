@@ -8,6 +8,35 @@ import { resolveOtelExporterConfig, resolvePhoenixExporterConfig } from '../otel
 import { parseBoolean } from '../parse.js';
 
 describe('config', () => {
+  it('resolves payload limits consistently for every backend', () => {
+    for (const resolve of [
+      resolveLangfuseExporterConfig,
+      resolveOtelExporterConfig,
+      resolvePhoenixExporterConfig,
+    ]) {
+      expect(resolve({})).toMatchObject({ maxAttributeBytes: 1_000_000, previewBytes: 256_000 });
+      expect(resolve({ maxAttributeBytes: 2_000_000, previewBytes: 512_000 })).toMatchObject({
+        maxAttributeBytes: 2_000_000,
+        previewBytes: 512_000,
+      });
+      expect(
+        resolve(JSON.parse('{"maxAttributeBytes":"2000000","previewBytes":"512000"}')),
+      ).toMatchObject({
+        maxAttributeBytes: 2_000_000,
+        previewBytes: 512_000,
+      });
+      for (const invalid of [-1, 1.5, NaN, Infinity, Number.MAX_VALUE]) {
+        expect(resolve({ previewBytes: invalid })).toMatchObject({ previewBytes: 256_000 });
+      }
+      for (const invalid of [0, -1, 1.5, 127, NaN, Infinity, Number.MAX_VALUE]) {
+        expect(resolve({ maxAttributeBytes: invalid, previewBytes: 0 })).toMatchObject({
+          maxAttributeBytes: 1_000_000,
+          previewBytes: 256_000,
+        });
+      }
+    }
+  });
+
   it('bounds examined tag candidates and stops after retaining the supported tags', () => {
     const readLate = vi.fn(() => 'late');
     const tags = Array.from({ length: 10_000 }, (_, index) => `tag-${index}`);

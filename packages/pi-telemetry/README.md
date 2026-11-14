@@ -57,6 +57,8 @@ Configuration is read from the `"pi-telemetry"` section of, in increasing priori
     "serviceName": "my-service",
     "serviceVersion": "1.0.0",
     "includePayloads": true,
+    "maxAttributeBytes": 1000000,
+    "previewBytes": 256000,
     "mediaUploadEnabled": false,
     "userId": "developer-id",
     "environment": "development",
@@ -95,6 +97,8 @@ Configuration is read from the `"pi-telemetry"` section of, in increasing priori
 | `serviceName` | `string` | `"pi-server"` | Service name for traces |
 | `serviceVersion` | `string` | — | Service version for traces |
 | `includePayloads` | `boolean` | `false` | Include chat payloads, tool args and model I/O |
+| `maxAttributeBytes` | `number` | `1000000` | Maximum UTF-8 bytes per exported attribute; integer of at least 128 bytes |
+| `previewBytes` | `number` | `256000` | Maximum UTF-8 bytes of the JSON prefix retained when a structured attribute exceeds `maxAttributeBytes`; positive integer |
 | `mediaUploadEnabled` | `boolean` | `false` | Upload prompt/tool images to Langfuse; also requires `includePayloads: true` |
 | `userId` | `string` | — | Standard trace user identifier |
 | `environment` | `string` | — | Langfuse environment label, e.g. `development` or `production` |
@@ -102,6 +106,8 @@ Configuration is read from the `"pi-telemetry"` section of, in increasing priori
 | `tags` | `string[]` | `[]` | Additional trace tags in Langfuse and Phoenix; up to 32 unique trimmed entries of 128 characters, examining the first 256 candidates (strings over 4096 characters are ignored) |
 | `traceName` | `string` | `"chat-turn"` | Langfuse trace and Phoenix root display name, bounded to 90 characters |
 | `redactFields` | `string[]` | `[]` | Case-insensitive field names to mask in captured payloads, JSON-encoded payloads and custom metadata; same list limits as tags |
+
+These limits apply to Langfuse, Phoenix and generic OTLP exports and to programmatic exporter options. Numeric strings from settings interpolation are accepted; invalid values fall back to the defaults. Structured attributes over the cap become `{ "truncated": true, "originalBytes": ..., "preview": "..." }`. The preview may be shorter than `previewBytes` so its JSON escaping and wrapper also fit inside `maxAttributeBytes`. Plain text retains a prefix and a truncation marker. Increasing these limits increases memory and export request sizes; your collector or backend may reject large batches. Conversation display, stream capture and media retain their separate limits.
 
 ### Langfuse Config
 

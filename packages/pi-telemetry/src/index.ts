@@ -58,6 +58,8 @@ export type RuntimeTelemetryOptions = {
   serviceName?: string | undefined;
   serviceVersion?: string | undefined;
   includePayloads?: boolean;
+  maxAttributeBytes?: number;
+  previewBytes?: number;
   mediaUploadEnabled?: boolean;
   userId?: string;
   environment?: string;
