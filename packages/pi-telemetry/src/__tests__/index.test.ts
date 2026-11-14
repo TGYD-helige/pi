@@ -1384,6 +1384,125 @@ describe('telemetry', () => {
     expect(serialized).not.toContain('world');
   });
 
+  it.each([
+    {
+      name: 'default below 1 MB',
+      config: {},
+      content: 'x'.repeat(999_986),
+      truncated: false,
+      cap: 1_000_000,
+      preview: 256_000,
+    },
+    {
+      name: 'one byte above the default cap',
+      config: {},
+      content: 'x'.repeat(999_987),
+      truncated: true,
+      cap: 1_000_000,
+      preview: 256_000,
+    },
+    {
+      name: 'default 256 KB preview',
+      config: {},
+      content: '你'.repeat(400_000),
+      truncated: true,
+      cap: 1_000_000,
+      preview: 256_000,
+    },
+    {
+      name: 'larger configured cap',
+      config: { maxAttributeBytes: 2_000_000 },
+      content: '你'.repeat(400_000),
+      truncated: false,
+      cap: 2_000_000,
+      preview: 256_000,
+    },
+    {
+      name: 'configured UTF-8 preview',
+      config: { maxAttributeBytes: 1024, previewBytes: 256 },
+      content: '你'.repeat(1000),
+      truncated: true,
+      cap: 1024,
+      preview: 256,
+    },
+    {
+      name: 'invalid direct exporter options use defaults',
+      config: { maxAttributeBytes: 0, previewBytes: -1 },
+      content: '你'.repeat(400_000),
+      truncated: true,
+      cap: 1_000_000,
+      preview: 256_000,
+    },
+    {
+      name: 'escaped preview fits its wrapper',
+      config: { maxAttributeBytes: 128, previewBytes: 4096 },
+      content: '"\\\n'.repeat(1000),
+      truncated: true,
+      cap: 128,
+      preview: 4096,
+    },
+  ])('exports payload limits: $name', async ({ config, content, truncated, cap, preview }) => {
+    const { exporter, inMemory } = makeExporter(config);
+    const event = {
+      traceId,
+      sessionId: 'session-1',
+      conversationId: 'session-1',
+      llmGenerationId: 'limits',
+      model: { provider: 'fixture', model: 'fixture' },
+    };
+    const input = { content };
+    await exporter.publish({
+      ...event,
+      id: 'limits-start',
+      status: 'started',
+      createdAt: '2026-05-02T00:00:00.000Z',
+      input,
+    });
+    await exporter.publish({
+      ...event,
+      id: 'limits-end',
+      status: 'completed',
+      createdAt: '2026-05-02T00:00:01.000Z',
+      output: 'done',
+    });
+    const [span] = inMemory.getFinishedSpans() as [ReadableSpan];
+    const encoded = String(span.attributes['langfuse.observation.input']);
+    expect(span.attributes['input.value']).toBe(encoded);
+    expect(Buffer.byteLength(encoded)).toBeLessThanOrEqual(cap);
+    const captured = JSON.parse(encoded);
+    if (truncated) {
+      expect(captured).toMatchObject({
+        truncated: true,
+        originalBytes: Buffer.byteLength(JSON.stringify(input)),
+      });
+      expect(Buffer.byteLength(captured.preview)).toBeLessThanOrEqual(preview);
+      expect(captured.preview).not.toContain('�');
+      if (preview < cap / 2)
+        expect(Buffer.byteLength(captured.preview)).toBeGreaterThanOrEqual(preview - 3);
+    } else {
+      expect(captured).toEqual(input);
+    }
+    await exporter.close();
+  });
+
+  it('uses the configured cap when redacting JSON embedded in payload strings', async () => {
+    const { exporter, inMemory } = makeExporter({
+      maxAttributeBytes: 2_000_000,
+      redactFields: ['password'],
+    });
+    await exporter.publish({
+      ...completedTurnEvent('embedded-json'),
+      details: {
+        payload: JSON.stringify({ password: 'private-value', content: 'x'.repeat(1_100_000) }),
+      },
+    });
+    const [span] = inMemory.getFinishedSpans() as [ReadableSpan];
+    const payload = JSON.parse(JSON.parse(String(span.attributes.details)).payload);
+    expect(payload.password).toBe('[redacted]');
+    expect(payload.content.length).toBe(1_100_000);
+    await exporter.close();
+  });
+
   it('truncates oversized attribute values at set time', async () => {
     const { exporter, inMemory } = makeExporter();
 

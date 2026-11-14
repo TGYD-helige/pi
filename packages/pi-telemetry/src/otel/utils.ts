@@ -6,7 +6,7 @@ import type {
   RuntimeTelemetryOptions,
 } from '../index.js';
 import { captureProviderHeaders, isInlineImage } from '../observations.js';
-import { MAX_ATTRIBUTE_VALUE_BYTES } from './types.js';
+import { DEFAULT_PREVIEW_BYTES, MAX_ATTRIBUTE_VALUE_BYTES } from './types.js';
 
 export function utf8Prefix(value: string, maxBytes: number): string {
   const bytes = Buffer.from(value.slice(0, maxBytes + 1), 'utf8');
@@ -17,27 +17,39 @@ export function utf8Prefix(value: string, maxBytes: number): string {
   return bytes.subarray(0, end).toString('utf8');
 }
 
-export function truncateAttributePayload(value: string): string {
+export function truncateAttributePayload(
+  value: string,
+  maxBytes = MAX_ATTRIBUTE_VALUE_BYTES,
+  previewBytes = DEFAULT_PREVIEW_BYTES,
+): string {
   const bytes = Buffer.byteLength(value, 'utf8');
-  if (bytes <= MAX_ATTRIBUTE_VALUE_BYTES) {
-    return value;
-  }
+  if (bytes <= maxBytes) return value;
   value = value.replace(
     /data:[^;,]{1,100};base64,[A-Za-z0-9+/]+=*/g,
     '[image binary omitted before truncation]',
   );
-  if (Buffer.byteLength(value, 'utf8') <= MAX_ATTRIBUTE_VALUE_BYTES) return value;
+  if (Buffer.byteLength(value, 'utf8') <= maxBytes) return value;
   if (isStructuredJson(value)) {
-    return JSON.stringify({
-      truncated: true,
-      originalBytes: bytes,
-      preview: utf8Prefix(value, 64_000),
-    });
+    const serializePreview = (size: number) =>
+      JSON.stringify({
+        truncated: true,
+        originalBytes: bytes,
+        preview: utf8Prefix(value, size),
+      });
+    let high = Math.min(previewBytes, maxBytes);
+    const encoded = serializePreview(high);
+    if (Buffer.byteLength(encoded) <= maxBytes) return encoded;
+    // JSON escaping and the wrapper must fit inside the attribute cap too.
+    let low = 0;
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2);
+      if (Buffer.byteLength(serializePreview(middle)) <= maxBytes) low = middle;
+      else high = middle - 1;
+    }
+    return serializePreview(low);
   }
-  // Byte-accurate: the cap is UTF-8 bytes, and slicing by UTF-16 code units
-  // would let multibyte-heavy payloads slip past it.
-  const marker = `... [truncated ${bytes - MAX_ATTRIBUTE_VALUE_BYTES} bytes]`;
-  return `${utf8Prefix(value, MAX_ATTRIBUTE_VALUE_BYTES - Buffer.byteLength(marker))}${marker}`;
+  const marker = `... [truncated ${bytes - maxBytes} bytes]`;
+  return `${utf8Prefix(value, maxBytes - Buffer.byteLength(marker))}${marker}`;
 }
 
 export function isStructuredJson(value: string): boolean {
@@ -181,7 +193,7 @@ export function redactTelemetryValue(
     if (depth > 64) return '[nested value omitted]';
     if (typeof value === 'string') {
       if (fields.size && /^[\s]*[[{]/.test(value)) {
-        if (Buffer.byteLength(value) > MAX_ATTRIBUTE_VALUE_BYTES)
+        if (Buffer.byteLength(value) > (config.maxAttributeBytes ?? MAX_ATTRIBUTE_VALUE_BYTES))
           return '[oversized JSON omitted for field redaction]';
         let parsed: unknown;
         try {

@@ -1,6 +1,7 @@
 import { loadPiSettings, type PiSettingsOptions } from '@amaster.ai/pi-shared/settings';
 import type { RuntimeTelemetryOptions } from './index.js';
-import { parseBoolean, trim } from './parse.js';
+import { DEFAULT_PREVIEW_BYTES, MAX_ATTRIBUTE_VALUE_BYTES } from './otel/types.js';
+import { parseBoolean, parsePositiveInteger, trim } from './parse.js';
 
 export interface LangfuseConfig {
   enabled?: boolean;
@@ -32,6 +33,8 @@ export interface TelemetryConfig {
   serviceName?: string;
   serviceVersion?: string;
   includePayloads?: boolean;
+  maxAttributeBytes?: number;
+  previewBytes?: number;
   mediaUploadEnabled?: boolean;
   userId?: string;
   environment?: string;
@@ -96,6 +99,8 @@ export function credentialMaskValues(config: {
 export function runtimeTelemetryOptions(
   config: Pick<
     TelemetryConfig,
+    | 'maxAttributeBytes'
+    | 'previewBytes'
     | 'includePayloads'
     | 'mediaUploadEnabled'
     | 'userId'
@@ -112,6 +117,7 @@ export function runtimeTelemetryOptions(
   },
 ): RuntimeTelemetryOptions {
   return {
+    ...resolvePayloadLimits(config),
     tags: stringList(config.tags),
     redactFields: stringList(config.redactFields),
     ...(typeof config.traceName === 'string' && config.traceName.trim()
@@ -161,4 +167,21 @@ export function stringList(value: unknown): string[] {
     if (text) result.add(text);
   }
   return [...result];
+}
+
+export function resolvePayloadLimits(
+  config: Pick<RuntimeTelemetryOptions, 'maxAttributeBytes' | 'previewBytes'>,
+): { maxAttributeBytes: number; previewBytes: number } {
+  const maxAttributeBytes = parsePositiveInteger(
+    config.maxAttributeBytes,
+    MAX_ATTRIBUTE_VALUE_BYTES,
+  );
+  const previewBytes = parsePositiveInteger(config.previewBytes, DEFAULT_PREVIEW_BYTES);
+  return {
+    maxAttributeBytes:
+      maxAttributeBytes >= 128 && Number.isSafeInteger(maxAttributeBytes)
+        ? maxAttributeBytes
+        : MAX_ATTRIBUTE_VALUE_BYTES,
+    previewBytes: Number.isSafeInteger(previewBytes) ? previewBytes : DEFAULT_PREVIEW_BYTES,
+  };
 }
