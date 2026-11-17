@@ -442,6 +442,13 @@ export function classifySecurityResources(input: {
         sensitivity: 'normal',
       });
     }
+    resources.push(
+      ...shellFileResources(
+        command,
+        stringArg(toolCall.args, 'cwd') ?? input.workspaceDir,
+        input.workspaceDir,
+      ),
+    );
     return resources;
   }
   return [
@@ -676,7 +683,10 @@ function fileScope(value: string | undefined, workspaceDir: string | undefined):
   if (!value) {
     return 'unknown';
   }
-  const normalized = canonicalizeSecurityPath(workspaceDir, value);
+  return canonicalFileScope(canonicalizeSecurityPath(workspaceDir, value), workspaceDir);
+}
+
+function canonicalFileScope(normalized: string, workspaceDir: string | undefined): SecurityScope {
   if (workspaceDir && pathInside(normalized, canonicalizeSecurityPath(undefined, workspaceDir))) {
     return 'workspace';
   }
@@ -685,6 +695,248 @@ function fileScope(value: string | undefined, workspaceDir: string | undefined):
     return 'home';
   }
   return 'system';
+}
+
+const SHELL_WRITE_COMMANDS = new Set([
+  'cp',
+  'dd',
+  'install',
+  'ln',
+  'mkdir',
+  'mv',
+  'rm',
+  'rmdir',
+  'shred',
+  'tee',
+  'touch',
+  'truncate',
+  'unlink',
+]);
+
+const SHELL_COPY_COMMANDS = new Set(['cp', 'ln', 'mv']);
+const SHELL_DELETE_COMMANDS = new Set(['rm', 'rmdir', 'shred', 'unlink']);
+const SHELL_REDIRECT_TOKEN = /^\d*>>?$/;
+const SHELL_REDIRECT_PREFIX = /^\d*>>?/;
+const SHELL_GLOB_CHAR = /[*?[{]/;
+const SHELL_LOGIN_PREFIX = /^[A-Za-z_][A-Za-z0-9_]*=/;
+const SHELL_URL = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
+const SHELL_SENSITIVE_NAMES =
+  /^(credential|credentials|password|passwords|token|tokens|secret|secrets)$/;
+const SHELL_SENSITIVE_FILES = /^(id_rsa|id_ed25519|\.npmrc|\.pypirc)$/;
+const SHELL_WRAPPERS = new Set([
+  'command',
+  'doas',
+  'env',
+  'exec',
+  'nice',
+  'nohup',
+  'sudo',
+  'time',
+  'xargs',
+]);
+
+type ShellPathCandidate = { value: string; index: number; redirect: boolean };
+
+// Shell commands are opaque to the file classifiers above, so a secret path
+// passed to `bash` would otherwise skip the baseline `deny-secrets` rule.
+function shellFileResources(
+  command: string,
+  baseDir: string | undefined,
+  workspaceDir: string | undefined,
+): SecurityResource[] {
+  const tokens = splitShellCommand(command);
+  const candidates = shellPathCandidates(tokens);
+  const verb = shellVerb(tokens);
+  const copyTargetIndex = SHELL_COPY_COMMANDS.has(verb) ? shellCopyTargetIndex(tokens) : undefined;
+  const seen = new Set<string>();
+  const resources: SecurityResource[] = [];
+  for (const candidate of candidates) {
+    const target = expandShellHome(candidate.value);
+    const normalized = canonicalizeSecurityPath(baseDir, target);
+    if (seen.has(normalized)) {
+      continue;
+    }
+    const sensitivity = classifyShellPathSensitivity(normalized);
+    if (sensitivity !== 'secret' && sensitivity !== 'credential') {
+      continue;
+    }
+    seen.add(normalized);
+    resources.push({
+      kind: 'file',
+      operation: shellFileOperation(verb, tokens, candidate, copyTargetIndex),
+      target: candidate.value,
+      scope: canonicalFileScope(normalized, workspaceDir),
+      sensitivity,
+    });
+  }
+  return resources;
+}
+
+// Package and directory names such as `packages/token-service` are ordinary
+// shell arguments, so the shell classifier only protects paths that name a
+// sensitive file or live under `.ssh/` or `secrets/`.
+function classifyShellPathSensitivity(value: string): SecuritySensitivity {
+  const segments = value.toLowerCase().split('/');
+  const basename = segments[segments.length - 1] ?? '';
+  const directories = segments.slice(0, -1);
+  if (directories.includes('.ssh')) {
+    return 'credential';
+  }
+  if (directories.some((segment) => /^secrets?$/.test(segment))) {
+    return 'secret';
+  }
+  if (isSensitiveShellName(shellGlobPrefix(basename) || basename)) {
+    return /^(\.env|\.npmrc|\.pypirc)/.test(basename) ? 'secret' : 'credential';
+  }
+  if (/\.(pem|key)$/.test(basename)) {
+    return 'credential';
+  }
+  return 'normal';
+}
+
+// A bare `id_rsa`, `token`, or `.env` is only meaningful as a secret when it is
+// the whole argument name; names that merely contain one (`build.token`) stay
+// ordinary arguments.
+function isSensitiveShellName(name: string): boolean {
+  const lower = name.toLowerCase();
+  if (SHELL_SENSITIVE_NAMES.test(lower) || SHELL_SENSITIVE_FILES.test(lower)) {
+    return true;
+  }
+  return /^\.env(\.|~|$)/.test(lower);
+}
+
+function shellGlobPrefix(value: string): string {
+  if (!SHELL_GLOB_CHAR.test(value)) {
+    return '';
+  }
+  return value.slice(0, value.search(SHELL_GLOB_CHAR)).replace(/\.$/, '');
+}
+
+function shellVerb(tokens: string[]): string {
+  const commands = [...SHELL_DELETE_COMMANDS, ...SHELL_WRITE_COMMANDS, ...SHELL_COPY_COMMANDS];
+  for (const token of tokens) {
+    const name = path.basename(token.replace(SHELL_REDIRECT_PREFIX, '')).toLowerCase();
+    if (commands.includes(name)) {
+      return name;
+    }
+  }
+  for (const token of tokens) {
+    if (!token || SHELL_LOGIN_PREFIX.test(token) || token.startsWith('-')) {
+      continue;
+    }
+    if (SHELL_WRAPPERS.has(path.basename(token).toLowerCase())) {
+      continue;
+    }
+    return path.basename(token).toLowerCase();
+  }
+  return '';
+}
+
+function shellCopyTargetIndex(tokens: string[]): number | undefined {
+  for (let index = tokens.length - 1; index >= 0; index -= 1) {
+    const token = tokens[index] ?? '';
+    if (!token || token.startsWith('-') || SHELL_REDIRECT_TOKEN.test(token)) {
+      continue;
+    }
+    return index;
+  }
+  return undefined;
+}
+
+function shellFileOperation(
+  verb: string,
+  tokens: string[],
+  candidate: ShellPathCandidate,
+  copyTargetIndex: number | undefined,
+): SecurityOperation {
+  if (SHELL_DELETE_COMMANDS.has(verb)) {
+    return 'delete';
+  }
+  if (candidate.redirect || SHELL_REDIRECT_TOKEN.test(tokens[candidate.index - 1] ?? '')) {
+    return 'write';
+  }
+  if (SHELL_COPY_COMMANDS.has(verb)) {
+    return candidate.index === copyTargetIndex ? 'write' : 'read';
+  }
+  return SHELL_WRITE_COMMANDS.has(verb) ? 'write' : 'read';
+}
+
+function splitShellCommand(command: string): string[] {
+  const tokens: string[] = [];
+  let current = '';
+  let quote: '"' | "'" | undefined;
+  for (const char of command) {
+    if (quote) {
+      if (char === quote) {
+        quote = undefined;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char) || ';|&()`'.includes(char)) {
+      if (current) {
+        tokens.push(current);
+        current = '';
+      }
+      continue;
+    }
+    current += char;
+  }
+  if (current) {
+    tokens.push(current);
+  }
+  return tokens;
+}
+
+function shellPathCandidates(tokens: string[]): ShellPathCandidate[] {
+  const candidates: ShellPathCandidate[] = [];
+  for (const [index, token] of tokens.entries()) {
+    const stripped = token.replace(SHELL_REDIRECT_PREFIX, '');
+    // Quoted phrases keep their inner spaces, so `git commit -m "rotate token
+    // in .env"` stays a message instead of becoming a path.
+    if (!stripped || stripped !== stripped.trim() || /\s/.test(stripped)) {
+      continue;
+    }
+    const assigned = stripped.includes('=') ? stripped.slice(stripped.indexOf('=') + 1) : stripped;
+    if (!assigned || SHELL_URL.test(assigned)) {
+      continue;
+    }
+    if (isShellPath(assigned)) {
+      candidates.push({ value: assigned, index, redirect: stripped !== token });
+    }
+  }
+  return candidates;
+}
+
+function isShellPath(value: string): boolean {
+  if (value === '~' || value.startsWith('~/')) {
+    return true;
+  }
+  if (value.includes('/')) {
+    return true;
+  }
+  // Glob patterns only count when their literal prefix already names a
+  // sensitive file (`cat .env*`), never for `ls *.pem` or `find -name "*.pem"`.
+  if (SHELL_GLOB_CHAR.test(value)) {
+    return isSensitiveShellName(shellGlobPrefix(value));
+  }
+  return value.startsWith('.') || isSensitiveShellName(value);
+}
+
+function expandShellHome(value: string): string {
+  const home = process.env.HOME;
+  if (!home) {
+    return value;
+  }
+  if (value === '~') {
+    return home;
+  }
+  return value.startsWith('~/') ? path.join(home, value.slice(2)) : value;
 }
 
 export function canonicalizeSecurityPath(cwd: string | undefined, value: string): string {

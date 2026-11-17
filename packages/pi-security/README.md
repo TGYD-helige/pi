@@ -54,7 +54,7 @@ Tool names align with the pi-coding-agent built-in tools: `bash`, `read`, `write
 | `on-request`  | Ask on workspace writes/deletes (in addition to high-risk ops).           |
 | `untrusted`   | Ask on workspace writes plus high-risk ops; default decision is also ask. |
 
-Baseline secret protection (denying `.ssh/`, `.env`, `*.pem`, `*.key`, etc.) is always enabled, regardless of profile.
+Baseline secret protection (denying `.ssh/`, `.env`, file names ending in `.pem`/`.key`, etc.) is always enabled, regardless of profile, and covers sensitive paths named in shell commands as well as paths passed to the file tools. Shell coverage classifies arguments that are paths (absolute, relative, `~`-prefixed, or dotfiles) and arguments that are exactly a sensitive name (`id_rsa`, `token`, `secret`), including globs whose literal prefix already names a sensitive file (`.env*`). Arguments that are not path-like stay ordinary: quoted phrases containing spaces, nested shells such as `bash -c`, globs without a sensitive prefix (`*.pem`), and names that merely contain a sensitive word (`build.token`).
 
 ## Custom profiles
 
@@ -119,7 +119,7 @@ type SecurityRule = {
 
 This module is an execution gate, not a filesystem sandbox by itself. Deny and approval decisions are enforceable because they run before Pi tool execution; sandbox enforcement still depends on the runtime that executes the tool.
 
-Sensitive paths such as SSH keys, `.env`, credentials, tokens, private keys, and `secrets/` directories are denied by baseline policy across all profiles. Audit entries include tool names, resource summaries, risk level, and decision metadata, but they should not include plaintext secrets.
+Sensitive paths such as SSH keys, `.env`, credentials, tokens, private keys, and `secrets/` directories are denied by baseline policy across all profiles, whether the path is passed to a file tool or named in a shell command. In shell commands the rule matches path-like arguments and arguments that are exactly a sensitive name, so ordinary arguments such as `packages/token-service` and `build.token` keep working. Two consequences are intended. A bare sensitive word counts even when it is not a file name, so `grep -rn token src/`, `kubectl get secret`, and `docker secret ls` are denied. Not covered: quoted phrases, nested shells, globs without a sensitive prefix, and a redirect operator attached to a file name without whitespace (`cat <.env`, `cat .env>x`). Audit entries include tool names, resource summaries, risk level, and decision metadata, but they should not include plaintext secrets.
 
 The extension refreshes inline settings and file policies asynchronously for each authorization decision, rechecks trust after awaited reads, and clears session grants when effective configuration or trust changes. Policy changes, deletion, and project trust changes apply to the next decision; authorization profiles are not held in a TTL cache. Policy loading accepts at most 128 JSON files, 128 KiB per file, 2 MiB combined, and 1,024 directory entries across layers. Settings files are limited to 1 MiB each. Limits, malformed configuration, and read errors block authorization with a visible error instead of dropping policy.
 

@@ -117,6 +117,87 @@ describe('security resources and risk', () => {
     expect(risk.level).toBe('critical');
     expect(risk.reasons).toContain('Remote script execution');
   });
+
+  it('classifies sensitive paths passed to shell commands', () => {
+    const toolCall = tool('bash', 'sandbox', { command: 'cat .env' });
+    const resources = classifySecurityResources({ request, toolCall, workspaceDir: '/repo' });
+    const risk = assessRisk({ toolCall, resources });
+
+    expect(resources).toContainEqual({
+      kind: 'file',
+      operation: 'read',
+      target: '.env',
+      scope: 'workspace',
+      sensitivity: 'secret',
+    });
+    expect(risk.level).toBe('critical');
+  });
+
+  it('marks shell writes and deletes of sensitive paths with the matching operation', () => {
+    const write = classifySecurityResources({
+      request,
+      workspaceDir: '/repo',
+      toolCall: tool('bash', 'sandbox', { command: 'echo x > config/app.pem' }),
+    });
+    const remove = classifySecurityResources({
+      request,
+      workspaceDir: '/repo',
+      toolCall: tool('bash', 'sandbox', { command: 'rm .env' }),
+    });
+
+    expect(write).toContainEqual({
+      kind: 'file',
+      operation: 'write',
+      target: 'config/app.pem',
+      scope: 'workspace',
+      sensitivity: 'credential',
+    });
+    expect(remove).toContainEqual({
+      kind: 'file',
+      operation: 'delete',
+      target: '.env',
+      scope: 'workspace',
+      sensitivity: 'secret',
+    });
+  });
+
+  it('leaves ordinary shell commands without file resources', () => {
+    const resources = classifySecurityResources({
+      request,
+      workspaceDir: '/repo',
+      toolCall: tool('bash', 'sandbox', { command: 'cat notes.md && ls -la' }),
+    });
+
+    expect(resources.map((resource) => resource.kind)).toEqual(['shell']);
+  });
+
+  it('attributes shell operations to the real verb and copy destination', () => {
+    const sudo = classifySecurityResources({
+      request,
+      workspaceDir: '/repo',
+      toolCall: tool('bash', 'sandbox', { command: 'sudo rm .env' }),
+    });
+    const copy = classifySecurityResources({
+      request,
+      workspaceDir: '/repo',
+      toolCall: tool('bash', 'sandbox', { command: 'cp .env out' }),
+    });
+
+    expect(sudo).toContainEqual({
+      kind: 'file',
+      operation: 'delete',
+      target: '.env',
+      scope: 'workspace',
+      sensitivity: 'secret',
+    });
+    expect(copy).toContainEqual({
+      kind: 'file',
+      operation: 'read',
+      target: '.env',
+      scope: 'workspace',
+      sensitivity: 'secret',
+    });
+  });
 });
 
 describe('security policy', () => {
@@ -191,6 +272,51 @@ describe('security policy', () => {
         }),
       }),
     ).toEqual({ kind: 'deny', reason: 'Secret or credential resources are protected.' });
+  });
+
+  it('applies baseline secret protection to shell commands', () => {
+    const engine = createSecurityPolicyEngineForProfile('default');
+    expect(
+      engine.decide({
+        request,
+        workspaceDir: '/repo',
+        toolCall: tool('bash', 'sandbox', { command: 'cat .env' }),
+      }),
+    ).toEqual({ kind: 'deny', reason: 'Secret or credential resources are protected.' });
+    expect(
+      engine.decide({
+        request,
+        workspaceDir: '/repo',
+        toolCall: tool('bash', 'sandbox', { command: 'cat notes.md' }),
+      }),
+    ).toEqual({ kind: 'allow' });
+    expect(
+      engine.decide({
+        request,
+        workspaceDir: '/repo',
+        toolCall: tool('bash', 'sandbox', {
+          command: 'pnpm --filter @acme/token-service build',
+        }),
+      }),
+    ).toEqual({ kind: 'allow' });
+  });
+
+  it('keeps globs and quoted phrases out of the shell secret rule', () => {
+    const engine = createSecurityPolicyEngineForProfile('default');
+    const decide = (command: string) =>
+      engine.decide({
+        request,
+        workspaceDir: '/repo',
+        toolCall: tool('bash', 'sandbox', { command }),
+      });
+    const denied = { kind: 'deny', reason: 'Secret or credential resources are protected.' };
+
+    expect(decide('ls *.pem')).toEqual({ kind: 'allow' });
+    expect(decide('find . -name "*.pem"')).toEqual({ kind: 'allow' });
+    expect(decide('git commit -m "rotate token in .env"')).toEqual({ kind: 'allow' });
+    expect(decide('npm run build.token')).toEqual({ kind: 'allow' });
+    expect(decide('cat .env*')).toEqual(denied);
+    expect(decide('cat id_rsa')).toEqual(denied);
   });
 });
 
