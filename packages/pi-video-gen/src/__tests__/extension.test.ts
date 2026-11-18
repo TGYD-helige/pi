@@ -1,4 +1,12 @@
-import { mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Value } from 'typebox/value';
@@ -1284,6 +1292,35 @@ describe('pi-video-gen extension', () => {
     const text = notifiedText(ctx);
     expect(text).toMatch(/ffmpeg found \(source: (bundled|path|env)\)|ffmpeg not runnable/);
     expect(text).not.toContain('/node_modules/');
+  });
+
+  it('/video-gen doctor lists binary features and only the native text filters that are missing', async () => {
+    const ffmpegPath = join(home, 'custom-ffmpeg');
+    mkdirSync(join(home, '.pi', 'agent'), { recursive: true });
+    writeFileSync(
+      ffmpegPath,
+      [
+        '#!/bin/sh',
+        'if [ "$2" = "-encoders" ]; then echo " A....D aac"; echo " V....D libx264"; fi',
+        'if [ "$2" = "-filters" ]; then echo " TSC overlay  VV->V"; echo " T.. drawtext  V->V"; fi',
+        'exit 0',
+      ].join('\n'),
+    );
+    chmodSync(ffmpegPath, 0o755);
+    writeFileSync(
+      join(home, '.pi', 'agent', 'settings.json'),
+      JSON.stringify({ 'pi-video-gen': { ffmpegPath } }),
+    );
+    await startSession(cwd);
+
+    const ctx = fakeCtx(cwd);
+    await commands.get('video-gen')!.handler('doctor', ctx);
+    const text = notifiedText(ctx);
+    expect(text).toContain(
+      'ffmpeg found (source: settings) — custom-ffmpeg; has: aac, libx264, overlay, drawtext; lacks: subtitles, ass',
+    );
+    expect(text).toContain('native FFmpeg filters unavailable: subtitles, ass —');
+    expect(text).not.toContain(home);
   });
 
   it('does not expose a configured ffmpeg path in tool errors', async () => {

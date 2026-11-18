@@ -243,6 +243,48 @@ jobs:
         if: always() && matrix.target == 'win32-x64'
         run: docker rm --force "pi-video-gen-win32-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" || true
 
+      - name: Setup pi build environment (CJK burn-in smoke)
+        if: matrix.target == 'linux-x64'
+        uses: ./.github/actions/setup-pi-build
+        with:
+          build: 'false'
+
+      - name: Smoke-test Chinese subtitle burn-in with H.264
+        if: matrix.target == 'linux-x64'
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y fonts-noto-cjk
+          pnpm --filter @amaster.ai/pi-shared build
+          pnpm --filter @amaster.ai/pi-video-gen build
+          bin_dir="packages/pi-video-gen/platforms/ffmpeg-linux-x64/bin"
+          # Bundled builds lack drawtext/subtitles/ass, so CJK subtitles go through the plugin's PNG renderer + overlay.
+          node --input-type=module <<'NODE'
+          import { readFile } from 'node:fs/promises';
+          import { renderBurnedSubtitle } from './packages/pi-video-gen/dist/text-layer.js';
+          const render = (text, outPath) =>
+            renderBurnedSubtitle({ text, style: { mode: 'burn' }, width: 640, height: 360, outPath });
+          await render('中文字幕烧录测试', 'cjk-subtitle.png');
+          // Missing glyphs render as identical boxes, so two different strings must differ.
+          await render('测试烧录字幕中文', 'cjk-subtitle-alt.png');
+          if ((await readFile('cjk-subtitle.png')).equals(await readFile('cjk-subtitle-alt.png')))
+            throw new Error('CJK glyphs did not render (font fallback boxes)');
+          NODE
+          "$bin_dir/ffmpeg-gpl" -nostdin -xerror \
+            -f lavfi -i color=black:s=640x360:r=25:d=1 -i cjk-subtitle.png \
+            -filter_complex "[0:v][1:v]overlay=0:0,format=yuv420p[v]" \
+            -map "[v]" -c:v libx264 -t 1 -y cjk-burn-in-h264.mp4
+          test "$("$bin_dir/ffprobe-gpl" -v error -select_streams v:0 \
+            -show_entries stream=codec_name -of csv=p=0 cjk-burn-in-h264.mp4)" = h264
+          "$bin_dir/ffmpeg-gpl" -nostdin -ss 0.5 -i cjk-burn-in-h264.mp4 -frames:v 1 -y cjk-burn-in-qc.png
+          node --input-type=module <<'NODE'
+          import { createRequire } from 'node:module';
+          const sharp = createRequire(new URL('./packages/pi-video-gen/package.json', import.meta.url))('sharp');
+          const { channels } = await sharp('cjk-burn-in-qc.png')
+            .extract({ left: 0, top: 240, width: 640, height: 120 })
+            .stats();
+          if (channels[0].max < 200) throw new Error('burned subtitle text is not visible in the H.264 frame');
+          NODE
+
       - name: Preserve executable permissions
         run: |
           tar -czf "pi-video-gen-ffmpeg-${{ matrix.target }}.tar.gz" \

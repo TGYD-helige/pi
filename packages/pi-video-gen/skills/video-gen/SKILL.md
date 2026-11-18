@@ -16,6 +16,7 @@ Honor the user's specified method and existing usable material. For a plan-only 
 | Join compatible MP4 clips without re-encoding | `video_compose`; follow Compatible clip concat below |
 | Create one or several model clips under direct control | `video_generate`; follow Direct model clips below; use `video_compose` if assembly is needed |
 | Assemble images/screenshots and clips with overlays, transitions or narration | `video_compose`; read [Timeline composition](references/timeline-compose.md) |
+| Write a script that calls FFmpeg directly | Read bundled FFmpeg capabilities in [Timeline composition](references/timeline-compose.md) first |
 | Animate exact UI, charts, typography or editable graphics | `video_compose`; read [HyperFrames handoff](references/hyperframes-handoff.md) |
 | Execute a prepared batch with saved remote tasks and optional assembly | `video_render`; read [render script and recovery](references/video-render-workflow.md), plus the selected assembly guide |
 

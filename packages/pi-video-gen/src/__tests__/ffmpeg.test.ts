@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   concatVideos,
+  probeFfmpegFeatures,
   probeVideoDuration,
   resolveFfmpeg,
   resolveFfprobe,
@@ -147,6 +148,32 @@ describe('resolveFfmpeg', () => {
       path: join(suiteDir, 'ffprobe'),
       source: 'env',
       runnable: false,
+    });
+  });
+});
+
+describe('probeFfmpegFeatures', () => {
+  afterEach(() => {
+    rmSync(suiteDir, { recursive: true, force: true });
+  });
+
+  it('reports doctor encoders and filters by name, not description text', async () => {
+    mkdirSync(suiteDir, { recursive: true });
+    const ffmpeg = join(suiteDir, 'features-ffmpeg');
+    writeFileSync(
+      ffmpeg,
+      [
+        '#!/bin/sh',
+        'if [ "$2" = "-encoders" ]; then echo " A....D aac  AAC (Advanced Audio Coding)"; fi',
+        'if [ "$2" = "-filters" ]; then echo " TSC overlay  VV->V  Overlay; no ASS subtitles"; fi',
+        'exit 0',
+      ].join('\n'),
+    );
+    chmodSync(ffmpeg, 0o755);
+
+    expect(await probeFfmpegFeatures(ffmpeg)).toEqual({
+      available: ['aac', 'overlay'],
+      missing: ['libx264', 'drawtext', 'subtitles', 'ass'],
     });
   });
 });
