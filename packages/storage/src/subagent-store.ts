@@ -18,13 +18,13 @@ type SubagentRunCreateInput = Parameters<SubagentRunStore['create']>[0];
 
 export class JsonFileSubagentRunStore implements SubagentRunStore {
   private loaded = false;
-  private readonly runs = new Map<string, SubagentRun>();
+  private runs = new Map<string, SubagentRun>();
   private writeTail: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly filePath: string) {}
 
   async create(input: SubagentRunCreateInput): Promise<SubagentRun> {
-    return await this.update(() => {
+    return await this.update((runs) => {
       const now = new Date().toISOString();
       const runId = randomUUID();
       const run: SubagentRun = {
@@ -50,7 +50,7 @@ export class JsonFileSubagentRunStore implements SubagentRunStore {
           { type: 'subagent_spawned', at: now },
         ],
       };
-      this.runs.set(run.runId, run);
+      runs.set(run.runId, run);
       return run;
     });
   }
@@ -149,22 +149,25 @@ export class JsonFileSubagentRunStore implements SubagentRunStore {
     runId: string,
     mutator: (run: SubagentRun, now: string) => SubagentRun,
   ): Promise<SubagentRun | undefined> {
-    return await this.update(() => {
-      const run = this.runs.get(runId);
+    return await this.update((runs) => {
+      const run = runs.get(runId);
       if (!run) {
         return undefined;
       }
       const next = mutator(run, new Date().toISOString());
-      this.runs.set(runId, next);
+      runs.set(runId, next);
       return next;
     });
   }
 
-  private async update<T>(mutator: () => T): Promise<T> {
+  private async update<T>(mutator: (runs: Map<string, SubagentRun>) => T): Promise<T> {
     const pending = this.writeTail.then(async () => {
       await this.load();
-      const result = mutator();
-      await this.save();
+      // Mutate a copy so a failed write leaves readers on the last persisted state.
+      const draft = new Map(this.runs);
+      const result = mutator(draft);
+      await writeJsonFile(this.filePath, [...draft.values()]);
+      this.runs = draft;
       return result;
     });
     this.writeTail = pending.catch(() => undefined);
@@ -176,15 +179,8 @@ export class JsonFileSubagentRunStore implements SubagentRunStore {
       return;
     }
     const runs = await readJsonFile<SubagentRun[]>(this.filePath, []);
-    this.runs.clear();
-    for (const run of runs) {
-      this.runs.set(run.runId, run);
-    }
+    this.runs = new Map(runs.map((run) => [run.runId, run]));
     this.loaded = true;
-  }
-
-  private async save(): Promise<void> {
-    await writeJsonFile(this.filePath, [...this.runs.values()]);
   }
 }
 

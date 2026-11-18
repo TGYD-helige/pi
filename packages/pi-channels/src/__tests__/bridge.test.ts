@@ -106,6 +106,7 @@ describe('ChatBridge', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     for (const directory of temporaryDirectories) {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -696,6 +697,37 @@ describe('ChatBridge', () => {
         model: 'kimi-k2.5',
       },
     });
+  });
+
+  it('still replies when the session persistence endpoint hangs', async () => {
+    vi.stubEnv('DESKTOP_PORT', '18146');
+    const realTimeout = AbortSignal.timeout.bind(AbortSignal);
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation(() => realTimeout(5));
+    const fetchMock = vi.fn(
+      (_input: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+        }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockSpawn.mockReturnValue(createChild('pong'));
+    const registry = {
+      getAdapter: vi.fn(() => ({ sendTyping: vi.fn(() => Promise.resolve()) })),
+      send: vi.fn(() => Promise.resolve({ ok: true })),
+    };
+    const bridge = new ChatBridge({ enabled: true }, '/workspace', registry as never);
+    bridge.start();
+
+    await bridge.handleMessage({ adapter: 'feishu', sender: 'oc_chat', text: 'ping' });
+
+    await vi.waitFor(() =>
+      expect(registry.send).toHaveBeenCalledWith(expect.objectContaining({ text: 'pong' })),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:18146/internal/channel-sessions/turn',
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
   });
 
   test('acks WeCom messages before running the prompt and finishes with the final reply', async () => {

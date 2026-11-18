@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type Listener = (value: unknown) => void;
 
@@ -51,7 +51,7 @@ describe('DingTalk adapter', () => {
     vi.unstubAllGlobals();
   });
 
-  test('starts the Stream client and emits accepted incoming text messages', async () => {
+  it('starts the Stream client and emits accepted incoming text messages', async () => {
     const adapter = createDingTalkAdapter({
       type: 'dingtalk',
       clientId: 'ding_client',
@@ -112,7 +112,7 @@ describe('DingTalk adapter', () => {
     expect(mock.clients[0]!.acks).toEqual([{ messageId: 'stream_msg_1', result: null }]);
   });
 
-  test('replies through sessionWebhook metadata when available', async () => {
+  it('replies through sessionWebhook metadata when available', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ errcode: 0 })));
     vi.stubGlobal('fetch', fetchMock);
     const adapter = createDingTalkAdapter({
@@ -145,7 +145,7 @@ describe('DingTalk adapter', () => {
     );
   });
 
-  test('sends active group messages through DingTalk OpenAPI', async () => {
+  it('sends active group messages through DingTalk OpenAPI', async () => {
     const fetchMock = vi.fn(async (url: URL | string, _init?: RequestInit) => {
       const value = String(url);
       if (value.startsWith('https://oapi.dingtalk.com/gettoken')) {
@@ -191,5 +191,84 @@ describe('DingTalk adapter', () => {
         msgParam: JSON.stringify({ content: 'hello' }),
       }),
     });
+  });
+
+  it('passes one cancellable deadline to the token and send requests', async () => {
+    const fetchMock = vi.fn(async (url: URL | string, _init?: RequestInit) =>
+      String(url).includes('gettoken')
+        ? new Response(JSON.stringify({ errcode: 0, access_token: 'token_x' }))
+        : new Response(JSON.stringify({ processQueryKey: 'query_x' })),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const adapter = createDingTalkAdapter({
+      type: 'dingtalk',
+      clientId: 'ding_client',
+      clientSecret: 'secret',
+      robotCode: 'robot_x',
+      eventMode: 'off',
+    });
+    const controller = new AbortController();
+
+    await adapter.send?.({ adapter: 'dingtalk', recipient: 'cid', text: 'hi' }, controller.signal);
+
+    const signals = fetchMock.mock.calls.map((call) => call[1]?.signal);
+    expect(signals).toHaveLength(2);
+    expect(signals[0]).toBeInstanceOf(AbortSignal);
+    expect(signals[1]).toBe(signals[0]);
+    expect(signals[0]?.aborted).toBe(false);
+    controller.abort();
+    expect(signals[0]?.aborted).toBe(true);
+  });
+
+  it('reports API errors without echoing raw response bodies', async () => {
+    const longMessage = 'x'.repeat(5_000);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ code: 'Forbidden', message: longMessage, extra: 'raw' }), {
+            status: 403,
+          }),
+      ),
+    );
+    const adapter = createDingTalkAdapter({
+      type: 'dingtalk',
+      clientId: 'ding_client',
+      clientSecret: 'secret',
+      eventMode: 'off',
+    });
+    const send = adapter.send?.({
+      adapter: 'dingtalk',
+      recipient: 'cid',
+      text: 'hi',
+      metadata: {
+        sessionWebhook: 'https://oapi.dingtalk.com/robot/sendBySession?session=s1',
+        sessionWebhookExpiredTime: Date.now() + 60_000,
+      },
+    });
+
+    const error = await send?.then(
+      () => undefined,
+      (reason: Error) => reason,
+    );
+    expect(error?.message).toMatch(/^DingTalk API error Forbidden: x+$/);
+    expect(error?.message.length).toBeLessThan(300);
+    expect(error?.message).not.toContain('raw');
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('<html>gateway secret page</html>', { status: 502 })),
+    );
+    await expect(
+      adapter.send?.({
+        adapter: 'dingtalk',
+        recipient: 'cid',
+        text: 'hi',
+        metadata: {
+          sessionWebhook: 'https://oapi.dingtalk.com/robot/sendBySession?session=s1',
+          sessionWebhookExpiredTime: Date.now() + 60_000,
+        },
+      }),
+    ).rejects.toThrow(/^DingTalk session webhook error 502$/);
   });
 });

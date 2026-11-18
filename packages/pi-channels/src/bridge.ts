@@ -32,6 +32,9 @@ type SessionState = {
   runDone: Promise<void> | undefined;
 };
 
+// The reply waits on turn persistence, so a hung internal API must not hold the channel queue.
+const CHANNEL_SESSION_PERSIST_TIMEOUT_MS = 10_000;
+
 const DEFAULTS: Required<BridgeConfig> = {
   enabled: false,
   timeoutMs: 300_000,
@@ -383,6 +386,7 @@ async function persistChannelTurn(input: {
         'x-pi-agent-internal': 'channel-bridge',
       },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(CHANNEL_SESSION_PERSIST_TIMEOUT_MS),
     });
     if (!response.ok) {
       console.warn('[pi-channels] channel_session_persist_failed', {
@@ -429,6 +433,7 @@ async function persistChannelTurnStarted(input: {
         'x-pi-agent-internal': 'channel-bridge',
       },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(CHANNEL_SESSION_PERSIST_TIMEOUT_MS),
     });
     if (!response.ok) {
       console.warn('[pi-channels] channel_session_start_failed', {

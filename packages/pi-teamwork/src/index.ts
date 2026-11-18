@@ -281,6 +281,42 @@ export default function piTeamworkExtension(pi: ExtensionAPI): void {
       }
     },
   });
+
+  pi.registerCommand('issues', {
+    description: 'List teamwork issues, or show one issue: /issues [id]',
+    handler: async (args, ctx) => {
+      const id = args.trim();
+      try {
+        const backend = await ensureReady(ctx.signal, Date.now() + 30_000);
+        if (typeof backend === 'string') {
+          ctx.ui.notify(backend, 'warning');
+          return;
+        }
+        if (id) {
+          const issue = await backend.getIssue(id);
+          if (!issue) {
+            ctx.ui.notify(`Issue not found: ${id}`, 'error');
+            return;
+          }
+          const { metadata: _metadata, ...record } = issue;
+          ctx.ui.notify(textResult({ issue: record }).content[0]!.text, 'info');
+          return;
+        }
+        const issues = await backend.listIssues();
+        const records = issues.map(({ metadata: _metadata, ...issue }) => issue);
+        ctx.ui.notify(
+          textResult(
+            { issues: records, total: issues.length },
+            issues.length ? undefined : 'No issues found.',
+          ).content[0]!.text,
+          'info',
+        );
+      } catch (error) {
+        if (ctx.signal?.aborted) throw error;
+        ctx.ui.notify(providerErrorResult(error).content[0]!.text, 'error');
+      }
+    },
+  });
 }
 
 type EnsureReadyFn = (

@@ -96,6 +96,7 @@ For CI or non-interactive environments where you can't run `multica setup`. The 
 ## Commands
 
 - `/teamwork-status` — Show current provider status
+- `/issues [id]` — List issues, or show one issue when an ID is given
 
 ## Architecture
 
