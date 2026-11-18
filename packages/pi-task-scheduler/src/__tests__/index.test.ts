@@ -27,6 +27,49 @@ describe('task scheduler', () => {
     await scheduler.stop();
   });
 
+  it('steps down instead of crashing when lock renewal throws', async () => {
+    await withFakeClock(async () => {
+      const lock = new MemorySchedulerLock();
+      const extend = vi.fn(async () => {
+        throw new Error('redis offline');
+      });
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const scheduler = new PersistentTaskScheduler({
+        store: new MemoryScheduledTaskStore(),
+        lock: Object.assign(lock, { extend }),
+        runner: async () => {},
+        lockHeartbeatMs: 1_000,
+      });
+      await scheduler.start();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(extend).toHaveBeenCalledOnce();
+      expect(scheduler.isActive()).toBe(false);
+      expect(errors).toHaveBeenCalledWith(expect.stringContaining('Renew scheduler lock'));
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(scheduler.isActive()).toBe(true);
+      await scheduler.stop();
+      errors.mockRestore();
+    });
+  });
+
+  it('takes over leadership after the current holder releases the lock', async () => {
+    await withFakeClock(async () => {
+      const lock = new MemorySchedulerLock();
+      const options = { store: new MemoryScheduledTaskStore(), lock, lockHeartbeatMs: 1_000 };
+      const leader = new PersistentTaskScheduler({ ...options, runner: async () => {} });
+      const standby = new PersistentTaskScheduler({ ...options, runner: async () => {} });
+      await leader.start();
+      await standby.start();
+      expect(standby.isActive()).toBe(false);
+      await leader.stop();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(standby.isActive()).toBe(true);
+      await standby.stop();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(standby.isActive()).toBe(false);
+    });
+  });
+
   it('normalizes interval, once, cron, and RRULE schedules', () => {
     expect(resolveScheduledTaskDefinition({ type: 'interval', schedule: '10m' })).toMatchObject({
       type: 'interval',

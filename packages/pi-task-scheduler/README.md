@@ -17,6 +17,8 @@ The package ships with a built-in file-based storage (default, zero external dep
 
 For database-backed storage (multi-tenant, Prisma), use `@amaster.ai/pi-storage/scheduler` which implements the same interfaces with `DbScheduledTaskStore` and `RedisSchedulerLock`.
 
+Only the lock holder runs tasks. A scheduler that cannot acquire the lock stays on standby and retries every `lockHeartbeatMs` (default 10 seconds), so it takes over when the holder stops. A holder that fails to renew its lock stops running tasks and returns to standby.
+
 ### Default (file storage)
 
 ```ts

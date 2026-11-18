@@ -11,9 +11,13 @@ const BIN_PATH = join(INSTALL_DIR, 'node_modules', '.bin', 'dws');
 let installAttempted = false;
 let cliAvailable: boolean | undefined;
 
-function execAsync(file: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+function execAsync(
+  file: string,
+  args: string[],
+  env?: NodeJS.ProcessEnv,
+): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    execFile(file, args, (error, stdout, stderr) => {
+    execFile(file, args, { env }, (error, stdout, stderr) => {
       if (error) reject(error);
       else resolve({ stdout, stderr });
     });
@@ -58,15 +62,12 @@ export async function initDws(config: DingTalkConfig): Promise<void> {
   }
   const bin = dwsBin();
   try {
-    await execAsync(bin, [
-      'auth',
-      'login',
-      '--client-id',
-      clientId,
-      '--client-secret',
-      clientSecret,
-      '--yes',
-    ]);
+    // Environment variables keep the secret out of the process list that `ps` exposes.
+    await execAsync(bin, ['auth', 'login', '--yes'], {
+      ...process.env,
+      DWS_CLIENT_ID: clientId,
+      DWS_CLIENT_SECRET: clientSecret,
+    });
   } catch {
     throw new Error('dws auth login failed');
   }

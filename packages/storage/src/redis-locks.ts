@@ -66,10 +66,27 @@ export class RedisLockManager {
     const retryMs = input.retryMs ?? 50;
     for (;;) {
       if (await this.acquire(input.key, input.ttlMs)) {
+        const renewal = setInterval(
+          () => {
+            this.extend(input.key, input.ttlMs).then(
+              (held) => {
+                if (!held)
+                  console.error('[pi-storage] Redis lock expired before its task finished');
+              },
+              () => console.error('[pi-storage] failed to renew Redis lock'),
+            );
+          },
+          Math.max(1, Math.floor(input.ttlMs / 3)),
+        );
+        renewal.unref();
         try {
           return await input.task();
         } finally {
-          await this.release(input.key);
+          clearInterval(renewal);
+          // The task already finished; an unreleased lock expires by TTL, so do not mask its outcome.
+          await this.release(input.key).catch(() => {
+            console.error('[pi-storage] failed to release Redis lock');
+          });
         }
       }
       if (Date.now() - startedAt >= input.timeoutMs) {

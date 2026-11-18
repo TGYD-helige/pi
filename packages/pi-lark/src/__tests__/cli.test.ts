@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { initLarkCli } from '../cli.js';
 
 describe('initLarkCli', () => {
@@ -22,7 +22,7 @@ describe('initLarkCli', () => {
     rmSync(configDir, { recursive: true, force: true });
   });
 
-  test('writes config.json with correct content', async () => {
+  it('writes config.json with correct content', async () => {
     await initLarkCli({ appId: 'cli_abc', appSecret: 'secret123', domain: 'feishu' });
 
     const configFile = join(configDir, 'config.json');
@@ -35,7 +35,7 @@ describe('initLarkCli', () => {
     expect(content.apps[0].brand).toBe('feishu');
   });
 
-  test('uses lark brand when domain is lark', async () => {
+  it('uses lark brand when domain is lark', async () => {
     await initLarkCli({ appId: 'cli_abc', appSecret: 'secret123', domain: 'lark' });
 
     const configFile = join(configDir, 'config.json');
@@ -43,7 +43,7 @@ describe('initLarkCli', () => {
     expect(content.apps[0].brand).toBe('lark');
   });
 
-  test('defaults to feishu brand when domain is unset', async () => {
+  it('defaults to feishu brand when domain is unset', async () => {
     await initLarkCli({ appId: 'cli_abc', appSecret: 'secret123' });
 
     const configFile = join(configDir, 'config.json');
@@ -51,19 +51,19 @@ describe('initLarkCli', () => {
     expect(content.apps[0].brand).toBe('feishu');
   });
 
-  test('rejects when appId is missing', async () => {
+  it('rejects when appId is missing', async () => {
     await expect(initLarkCli({ appSecret: 'secret123' })).rejects.toThrow(
       'appId and appSecret are required',
     );
   });
 
-  test('rejects when appSecret is missing', async () => {
+  it('rejects when appSecret is missing', async () => {
     await expect(initLarkCli({ appId: 'cli_abc' })).rejects.toThrow(
       'appId and appSecret are required',
     );
   });
 
-  test('creates config directory if it does not exist', async () => {
+  it('creates config directory if it does not exist', async () => {
     const nested = join(configDir, 'sub', 'dir');
     process.env.LARKSUITE_CLI_CONFIG_DIR = nested;
 

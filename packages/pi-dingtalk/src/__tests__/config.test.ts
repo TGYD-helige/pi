@@ -1,7 +1,7 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadDingTalkConfig } from '../config.js';
 
 describe('loadDingTalkConfig', () => {
@@ -23,13 +23,13 @@ describe('loadDingTalkConfig', () => {
     rmSync(base, { recursive: true, force: true });
   });
 
-  test('returns undefined when no config exists', () => {
+  it('returns undefined when no config exists', () => {
     mkdirSync(join(base, 'project'), { recursive: true });
     const config = loadDingTalkConfig(join(base, 'project'));
     expect(config).toBeUndefined();
   });
 
-  test('loads config from .pi/settings.json', () => {
+  it('loads config from .pi/settings.json', () => {
     const project = join(base, 'project');
     mkdirSync(join(project, '.pi'), { recursive: true });
     writeFileSync(
@@ -50,7 +50,7 @@ describe('loadDingTalkConfig', () => {
     });
   });
 
-  test('returns undefined when clientId and clientSecret are both empty', () => {
+  it('returns undefined when clientId and clientSecret are both empty', () => {
     const project = join(base, 'project');
     mkdirSync(join(project, '.pi'), { recursive: true });
     writeFileSync(

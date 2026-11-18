@@ -1,7 +1,7 @@
 import { mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type Handler = (...args: any[]) => any;
 
@@ -23,7 +23,7 @@ describe('piLarkExtension', () => {
     rmSync(base, { recursive: true, force: true });
   });
 
-  test('does not inject skills when config is missing', async () => {
+  it('does not inject skills when config is missing', async () => {
     const handlers: Record<string, Handler> = {};
     const mockPi = {
       on: (event: string, handler: Handler) => {
@@ -50,7 +50,7 @@ describe('piLarkExtension', () => {
     expect(result).toEqual({});
   });
 
-  test('session_shutdown clears skillsDir', async () => {
+  it('session_shutdown clears skillsDir', async () => {
     const handlers: Record<string, Handler> = {};
     const mockPi = {
       on: (event: string, handler: Handler) => {
