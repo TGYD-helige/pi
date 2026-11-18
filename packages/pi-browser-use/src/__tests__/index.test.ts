@@ -261,6 +261,66 @@ describe('browserUseExtension', () => {
   });
 
   describe('tool registration (session_start)', () => {
+    it('keeps the session usable when startup discovery fails and retries on demand', async () => {
+      mockListAllTools.mockRejectedValueOnce(new Error('spawn chrome-devtools-mcp ENOENT'));
+      const notify = vi.fn();
+      browserUseExtension(mockPi as any);
+      await sessionStartHandlers[0]!(
+        { type: 'session_start' },
+        { cwd: process.cwd(), ui: { notify } },
+      );
+
+      expect(notify).toHaveBeenCalledWith(expect.stringContaining('/browser-tools'), 'warning');
+      expect(registeredTools.has('browser_click')).toBe(false);
+
+      const result = (await registeredTools
+        .get('browser_tools')!
+        .execute('id', {}, undefined, undefined, {})) as { content: { text: string }[] };
+
+      expect(registeredTools.has('browser_click')).toBe(true);
+      expect(result.content[0]!.text).toContain('Browser tool groups:');
+      await shutdownExtension();
+    });
+
+    it('reports a failed discovery retry safely from the tool and the command', async () => {
+      const failure = new Error('spawn /opt/secret/chrome ENOENT');
+      mockListAllTools
+        .mockRejectedValueOnce(failure)
+        .mockRejectedValueOnce(failure)
+        .mockRejectedValueOnce(failure);
+      const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        browserUseExtension(mockPi as any);
+        await sessionStartHandlers[0]!(
+          { type: 'session_start' },
+          { cwd: process.cwd(), ui: { notify: vi.fn() } },
+        );
+
+        const result = (await registeredTools
+          .get('browser_tools')!
+          .execute('id', {}, undefined, undefined, {})) as {
+          isError?: boolean;
+          content: { text: string }[];
+        };
+        const command = mockPi.registerCommand.mock.calls.find(
+          ([name]) => name === 'browser-tools',
+        )![1] as { handler: (args: string, ctx: unknown) => Promise<void> };
+        const notify = vi.fn();
+        await command.handler('network', { ui: { notify } });
+
+        expect(result.isError).toBe(true);
+        expect(result.content[0]!.text).not.toContain('Inspect the current page');
+        expect(notify).toHaveBeenCalledWith(result.content[0]!.text, 'error');
+        expect(log).toHaveBeenCalledWith(expect.stringContaining('tool discovery failed'));
+        expect(JSON.stringify([result, notify.mock.calls, log.mock.calls])).not.toContain(
+          '/opt/secret',
+        );
+      } finally {
+        log.mockRestore();
+        await shutdownExtension();
+      }
+    });
+
     it('hides session controls after switching from enabled to disabled sessions', async () => {
       vi.spyOn(BrowserSessionClient.prototype, 'connect').mockResolvedValue();
       vi.spyOn(BrowserSessionClient.prototype, 'listAllTools').mockImplementation(mockListAllTools);

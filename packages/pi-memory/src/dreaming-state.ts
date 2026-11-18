@@ -1,10 +1,11 @@
 /**
  * Dreaming state persistence — tracks when the last consolidation ran.
  */
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { SafeToolError } from '@amaster.ai/pi-shared';
 import { resolveHome } from '@amaster.ai/pi-shared/settings';
+import { writeFileAtomic } from './store.js';
 
 export interface DreamScanCursor {
   path: string;
@@ -57,7 +58,5 @@ export async function readDreamingState(memoryDir?: string): Promise<DreamingSta
 }
 
 export async function writeDreamingState(state: DreamingState, memoryDir?: string): Promise<void> {
-  const filePath = statePath(memoryDir);
-  await mkdir(dirname(filePath), { recursive: true });
-  await writeFile(filePath, JSON.stringify(state, null, 2), 'utf-8');
+  await writeFileAtomic(statePath(memoryDir), JSON.stringify(state, null, 2));
 }

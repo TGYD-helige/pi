@@ -595,7 +595,19 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
         loadout.declared.some((tool) => tool.name === 'tool_search')
           ? { hiddenDeclarations: [TOOLS_META_TOOL] }
           : undefined,
-      async execute(_toolCallId: string, params: Record<string, unknown>) {
+      async execute(
+        _toolCallId: string,
+        params: Record<string, unknown>,
+        signal: AbortSignal | undefined,
+      ) {
+        const discoveryError = await retryDiscovery(signal);
+        if (discoveryError) {
+          return {
+            content: [{ type: 'text' as const, text: discoveryError }],
+            details: undefined,
+            isError: true,
+          };
+        }
         const group = typeof params.group === 'string' ? params.group : undefined;
         if (!group) {
           return {
@@ -645,6 +657,11 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
           }));
       },
       async handler(args, ctx) {
+        const discoveryError = await retryDiscovery(ctx.signal);
+        if (discoveryError) {
+          ctx.ui.notify(discoveryError, 'error');
+          return;
+        }
         const group = String(args ?? '')
           .trim()
           .toLowerCase();
@@ -668,11 +685,47 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
     });
   }
 
-  async function registerUpstreamTools(): Promise<void> {
+  let discovery: Promise<void> | undefined;
+
+  /** Register upstream tools and groups; concurrent callers share one attempt. */
+  function discoverUpstreamTools(signal?: AbortSignal): Promise<void> {
+    if (discovery) return discovery;
+    const attempt = (async () => {
+      await registerUpstreamTools(signal);
+      toolGroups = buildGroups(
+        [...upstreamToolNames].map((name) => name.slice(TOOL_PREFIX.length)),
+        await loadCategoryMap(),
+      );
+      applyToolProfile();
+    })().finally(() => {
+      if (discovery === attempt) discovery = undefined;
+    });
+    discovery = attempt;
+    return attempt;
+  }
+
+  /** Retry discovery when no groups exist; returns a safe message on failure. */
+  async function retryDiscovery(signal?: AbortSignal): Promise<string | undefined> {
+    if (toolGroups.size > 0) return;
+    try {
+      await discoverUpstreamTools(signal);
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      const failure = describeToolError(
+        'Browser tool discovery',
+        error,
+        'Check that Chrome and chrome-devtools-mcp can start, then retry.',
+      );
+      console.error(`[pi-browser-use] tool discovery failed (category=${failure.errorCategory})`);
+      return failure.error;
+    }
+  }
+
+  async function registerUpstreamTools(signal?: AbortSignal): Promise<void> {
     // Inspect the host, since the extension's installed peer can be a different version.
     const nativeDiscovery = pi.getAllTools?.().some((tool) => 'exposure' in tool) ?? false;
-    await ensureConnected();
-    const upstreamTools = await client!.listAllTools();
+    await ensureConnected(signal);
+    const upstreamTools = await client!.listAllTools(signal);
 
     for (const tool of upstreamTools) {
       const prefixedName = `${TOOL_PREFIX}${tool.name}`;
@@ -917,15 +970,22 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
     else pi.setActiveTools(pi.getActiveTools().filter((name) => name !== 'browser_session'));
     upstreamToolNames.clear();
     toolGroups = new Map();
-    await registerUpstreamTools();
-    toolGroups = buildGroups(
-      [...upstreamToolNames].map((name) => name.slice(TOOL_PREFIX.length)),
-      await loadCategoryMap(),
-    );
+    discovery = undefined;
+    try {
+      await discoverUpstreamTools(ctx.signal);
+    } catch (error) {
+      if (ctx.signal?.aborted) throw error;
+      console.error(
+        `[pi-browser-use] startup discovery failed (category=${classifyError(error).errorCategory})`,
+      );
+      ctx.ui.notify(
+        `pi-browser-use: browser bridge unavailable; ${TOOLS_META_TOOL} or /browser-tools retries discovery.`,
+        'warning',
+      );
+    }
     if (config.visionModel) {
       await registerVisionTool(config.visionModel);
     }
-    applyToolProfile();
   });
 
   pi.on('session_shutdown', async () => {

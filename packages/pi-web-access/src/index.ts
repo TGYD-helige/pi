@@ -348,6 +348,48 @@ export default function piWebToolExtension(pi: ExtensionAPI): void {
     const xaiResolved = resolveProvider('xai', settings);
     const hasXai = !('error' in xaiResolved) && Boolean(xaiResolved.apiKey);
     if (hasXai) {
+      const runXSearch = async (
+        xParams: {
+          query: string;
+          allowedHandles?: string[];
+          excludedHandles?: string[];
+          fromDate?: string;
+          toDate?: string;
+        },
+        signal?: AbortSignal,
+      ) => {
+        const xaiProvider = getProvider('xai') as XaiProvider;
+        const response = searchOutput(await xaiProvider.xsearch(xParams, xaiResolved, signal));
+
+        const lines: string[] = [];
+        lines.push(`## X Search Results`);
+        lines.push(`**Query:** ${response.query}`);
+        lines.push('');
+
+        if (response.answer) {
+          lines.push('### Answer');
+          lines.push(response.answer);
+          lines.push('');
+        }
+
+        if (response.results.length > 0) {
+          lines.push('### Sources');
+          for (const r of response.results) {
+            lines.push(`- [${r.title}](${r.url})`);
+            if (r.content) lines.push(`  ${r.content}`);
+          }
+          lines.push('');
+        }
+
+        if (response.truncated)
+          lines.unshift('[Result truncated: some source metadata or text was omitted.]');
+        const text = boundText(lines.join('\n'));
+        return {
+          content: [{ type: 'text' as const, text }],
+          details: undefined,
+          structuredContent: response,
+        };
+      };
       registerTool({
         name: 'x_search',
         outputSchema: searchOutputSchema,
@@ -380,44 +422,24 @@ export default function piWebToolExtension(pi: ExtensionAPI): void {
           _onUpdate: unknown,
           _ctx: ExtensionContext,
         ) {
-          const xaiProvider = getProvider('xai') as XaiProvider;
-          const xParams = params as unknown as {
-            query: string;
-            allowedHandles?: string[];
-            excludedHandles?: string[];
-            fromDate?: string;
-            toDate?: string;
-          };
-          const response = searchOutput(await xaiProvider.xsearch(xParams, xaiResolved, signal));
-
-          const lines: string[] = [];
-          lines.push(`## X Search Results`);
-          lines.push(`**Query:** ${response.query}`);
-          lines.push('');
-
-          if (response.answer) {
-            lines.push('### Answer');
-            lines.push(response.answer);
-            lines.push('');
+          return runXSearch(params as unknown as Parameters<typeof runXSearch>[0], signal);
+        },
+      });
+      pi.registerCommand('x-search', {
+        description: 'Search X (Twitter). Usage: /x-search <query>',
+        async handler(args, cmdCtx) {
+          const query = args.trim();
+          if (!query) {
+            cmdCtx.ui.notify('Usage: /x-search <query>', 'warning');
+            return;
           }
-
-          if (response.results.length > 0) {
-            lines.push('### Sources');
-            for (const r of response.results) {
-              lines.push(`- [${r.title}](${r.url})`);
-              if (r.content) lines.push(`  ${r.content}`);
-            }
-            lines.push('');
+          try {
+            const result = await runXSearch({ query }, cmdCtx.signal);
+            cmdCtx.ui.notify(result.content[0]!.text, 'info');
+          } catch (error) {
+            if (cmdCtx.signal?.aborted) throw error;
+            cmdCtx.ui.notify(describeError('x-search', error).error, 'error');
           }
-
-          if (response.truncated)
-            lines.unshift('[Result truncated: some source metadata or text was omitted.]');
-          const text = boundText(lines.join('\n'));
-          return {
-            content: [{ type: 'text' as const, text }],
-            details: undefined,
-            structuredContent: response,
-          };
         },
       });
     }

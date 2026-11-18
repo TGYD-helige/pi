@@ -26,7 +26,7 @@ bun add @amaster.ai/pi-browser-use
 
 Requires Node.js `^20.19.0 || ^22.12.0 || >=23`, Chrome (stable or newer), and `@earendil-works/pi-coding-agent >= 0.74.0`.
 
-`chrome-devtools-mcp` uses the compatible `^1.12.0` range and its installed entrypoint is resolved when the extension connects. A missing or malformed installation fails connection; the extension does not download a replacement at connection time. Connection failures expose only allowlisted system error codes or Chrome startup categories, not raw subprocess stderr.
+`chrome-devtools-mcp` uses the compatible `^1.12.0` range and its installed entrypoint is resolved when the extension connects. A missing or malformed installation fails connection; the extension does not download a replacement at connection time. Connection failures expose only allowlisted system error codes or Chrome startup categories, not raw subprocess stderr. If discovery fails at session start, the session continues with a warning; the next `browser_tools` call or `/browser-tools` command retries discovery.
 
 Hosts where `process.execPath` is not a directly executable Node runtime can set `PI_BROWSER_USE_NODE` to the Node command used for the MCP subprocess.
 
