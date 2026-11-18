@@ -54,7 +54,7 @@ Tool names align with the pi-coding-agent built-in tools: `bash`, `read`, `write
 | `on-request`  | Ask on workspace writes/deletes (in addition to high-risk ops).           |
 | `untrusted`   | Ask on workspace writes plus high-risk ops; default decision is also ask. |
 
-Baseline secret protection (denying `.ssh/`, `.env`, `*.pem`, `*.key`, etc.) is always enabled, regardless of profile.
+Baseline secret protection (denying `.ssh/`, `.env`, `*.pem`, `*.key`, etc.) is always enabled for the file tools (`read`, `ls`, `find`, `grep`, `write`, `edit`), regardless of profile. `bash` commands are not checked for the paths they reference, so a shell command can still read these files; use the `read-only` mode (which denies `bash`) or an OS-level sandbox when shell access to secrets must be prevented.
 
 ## Custom profiles
 
@@ -119,7 +119,7 @@ type SecurityRule = {
 
 This module is an execution gate, not a filesystem sandbox by itself. Deny and approval decisions are enforceable because they run before Pi tool execution; sandbox enforcement still depends on the runtime that executes the tool.
 
-Sensitive paths such as SSH keys, `.env`, credentials, tokens, private keys, and `secrets/` directories are denied by baseline policy across all profiles. Audit entries include tool names, resource summaries, risk level, and decision metadata, but they should not include plaintext secrets.
+Sensitive paths such as SSH keys, `.env`, credentials, tokens, private keys, and `secrets/` directories are denied by baseline policy for file tools across all profiles. Shell commands are assessed as commands, not parsed for file paths, so this baseline does not stop `bash` from reading those paths. Audit entries include tool names, resource summaries, risk level, and decision metadata, but they should not include plaintext secrets.
 
 The extension refreshes inline settings and file policies asynchronously for each authorization decision, rechecks trust after awaited reads, and clears session grants when effective configuration or trust changes. Policy changes, deletion, and project trust changes apply to the next decision; authorization profiles are not held in a TTL cache. Policy loading accepts at most 128 JSON files, 128 KiB per file, 2 MiB combined, and 1,024 directory entries across layers. Settings files are limited to 1 MiB each. Limits, malformed configuration, and read errors block authorization with a visible error instead of dropping policy.
 
