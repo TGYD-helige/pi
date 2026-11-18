@@ -194,6 +194,7 @@ export class PersistentTaskScheduler implements TaskScheduler {
   private readonly runningTaskIds = new Set<string>();
   private active = false;
   private lockHeartbeat: NodeJS.Timeout | undefined;
+  private standbyTimer: NodeJS.Timeout | undefined;
   private readonly scope: TaskSchedulerScope;
 
   constructor(private readonly options: PersistentTaskSchedulerOptions) {
@@ -330,7 +331,9 @@ export class PersistentTaskScheduler implements TaskScheduler {
     if (this.active) {
       return;
     }
+    this.clearStandby();
     if (!(await this.options.lock.acquire())) {
+      this.scheduleStandby();
       return;
     }
     try {
@@ -371,14 +374,14 @@ export class PersistentTaskScheduler implements TaskScheduler {
       try {
         await this.stop();
       } catch (cleanupError) {
-        const failure = describeToolError('Clean up scheduler startup', cleanupError);
-        console.error(`[pi-task-scheduler] ${failure.errorCategory}: ${failure.error}`);
+        logSchedulerError('Clean up scheduler startup', cleanupError);
       }
       throw error;
     }
   }
 
   async stop(): Promise<void> {
+    this.clearStandby();
     for (const timer of this.timers.values()) {
       clearTimeout(timer);
     }
@@ -617,15 +620,52 @@ export class PersistentTaskScheduler implements TaskScheduler {
     if (!this.options.lock.extend) {
       return;
     }
-    const lockHeartbeatMs = this.options.lockHeartbeatMs ?? 10_000;
     this.lockHeartbeat = setInterval(() => {
-      void (async () => {
-        if (!(await this.options.lock.extend?.())) {
-          await this.stop();
-        }
-      })();
-    }, lockHeartbeatMs);
+      void this.renewLeadership();
+    }, this.lockHeartbeatMs());
     this.lockHeartbeat.unref();
+  }
+
+  private async renewLeadership(): Promise<void> {
+    try {
+      if (await this.options.lock.extend?.()) {
+        return;
+      }
+    } catch (error) {
+      logSchedulerError('Renew scheduler lock', error);
+    }
+    // Leadership is unknown after a failed renewal; stop so two leaders never run tasks.
+    try {
+      await this.stop();
+    } catch (error) {
+      logSchedulerError('Stop scheduler after losing lock', error);
+    }
+    this.scheduleStandby();
+  }
+
+  private scheduleStandby(): void {
+    if (this.standbyTimer) {
+      return;
+    }
+    this.standbyTimer = setTimeout(() => {
+      this.standbyTimer = undefined;
+      this.start().catch((error) => {
+        logSchedulerError('Retry scheduler lock', error);
+        this.scheduleStandby();
+      });
+    }, this.lockHeartbeatMs());
+    this.standbyTimer.unref();
+  }
+
+  private clearStandby(): void {
+    if (this.standbyTimer) {
+      clearTimeout(this.standbyTimer);
+      this.standbyTimer = undefined;
+    }
+  }
+
+  private lockHeartbeatMs(): number {
+    return this.options.lockHeartbeatMs ?? 10_000;
   }
 
   private async emitSchedulerStarted(): Promise<void> {
@@ -838,6 +878,11 @@ export function createScheduledTaskRunSessionId(): string {
 export function scheduleExpressionForCroner(value: string): string {
   const schedule = value.trim();
   return schedule.toUpperCase().startsWith('RRULE:') ? rruleToCronSchedule(schedule) : schedule;
+}
+
+function logSchedulerError(action: string, error: unknown): void {
+  const failure = describeToolError(action, error);
+  console.error(`[pi-task-scheduler] ${failure.errorCategory}: ${failure.error}`);
 }
 
 function withNextRun<T extends ScheduledTask>(task: T): T {

@@ -1,4 +1,4 @@
-import { describe, expect, it, test, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 const mockExecFile = vi.fn();
 
@@ -9,23 +9,24 @@ vi.mock('node:child_process', () => ({
 const { initDws } = await import('../cli.js');
 
 describe('initDws', () => {
-  test('rejects when clientId is missing', async () => {
+  it('rejects when clientId is missing', async () => {
     await expect(initDws({ clientSecret: 'secret' })).rejects.toThrow(
       'clientId and clientSecret are required',
     );
   });
 
-  test('rejects when clientSecret is missing', async () => {
+  it('rejects when clientSecret is missing', async () => {
     await expect(initDws({ clientId: 'dingabc' })).rejects.toThrow(
       'clientId and clientSecret are required',
     );
   });
 
-  it('passes credentials as process arguments without shell interpolation', async () => {
+  it('passes credentials through the environment instead of process arguments', async () => {
     mockExecFile.mockImplementation(
       (
         _file: string,
         _args: string[],
+        _options: unknown,
         callback: (error: Error | null, stdout: string, stderr: string) => void,
       ) => callback(null, '', ''),
     );
@@ -34,15 +35,13 @@ describe('initDws', () => {
 
     expect(mockExecFile).toHaveBeenCalledWith(
       'dws',
-      [
-        'auth',
-        'login',
-        '--client-id',
-        'id; touch /tmp/pwned',
-        '--client-secret',
-        'secret$(id)',
-        '--yes',
-      ],
+      ['auth', 'login', '--yes'],
+      {
+        env: expect.objectContaining({
+          DWS_CLIENT_ID: 'id; touch /tmp/pwned',
+          DWS_CLIENT_SECRET: 'secret$(id)',
+        }),
+      },
       expect.any(Function),
     );
   });
@@ -52,6 +51,7 @@ describe('initDws', () => {
       (
         _file: string,
         args: string[],
+        _options: unknown,
         callback: (error: Error | null, stdout: string, stderr: string) => void,
       ) => callback(new Error(`Command failed: dws ${args.join(' ')}`), '', ''),
     );
