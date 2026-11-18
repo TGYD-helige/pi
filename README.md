@@ -31,7 +31,7 @@ This repository contains the open-source runtime contracts, adapters, and orches
 | Extension | `@amaster.ai/pi-wecom` | WeCom workspace integration through wecom-cli, including contacts, messages, meetings, schedules, todos, docs, and smart sheets. |
 | Extension | `@amaster.ai/pi-dingtalk` | DingTalk workspace integration through dws CLI, including calendar, docs, chat, todos, sheets, AI tables, approvals, mail, wiki, and meeting minutes. |
 
-Core packages provide types and persistence used by every host application. Extension packages each register Pi runtime extensions via their `./extension` subpath entry point and are loaded on demand.
+Core packages provide types and persistence used by every host application. Extension packages declare their Pi runtime entry point in the `pi.extensions` field of `package.json`, and Pi loads it from there.
 
 Every package is ESM-only and published under the `@amaster.ai` npm scope.
 
@@ -125,7 +125,7 @@ import { createOtelExporter, createPhoenixExporter } from "@amaster.ai/pi-teleme
 import memoryExtension from "@amaster.ai/pi-memory/extension";
 ```
 
-Extension packages register themselves through their `./extension` subpath entry point. Host applications import these and pass them to the Pi runtime during setup.
+Pi loads an extension package from the entry declared in its `package.json` `pi.extensions` field. Host applications that import an extension directly can use the package's default export; `pi-goal`, `pi-memory`, `pi-security`, `pi-task-scheduler`, and `pi-telemetry` also expose it as an `./extension` subpath.
 
 See each package README for package-specific examples and public API notes.
 
