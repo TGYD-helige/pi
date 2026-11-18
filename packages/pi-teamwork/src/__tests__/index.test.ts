@@ -324,6 +324,63 @@ describe('piTeamworkExtension Multica provider', () => {
       rm(settingsDir, { recursive: true, force: true }),
     );
   });
+
+  it('lists issues or shows one issue through /issues', async () => {
+    const previousSettings = process.env.PI_SETTINGS_DIR;
+    const settingsDir = await createSettingsDir({
+      'pi-teamwork': { provider: 'multica', multica: { autoInstall: false } },
+    });
+    process.env.PI_SETTINGS_DIR = settingsDir;
+    const commands = new Map<string, { handler: (args: string, ctx: unknown) => Promise<void> }>();
+    const pi = {
+      on: vi.fn(),
+      registerCommand: vi.fn((name, options) => commands.set(name, options)),
+      registerTool: vi.fn(),
+      exec: vi.fn(async (_cmd: string, args: string[]) => {
+        if (args[0] === 'issue' && args[1] === 'list') {
+          return {
+            stdout: JSON.stringify([{ id: 'ISS-1', title: 'Fix login' }]),
+            stderr: '',
+            code: 0,
+          };
+        }
+        if (args[0] === 'issue' && args[1] === 'get') {
+          return { stdout: 'null', stderr: '', code: 0 };
+        }
+        return { stdout: '[]', stderr: '', code: 0 };
+      }),
+    };
+    piTeamworkExtension(pi as never);
+    const notify = vi.fn();
+    const ctx = {
+      cwd: settingsDir,
+      isProjectTrusted: () => true,
+      ui: { setStatus: vi.fn(), notify },
+    };
+    await pi.on.mock.calls.find((call) => call[0] === 'session_start')![1]({}, ctx);
+
+    await commands.get('issues')!.handler('', ctx);
+    expect(pi.exec).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.arrayContaining(['issue', 'list']),
+      expect.anything(),
+    );
+    expect(notify).toHaveBeenLastCalledWith(expect.stringContaining('Fix login'), 'info');
+
+    await commands.get('issues')!.handler(' ISS-404 ', ctx);
+    expect(pi.exec).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.arrayContaining(['issue', 'get', 'ISS-404']),
+      expect.anything(),
+    );
+    expect(notify).toHaveBeenLastCalledWith('Issue not found: ISS-404', 'error');
+
+    if (previousSettings === undefined) delete process.env.PI_SETTINGS_DIR;
+    else process.env.PI_SETTINGS_DIR = previousSettings;
+    await import('node:fs/promises').then(({ rm }) =>
+      rm(settingsDir, { recursive: true, force: true }),
+    );
+  });
 });
 
 describe('MulticaAdapter', () => {

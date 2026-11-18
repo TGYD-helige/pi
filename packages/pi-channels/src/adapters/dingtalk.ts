@@ -9,6 +9,9 @@ import type {
 
 type DingTalkStreamModule = typeof import('dingtalk-stream');
 
+const DINGTALK_SEND_TIMEOUT_MS = 30_000;
+const MAX_API_ERROR_MESSAGE_CHARS = 200;
+
 type DingTalkEventMode = 'stream' | 'off';
 
 type NormalizedDingTalkConfig = DingTalkAdapterConfig & {
@@ -199,8 +202,15 @@ function formatDingTalkApiError(body: unknown): string | undefined {
   const record = body as DingTalkApiErrorResponse;
   const code = record.code ?? record.errcode;
   if (code === undefined || code === 0 || code === '0') return undefined;
-  const message = record.message ?? record.errmsg;
-  return `DingTalk API error ${String(code)}${message ? `: ${String(message)}` : ''}`;
+  const message = String(record.message ?? record.errmsg ?? '').slice(
+    0,
+    MAX_API_ERROR_MESSAGE_CHARS,
+  );
+  return `DingTalk API error ${String(code)}${message ? `: ${message}` : ''}`;
+}
+
+function httpError(label: string, status: number, body: unknown): Error {
+  return new Error(formatDingTalkApiError(body) ?? `DingTalk ${label} error ${status}`);
 }
 
 export function createDingTalkAdapter(
@@ -224,18 +234,16 @@ export function createDingTalkAdapter(
     return streamModulePromise;
   }
 
-  async function getAccessToken(): Promise<string> {
+  async function getAccessToken(signal: AbortSignal): Promise<string> {
     if (accessToken && accessToken.expiresAt > Date.now()) return accessToken.token;
     const url = new URL(cfg.tokenUrl);
     url.searchParams.set('appkey', cfg.clientId);
     url.searchParams.set('appsecret', cfg.clientSecret);
-    const response = await fetch(url);
+    const response = await fetch(url, { signal });
     const body = (await readJsonResponse(response)) as DingTalkAccessTokenResponse | undefined;
-    if (!response.ok) {
-      throw new Error(`DingTalk token error ${response.status}: ${JSON.stringify(body)}`);
-    }
+    if (!response.ok) throw httpError('token', response.status, body);
     if (body?.errcode && body.errcode !== 0) {
-      throw new Error(`DingTalk token error ${body.errcode}: ${body.errmsg ?? 'unknown'}`);
+      throw httpError('token', response.status, body);
     }
     if (!body?.access_token) throw new Error('DingTalk token response missing access_token');
     const expiresIn = Number.isFinite(body.expires_in) ? Number(body.expires_in) : 7200;
@@ -246,7 +254,11 @@ export function createDingTalkAdapter(
     return accessToken.token;
   }
 
-  async function sendViaSessionWebhook(url: string, text: string): Promise<void> {
+  async function sendViaSessionWebhook(
+    url: string,
+    text: string,
+    signal: AbortSignal,
+  ): Promise<void> {
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json; charset=utf-8' },
@@ -254,19 +266,22 @@ export function createDingTalkAdapter(
         msgtype: 'text',
         text: { content: text },
       }),
+      signal,
     });
     const body = await readJsonResponse(response);
-    if (!response.ok) {
-      throw new Error(`DingTalk session webhook error ${response.status}: ${JSON.stringify(body)}`);
-    }
+    if (!response.ok) throw httpError('session webhook', response.status, body);
     const apiError = formatDingTalkApiError(body);
     if (apiError) throw new Error(apiError);
   }
 
-  async function sendViaOpenApi(recipient: string, text: string): Promise<void> {
+  async function sendViaOpenApi(
+    recipient: string,
+    text: string,
+    signal: AbortSignal,
+  ): Promise<void> {
     const conversationId = recipient.trim();
     if (!conversationId) throw new Error('DingTalk adapter requires recipient');
-    const token = await getAccessToken();
+    const token = await getAccessToken(signal);
     const response = await fetch(
       `${normalizeApiBaseUrl(cfg.openApiBaseUrl)}/v1.0/robot/groupMessages/send`,
       {
@@ -281,24 +296,28 @@ export function createDingTalkAdapter(
           msgKey: DINGTALK_TEXT_MSG_KEY,
           msgParam: JSON.stringify({ content: text }),
         }),
+        signal,
       },
     );
     const body = await readJsonResponse(response);
-    if (!response.ok) {
-      throw new Error(`DingTalk send error ${response.status}: ${JSON.stringify(body)}`);
-    }
+    if (!response.ok) throw httpError('send', response.status, body);
     const apiError = formatDingTalkApiError(body);
     if (apiError) throw new Error(apiError);
   }
 
-  async function sendText(message: ChannelMessage): Promise<void> {
+  async function sendText(message: ChannelMessage, signal?: AbortSignal): Promise<void> {
     const text = textFromMessage(message);
+    // One deadline covers the token request, the send, and reading both bodies.
+    const requestSignal = AbortSignal.any([
+      AbortSignal.timeout(DINGTALK_SEND_TIMEOUT_MS),
+      ...(signal ? [signal] : []),
+    ]);
     const sessionWebhook = sessionWebhookFromMetadata(message.metadata);
     if (sessionWebhook && sessionWebhookIsFresh(message.metadata)) {
-      await sendViaSessionWebhook(sessionWebhook, text);
+      await sendViaSessionWebhook(sessionWebhook, text, requestSignal);
       return;
     }
-    await sendViaOpenApi(message.recipient, text);
+    await sendViaOpenApi(message.recipient, text, requestSignal);
   }
 
   async function start(onMessage: OnIncomingMessage): Promise<void> {
