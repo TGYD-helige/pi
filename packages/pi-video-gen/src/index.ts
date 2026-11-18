@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { open, readFile, rename } from 'node:fs/promises';
-import { dirname, extname, join, resolve } from 'node:path';
+import { basename, dirname, extname, join, resolve } from 'node:path';
 import { boundStructuredContent, classifyError } from '@amaster.ai/pi-shared';
 import { isProjectTrusted } from '@amaster.ai/pi-shared/settings';
 import { StringEnum } from '@earendil-works/pi-ai';
@@ -30,7 +30,13 @@ import {
   toLogSummary,
   VideoGenError,
 } from './errors.js';
-import { resolveFfmpeg, resolveFfprobe, resolveGplFfmpeg } from './ffmpeg.js';
+import {
+  NATIVE_TEXT_FILTERS,
+  probeFfmpegFeatures,
+  resolveFfmpeg,
+  resolveFfprobe,
+  resolveGplFfmpeg,
+} from './ffmpeg.js';
 import { readApprovedFrame } from './frame-input.js';
 import {
   ActiveJobs,
@@ -1497,9 +1503,20 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
 
     // 2. ffmpeg (multi-shot concat; resolution chain: settings → env → bundled → PATH)
     const ffmpeg = await resolveFfmpeg(settings.ffmpegPath, ctx.signal);
+    const h264Ffmpeg = await resolveGplFfmpeg(settings.ffmpegPath, ctx.signal);
+    const ffmpegFeatures = ffmpeg.runnable
+      ? await probeFfmpegFeatures(ffmpeg.path, ctx.signal)
+      : undefined;
+    const h264Features = !h264Ffmpeg.runnable
+      ? undefined
+      : h264Ffmpeg.path === ffmpeg.path
+        ? ffmpegFeatures
+        : await probeFfmpegFeatures(h264Ffmpeg.path, ctx.signal);
+    const formatFeatures = (path: string, features: { available: string[]; missing: string[] }) =>
+      `${basename(path)}; has: ${features.available.join(', ') || 'none'}; lacks: ${features.missing.join(', ') || 'none'}`;
     checks.push(
-      ffmpeg.runnable
-        ? `✅ ffmpeg found (source: ${ffmpeg.source})`
+      ffmpegFeatures
+        ? `✅ ffmpeg found (source: ${ffmpeg.source}) — ${formatFeatures(ffmpeg.path, ffmpegFeatures)}`
         : `❌ ffmpeg not runnable (source tried: ${ffmpeg.source}) — reinstall pi-video-gen to restore its platform package, or set pi-video-gen.ffmpegPath in global/agent-dir settings`,
     );
     const ffprobe = await resolveFfprobe(settings.ffmpegPath, ctx.signal);
@@ -1508,12 +1525,22 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
         ? `✅ ffprobe found (source: ${ffprobe.source})`
         : `⚠️ ffprobe not runnable (source tried: ${ffprobe.source}) — needed for video_compose stream prechecks`,
     );
-    const h264Ffmpeg = await resolveGplFfmpeg(settings.ffmpegPath, ctx.signal);
     checks.push(
-      h264Ffmpeg.runnable
-        ? `✅ libx264 encoder available (source: ${h264Ffmpeg.source})`
+      h264Features
+        ? `✅ libx264 encoder available (source: ${h264Ffmpeg.source}) — ${formatFeatures(h264Ffmpeg.path, h264Features)}`
         : '⚠️ libx264 encoder unavailable — timeline output.codec "h264" will not work; use "mpeg4" or configure a compatible ffmpeg',
     );
+    const missingTextFilters = ffmpegFeatures
+      ? NATIVE_TEXT_FILTERS.filter(
+          (filter) =>
+            ffmpegFeatures.missing.includes(filter) &&
+            (h264Features?.missing.includes(filter) ?? true),
+        )
+      : [];
+    if (missingTextFilters.length)
+      checks.push(
+        `ℹ️ native FFmpeg filters unavailable: ${missingTextFilters.join(', ')} — burn CJK text via video_compose overlays, or render it into frames before encoding`,
+      );
 
     // 3. local CJK font (required by Sharp/SVG timeline overlays)
     checks.push(

@@ -124,7 +124,35 @@ async function isRunnable(path: string, signal?: AbortSignal): Promise<boolean> 
 
 async function hasEncoder(path: string, encoder: string, signal?: AbortSignal): Promise<boolean> {
   const output = await probeCommand(path, ['-hide_banner', '-encoders'], signal);
-  return output !== undefined && new RegExp(`\\b${encoder}\\b`).test(output);
+  return output !== undefined && listsName(output, encoder);
+}
+
+/** `-encoders` / `-filters` rows are `<flags> <name> ...`; match the name column only. */
+function listsName(output: string, name: string): boolean {
+  return new RegExp(`^\\s*\\S+\\s+${name}(\\s|$)`, 'm').test(output);
+}
+
+export const NATIVE_TEXT_FILTERS = ['drawtext', 'subtitles', 'ass'];
+const DOCTOR_ENCODERS = ['aac', 'libx264'];
+const DOCTOR_FILTERS = ['overlay', ...NATIVE_TEXT_FILTERS];
+
+/** Report the encoders and filters video-gen workflows depend on, for `/video-gen doctor`. */
+export async function probeFfmpegFeatures(
+  path: string,
+  signal?: AbortSignal,
+): Promise<{ available: string[]; missing: string[] }> {
+  const [encoders, filters] = await Promise.all([
+    probeCommand(path, ['-hide_banner', '-encoders'], signal),
+    probeCommand(path, ['-hide_banner', '-filters'], signal),
+  ]);
+  const report = { available: [] as string[], missing: [] as string[] };
+  for (const [names, output] of [
+    [DOCTOR_ENCODERS, encoders],
+    [DOCTOR_FILTERS, filters],
+  ] as const)
+    for (const name of names)
+      (output && listsName(output, name) ? report.available : report.missing).push(name);
+  return report;
 }
 
 export type StreamInfo = {
