@@ -29,6 +29,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { describeToolError, SafeToolError, ValidationError } from '@amaster.ai/pi-shared';
 import { isProjectTrusted, loadPiSettings } from '@amaster.ai/pi-shared/settings';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { type CapturedTurn, CaptureQueue, type CaptureState } from './capture.js';
@@ -60,7 +61,11 @@ function loadConfig(cwd: string, projectTrusted = false): Mem0ExtensionConfig {
 
 function resolveUserId(configUserId?: string, scope: MemoryUserIdScope = 'project'): string {
   if (configUserId?.trim()) return configUserId.trim();
-  if (scope === 'exact') throw new Error('Mem0 exact userId resolved to an empty value.');
+  if (scope === 'exact')
+    throw new ValidationError(
+      'Mem0 exact userId resolved to an empty value.',
+      'configuration_error',
+    );
   if (process.env.USER) return process.env.USER;
   if (process.env.USERNAME) return process.env.USERNAME;
   return 'default-user';
@@ -116,23 +121,30 @@ export default function mem0Extension(pi: ExtensionAPI): void {
       const memoryMode = normalizeMemoryMode(config.memoryMode);
       const recallFrequency = config.recallFrequency ?? 'user-input';
       if (recallFrequency !== 'user-input' && recallFrequency !== 'session') {
-        throw new Error(`Unsupported recall frequency: ${String(recallFrequency)}`);
+        throw new ValidationError(
+          `Unsupported recall frequency: ${String(recallFrequency)}`,
+          'configuration_error',
+        );
       }
       const topK = config.topK ?? 5;
       if (!Number.isInteger(topK) || topK <= 0) {
-        throw new Error(
+        throw new ValidationError(
           'topK must be an integer greater than 0. Use autoRecall: false to disable automatic recall.',
+          'configuration_error',
         );
       }
       if (
         config.requestTimeoutMs !== undefined &&
         (!Number.isInteger(config.requestTimeoutMs) || config.requestTimeoutMs <= 0)
       ) {
-        throw new Error('requestTimeoutMs must be a positive integer.');
+        throw new ValidationError(
+          'requestTimeoutMs must be a positive integer.',
+          'configuration_error',
+        );
       }
       for (const key of ['autoCapture', 'autoRecall', 'toolEnabled'] as const) {
         if (config[key] !== undefined && typeof config[key] !== 'boolean') {
-          throw new Error(`${key} must be a boolean.`);
+          throw new ValidationError(`${key} must be a boolean.`, 'configuration_error');
         }
       }
       if (mode === 'platform' && !config.apiKey?.trim()) {
@@ -265,8 +277,15 @@ export default function mem0Extension(pi: ExtensionAPI): void {
       activeToolEnabled = false;
       pi.setActiveTools(pi.getActiveTools().filter((name) => name !== MEMORY_TOOL_NAME));
       ctx.ui.setStatus(STATUS_KEY, 'mem0: init failed');
+      // Raw SDK/storage errors can carry paths, URLs, or upstream bodies; only vetted messages pass through.
+      const failure = describeToolError(
+        'Mem0 initialization',
+        err,
+        'Check the mem0 settings and provider availability.',
+      );
+      console.error(`[pi-memory-mem0] init failed (category=${failure.errorCategory})`);
       ctx.ui.notify(
-        `Mem0 init failed: ${err instanceof Error ? err.message : String(err)}`,
+        err instanceof SafeToolError ? `Mem0 init failed: ${failure.error}` : failure.error,
         'error',
       );
       return;

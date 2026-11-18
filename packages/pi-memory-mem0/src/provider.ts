@@ -76,7 +76,7 @@ export function normalizeMem0Mode(mode: unknown): Mem0Mode {
   if (mode === undefined || mode === null) return 'platform';
   if (mode === 'open-source') return 'embedded';
   if (mode === 'platform' || mode === 'embedded' || mode === 'self-hosted') return mode;
-  throw new Error(`Unsupported Mem0 mode: ${String(mode)}`);
+  throw new ValidationError(`Unsupported Mem0 mode: ${String(mode)}`, 'configuration_error');
 }
 
 export function normalizeMemoryMode(memoryMode: unknown): Mem0MemoryMode {
@@ -84,7 +84,10 @@ export function normalizeMemoryMode(memoryMode: unknown): Mem0MemoryMode {
   if (memoryMode === 'hybrid' || memoryMode === 'active' || memoryMode === 'passive') {
     return memoryMode;
   }
-  throw new Error(`Unsupported memory mode: ${String(memoryMode)}`);
+  throw new ValidationError(
+    `Unsupported memory mode: ${String(memoryMode)}`,
+    'configuration_error',
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -420,11 +423,17 @@ class SelfHostedProvider implements Mem0Provider {
     private readonly requestTimeoutMs = 30_000,
   ) {
     if (!Number.isFinite(requestTimeoutMs) || requestTimeoutMs <= 0) {
-      throw new Error('Self-hosted requestTimeoutMs must be a positive number.');
+      throw new ValidationError(
+        'Self-hosted requestTimeoutMs must be a positive number.',
+        'configuration_error',
+      );
     }
     const url = new URL(baseUrl);
     if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-      throw new Error('Self-hosted mode requires an HTTP(S) baseUrl.');
+      throw new ValidationError(
+        'Self-hosted mode requires an HTTP(S) baseUrl.',
+        'configuration_error',
+      );
     }
     this.baseUrl = url.toString().replace(/\/$/, '');
   }
@@ -895,7 +904,8 @@ export async function createMem0Provider(opts: CreateProviderOptions): Promise<M
   }
 
   if (mode === 'self-hosted') {
-    if (!config.baseUrl?.trim()) throw new Error('Self-hosted mode requires baseUrl.');
+    if (!config.baseUrl?.trim())
+      throw new ValidationError('Self-hosted mode requires baseUrl.', 'configuration_error');
     return new SelfHostedProvider(
       config.baseUrl.trim(),
       config.apiKey?.trim() || undefined,
@@ -904,7 +914,7 @@ export async function createMem0Provider(opts: CreateProviderOptions): Promise<M
   }
 
   if (!config.apiKey?.trim()) {
-    throw new Error('Platform mode requires apiKey.');
+    throw new ValidationError('Platform mode requires apiKey.', 'configuration_error');
   }
   return new PlatformProvider(config.apiKey.trim(), config.baseUrl?.trim());
 }

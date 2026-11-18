@@ -30,7 +30,7 @@ Fetch a URL and return its content. Also available via `/web-fetch <url> [extrac
 
 ### `x_search`
 
-Search X (Twitter) for posts and social media content. Only registered when xai provider has an API key.
+Search X (Twitter) for posts and social media content. Only registered when xai provider has an API key. Also available via `/x-search <query>`.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -225,7 +225,7 @@ Providers only override methods they support. Provider-specific capabilities (li
 
 - `web_search` and `/web-search <query>` — registered when a search provider has an API key, or when keyless `parallel` is explicitly selected.
 - `web_fetch` and `/web-fetch <url> [extraction instructions]` — registered when `fetch.provider` or `fetch.summary` is configured.
-- `x_search` — registered when xai provider has an API key.
+- `x_search` and `/x-search <query>` — registered when xai provider has an API key.
 - `image_search` — registered when an image search provider (dashscope, unsplash) has an API key; `/image-search` command is registered alongside it. An `imageSearch.provider` that doesn't support image search (e.g. `"openai"`) is treated as unconfigured.
 - If none are configured, the extension loads silently with no tools registered.
 
@@ -245,4 +245,4 @@ pnpm test       # vitest run src
 
 ### Tool failures
 
-`web_search`, `web_fetch`, `x_search`, and `image_search` return `isError: true` with a safe `error` message and `errorCategory`: `timeout` for request deadlines, `http_error` for recognized HTTP failures (with numeric `httpStatus`), `network_error` for recognized transport failures, `cancelled` for an upstream cancellation, `configuration_error` / `invalid_request` / `invalid_response` for vetted local validation failures, or `request_failed` for unclassified failures. Raw provider errors, response bodies, URLs, and credentials are excluded from these failure results and diagnostic logs. Caller cancellation propagates to the runtime. The `/web-search`, `/web-fetch`, and `/image-search` commands use the same safe messages and log categories. A timeout does not imply invalid provider configuration.
+`web_search`, `web_fetch`, `x_search`, and `image_search` return `isError: true` with a safe `error` message and `errorCategory`: `timeout` for request deadlines, `http_error` for recognized HTTP failures (with numeric `httpStatus`), `network_error` for recognized transport failures, `cancelled` for an upstream cancellation, `configuration_error` / `invalid_request` / `invalid_response` for vetted local validation failures, or `request_failed` for unclassified failures. Raw provider errors, response bodies, URLs, and credentials are excluded from these failure results and diagnostic logs. Caller cancellation propagates to the runtime. The `/web-search`, `/web-fetch`, `/x-search`, and `/image-search` commands use the same safe messages and log categories. A timeout does not imply invalid provider configuration.

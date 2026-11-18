@@ -334,6 +334,23 @@ describe('memoryMode gating', () => {
     expect(ctx.ui.setStatus).toHaveBeenCalledWith('mem0', 'mem0: init failed');
   });
 
+  it('does not surface raw provider initialization errors', async () => {
+    activateWith('hybrid');
+    mockCreateMem0Provider.mockRejectedValueOnce(
+      new Error('SQLITE_CANTOPEN: /Users/alice/.mem0/vector_store.db'),
+    );
+    const { pi, handlers } = createMockPi();
+    mem0Extension(pi as never);
+    const ctx = createMockCtx();
+    await handlers.session_start![0]!({}, ctx);
+
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      'Mem0 initialization failed. Check the mem0 settings and provider availability.',
+      'error',
+    );
+    expect(JSON.stringify(vi.mocked(ctx.ui.notify).mock.calls)).not.toContain('/Users/alice');
+  });
+
   it('removes a stale tool from active tools when a later session disables it', async () => {
     // The runtime keeps tool registrations for the life of the extension —
     // there is no unregister. A later passive session must remove the tool

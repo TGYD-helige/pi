@@ -487,7 +487,7 @@ function driftError(filePath: string, bakPath: string): MemoryDriftError {
   };
 }
 
-async function writeFileAtomic(target: string, content: string): Promise<void> {
+export async function writeFileAtomic(target: string, content: string): Promise<void> {
   const dir = path.dirname(target);
   // ensure the dir exists synchronously before tempfile creation
   mkdirSync(dir, { recursive: true });

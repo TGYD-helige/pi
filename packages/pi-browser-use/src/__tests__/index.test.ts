@@ -261,6 +261,27 @@ describe('browserUseExtension', () => {
   });
 
   describe('tool registration (session_start)', () => {
+    it('keeps the session usable when startup discovery fails and retries on demand', async () => {
+      mockListAllTools.mockRejectedValueOnce(new Error('spawn chrome-devtools-mcp ENOENT'));
+      const notify = vi.fn();
+      browserUseExtension(mockPi as any);
+      await sessionStartHandlers[0]!(
+        { type: 'session_start' },
+        { cwd: process.cwd(), ui: { notify } },
+      );
+
+      expect(notify).toHaveBeenCalledWith(expect.stringContaining('/browser-tools'), 'warning');
+      expect(registeredTools.has('browser_click')).toBe(false);
+
+      const result = (await registeredTools
+        .get('browser_tools')!
+        .execute('id', {}, undefined, undefined, {})) as { content: { text: string }[] };
+
+      expect(registeredTools.has('browser_click')).toBe(true);
+      expect(result.content[0]!.text).toContain('Browser tool groups:');
+      await shutdownExtension();
+    });
+
     it('hides session controls after switching from enabled to disabled sessions', async () => {
       vi.spyOn(BrowserSessionClient.prototype, 'connect').mockResolvedValue();
       vi.spyOn(BrowserSessionClient.prototype, 'listAllTools').mockImplementation(mockListAllTools);

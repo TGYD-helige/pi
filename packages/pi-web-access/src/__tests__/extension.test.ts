@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import piWebToolExtension from '../index.js';
+import { getProvider } from '../providers/index.js';
+import type { XaiProvider } from '../providers/xai.js';
 
 vi.mock('../config.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../config.js')>();
@@ -615,6 +617,27 @@ describe('piWebToolExtension - tool registration', () => {
     await pi.triggerSessionStart();
 
     expect(pi.tools.map((t) => t.name)).toContain('x_search');
+  });
+
+  it('runs x_search through /x-search with the command signal', async () => {
+    mockLoadSettings.mockReturnValue({ providers: { xai: { apiKey: 'xai-key' } } });
+    const xsearch = vi
+      .spyOn(getProvider('xai') as XaiProvider, 'xsearch')
+      .mockResolvedValue({ provider: 'xai', query: 'pi agent', results: [] });
+    const pi = createMockPi();
+    piWebToolExtension(pi as any);
+    await pi.triggerSessionStart();
+    const command = pi.commands.get('x-search') as {
+      handler: (args: string, ctx: any) => Promise<void>;
+    };
+    const notify = vi.fn();
+    const signal = new AbortController().signal;
+
+    await command.handler(' pi agent ', { ui: { notify }, signal });
+
+    expect(xsearch).toHaveBeenCalledWith({ query: 'pi agent' }, expect.any(Object), signal);
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining('## X Search Results'), 'info');
+    xsearch.mockRestore();
   });
 
   it('does not register x_search when xai has no key', async () => {
