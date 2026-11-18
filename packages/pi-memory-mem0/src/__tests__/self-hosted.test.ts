@@ -6,6 +6,19 @@ describe('self-hosted Mem0 provider', () => {
     vi.unstubAllGlobals();
   });
 
+  it.each([
+    'not a url',
+    'ftp://mem0.example.com',
+  ])('rejects an unusable baseUrl as a configuration error: %s', async (baseUrl) => {
+    await expect(
+      createMem0Provider({ config: { mode: 'self-hosted', baseUrl } }),
+    ).rejects.toMatchObject({
+      name: 'ValidationError',
+      errorCategory: 'configuration_error',
+      message: 'Self-hosted mode requires an HTTP(S) baseUrl.',
+    });
+  });
+
   it('keeps self-hosted user and agent memories in one exact dedup group', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(

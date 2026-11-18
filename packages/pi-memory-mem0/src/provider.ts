@@ -428,8 +428,8 @@ class SelfHostedProvider implements Mem0Provider {
         'configuration_error',
       );
     }
-    const url = new URL(baseUrl);
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    const url = URL.parse(baseUrl);
+    if (url?.protocol !== 'http:' && url?.protocol !== 'https:') {
       throw new ValidationError(
         'Self-hosted mode requires an HTTP(S) baseUrl.',
         'configuration_error',

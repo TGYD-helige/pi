@@ -600,7 +600,14 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
         params: Record<string, unknown>,
         signal: AbortSignal | undefined,
       ) {
-        if (toolGroups.size === 0) await discoverUpstreamTools(signal);
+        const discoveryError = await retryDiscovery(signal);
+        if (discoveryError) {
+          return {
+            content: [{ type: 'text' as const, text: discoveryError }],
+            details: undefined,
+            isError: true,
+          };
+        }
         const group = typeof params.group === 'string' ? params.group : undefined;
         if (!group) {
           return {
@@ -650,14 +657,10 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
           }));
       },
       async handler(args, ctx) {
-        if (toolGroups.size === 0) {
-          try {
-            await discoverUpstreamTools(ctx.signal);
-          } catch (error) {
-            if (ctx.signal?.aborted) throw error;
-            ctx.ui.notify(describeToolError('browser-tools', error).error, 'error');
-            return;
-          }
+        const discoveryError = await retryDiscovery(ctx.signal);
+        if (discoveryError) {
+          ctx.ui.notify(discoveryError, 'error');
+          return;
         }
         const group = String(args ?? '')
           .trim()
@@ -699,6 +702,23 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
     });
     discovery = attempt;
     return attempt;
+  }
+
+  /** Retry discovery when no groups exist; returns a safe message on failure. */
+  async function retryDiscovery(signal?: AbortSignal): Promise<string | undefined> {
+    if (toolGroups.size > 0) return;
+    try {
+      await discoverUpstreamTools(signal);
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      const failure = describeToolError(
+        'Browser tool discovery',
+        error,
+        'Check that Chrome and chrome-devtools-mcp can start, then retry.',
+      );
+      console.error(`[pi-browser-use] tool discovery failed (category=${failure.errorCategory})`);
+      return failure.error;
+    }
   }
 
   async function registerUpstreamTools(signal?: AbortSignal): Promise<void> {
