@@ -777,7 +777,7 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
     }
   }
 
-  /** Create a VisionCaller that uses pi-ai's complete() with the model registry. */
+  /** Create a VisionCaller that sends requests through the model registry. */
   function createPiVisionCaller(
     visionConfig: VisionModelConfig,
     ctx: ExtensionContext,

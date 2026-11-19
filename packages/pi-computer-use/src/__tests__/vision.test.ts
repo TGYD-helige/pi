@@ -55,13 +55,13 @@ describe('vision', () => {
       // compat has no provider for this api; only the registry can serve it.
       const model = { ...backing, api: 'pi-computer-extension-only-api' };
       provider.setResponses([() => fauxAssistantMessage('Button at (10, 20).')]);
-      // Like Pi's ModelRegistry, complete is a method that needs its receiver.
+      // Like Pi's ModelRegistry, streamSimple is a method that needs its receiver.
       const modelRegistry = {
         backing,
         find: () => model,
         getApiKeyAndHeaders: async () => ({ ok: true, apiKey: 'test-key' }),
-        complete(this: { backing: typeof backing }, _m: unknown, c: Context, o?: object) {
-          return streamSimple(this.backing, c, o).result();
+        streamSimple(this: { backing: typeof backing }, _m: unknown, c: Context, o?: object) {
+          return streamSimple(this.backing, c, o);
         },
       };
       try {

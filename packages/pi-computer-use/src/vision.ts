@@ -100,7 +100,7 @@ export function createPiVisionCaller(
         };
       });
       console.error(
-        '[pi-computer-use vision] complete() returned',
+        '[pi-computer-use vision] model returned',
         JSON.stringify(
           {
             provider: visionConfig.provider,

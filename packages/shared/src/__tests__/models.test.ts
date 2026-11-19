@@ -13,7 +13,7 @@ const context: Context = {
 const text = (message: { content: Array<{ type: string; text?: string }> }) =>
   message.content.map((part) => part.text ?? '').join('');
 
-describe('model requests', () => {
+describe('models', () => {
   const providers: Array<{ unregister(): void }> = [];
   afterEach(() => {
     for (const provider of providers.splice(0)) provider.unregister();
@@ -44,9 +44,6 @@ describe('model requests', () => {
       backing: backing.getModel(),
       streamSimple(this: { backing: Model<string> }, _m: Model<string>, c: Context, o?: object) {
         return streamSimple(this.backing, c, o);
-      },
-      complete(this: { backing: Model<string> }, _m: Model<string>, c: Context, o?: object) {
-        return streamSimple(this.backing, c, o).result();
       },
     };
     const auth = { apiKey: 'resolved-once' };

@@ -656,18 +656,18 @@ describe('browserUseExtension', () => {
       mockCallTool.mockResolvedValueOnce({
         content: [{ type: 'image', data: 'aW1hZ2U=', mimeType: 'image/png' }],
       } as any);
-      // Like Pi's ModelRegistry, complete is a method that needs its receiver.
+      // Like Pi's ModelRegistry, streamSimple is a method that needs its receiver.
       const modelRegistry = {
         result: { content: [{ type: 'text', text: 'Registry analysis' }] },
         find: () => ({ id: 'claude-opus', provider: 'claude-sdk', api: 'claude-agent-sdk' }),
         getApiKeyAndHeaders: async () => ({ ok: true, apiKey: 'resolved-once' }),
-        complete: vi.fn(function (
+        streamSimple: vi.fn(function (
           this: { result: unknown },
           _m: unknown,
           _c: unknown,
           _o?: object,
         ) {
-          return Promise.resolve(this.result);
+          return { result: () => Promise.resolve(this.result) };
         }),
       };
       const result = await registeredTools
@@ -676,7 +676,7 @@ describe('browserUseExtension', () => {
       expect(JSON.stringify(result)).toContain('Registry analysis');
       expect(mockComplete).not.toHaveBeenCalled();
       // The registry resolves credentials per request.
-      expect(modelRegistry.complete.mock.calls[0]![2]).not.toHaveProperty('apiKey');
+      expect(modelRegistry.streamSimple.mock.calls[0]![2]).not.toHaveProperty('apiKey');
     });
 
     test('does not register analyze_screenshot without visionModel', async () => {

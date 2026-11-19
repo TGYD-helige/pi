@@ -4,7 +4,6 @@ import type {
   AssistantMessageEventStream,
   Context,
   Model,
-  ProviderStreamOptions,
   SimpleStreamOptions,
 } from '@earendil-works/pi-ai';
 import { complete, streamSimple } from '@earendil-works/pi-ai/compat';
@@ -12,18 +11,13 @@ import { complete, streamSimple } from '@earendil-works/pi-ai/compat';
 /** Credentials from `ModelRegistry.getApiKeyAndHeaders`, used only when Pi lacks registry requests. */
 export type ModelRequestAuth = Pick<SimpleStreamOptions, 'apiKey' | 'headers'>;
 
-/** Request methods of Pi's `ModelRegistry`; Pi 0.86 and later provide them. */
+/** Request method of Pi's `ModelRegistry`; Pi 0.86 and later provide it. */
 export interface ModelRequestRegistry {
   streamSimple?(
     model: Model<Api>,
     context: Context,
     options?: SimpleStreamOptions,
   ): AssistantMessageEventStream;
-  complete?(
-    model: Model<Api>,
-    context: Context,
-    options?: ProviderStreamOptions,
-  ): Promise<AssistantMessage>;
 }
 
 /**
@@ -41,15 +35,18 @@ export function streamModelRequest(
   return streamSimple(model, context, { ...options, ...definedAuth(auth) });
 }
 
-/** Complete a model request through Pi's registry, as {@link streamModelRequest} does. */
+/**
+ * Complete a model request as {@link streamModelRequest} does. The registry path streams because only
+ * the registry's stream routes virtual models to a concrete model.
+ */
 export function completeModelRequest(
   registry: ModelRequestRegistry,
   model: Model<Api>,
   context: Context,
-  options: ProviderStreamOptions,
+  options: SimpleStreamOptions,
   auth: ModelRequestAuth,
 ): Promise<AssistantMessage> {
-  if (registry.complete) return registry.complete(model, context, options);
+  if (registry.streamSimple) return registry.streamSimple(model, context, options).result();
   return complete(model, context, { ...options, ...definedAuth(auth) });
 }
 
