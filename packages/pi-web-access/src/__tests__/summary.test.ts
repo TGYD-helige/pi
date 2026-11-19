@@ -136,4 +136,22 @@ describe('summarizeContent', () => {
     const result = await summarizeContent('c', 'p', config, mockCtx);
     expect(result).toBe('Part 1 Part 2');
   });
+
+  it("uses Pi's registry so providers registered by extensions work", async () => {
+    const model = { id: 'claude-opus', provider: 'claude-sdk', api: 'claude-agent-sdk' };
+    // Like Pi's ModelRegistry, complete is a method that needs its receiver.
+    const registry = {
+      result: { content: [{ type: 'text', text: 'From the registry' }] },
+      find: () => model,
+      getApiKeyAndHeaders: async () => ({ ok: true, apiKey: 'resolved-once' }),
+      complete: vi.fn(function (this: { result: unknown }, _m: unknown, _c: unknown, _o?: object) {
+        return Promise.resolve(this.result);
+      }),
+    };
+    const result = await summarizeContent('c', 'p', config, { modelRegistry: registry } as any);
+    expect(result).toBe('From the registry');
+    expect(mockComplete).not.toHaveBeenCalled();
+    // The registry resolves credentials per request.
+    expect(registry.complete.mock.calls[0]![2]).not.toHaveProperty('apiKey');
+  });
 });

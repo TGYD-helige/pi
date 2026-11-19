@@ -648,7 +648,7 @@ describe('runDream', () => {
     })) as never);
     // Real Pi resolves `{ ok: true }` without a key for an unconfigured built-in provider.
     registry.hasConfiguredAuth.mockImplementation(
-      (model: { provider: string }) => model.provider !== 'openai',
+      (model) => (model as { provider: string }).provider !== 'openai',
     );
     registry.streamSimple.mockImplementation(function (this: unknown) {
       return this;
@@ -734,7 +734,7 @@ function modelRegistry() {
   return {
     find: vi.fn(() => ({ id: 'test-model' })),
     getApiKeyAndHeaders: vi.fn().mockResolvedValue({ ok: true, apiKey: 'test' }),
-    hasConfiguredAuth: vi.fn(() => true),
+    hasConfiguredAuth: vi.fn((_model: unknown) => true),
     streamSimple: vi.fn(),
   };
 }

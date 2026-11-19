@@ -19,6 +19,10 @@
       "types": "./dist/threat-patterns.d.ts",
       "default": "./dist/threat-patterns.js"
     },
+    "./models": {
+      "types": "./dist/models.d.ts",
+      "default": "./dist/models.js"
+    },
     "./package.json": {
       "default": "./package.json"
     }
@@ -39,7 +43,16 @@
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run src"
   },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": ">=0.80.10"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-ai": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@earendil-works/pi-ai": "1.5.2",
     "vitest": "^4.0.0"
   }
 }

@@ -4,6 +4,7 @@ import {
   SafeToolError,
   ValidationError,
 } from '@amaster.ai/pi-shared';
+import { streamModelRequest } from '@amaster.ai/pi-shared/models';
 /**
  * Background memory extraction via a sub-agent loop.
  *
@@ -24,7 +25,6 @@ import {
  */
 
 import { Agent, type AgentTool } from '@earendil-works/pi-agent-core';
-import { streamSimple } from '@earendil-works/pi-ai/compat';
 import { ModelRegistry, ModelRuntime } from '@earendil-works/pi-coding-agent';
 import type { ConsolidationModelRegistry } from './consolidation.js';
 import { MEMORY_GUIDANCE } from './guidance.js';
@@ -227,12 +227,7 @@ export function createExtractionRunner(opts: ExtractionRunnerOptions): Extractio
       },
       streamFn: (m, ctx, streamOpts) => {
         const merged = { ...streamOpts, ...modelErrors.fetchOptions(m.api, streamOpts?.fetch) };
-        // The registry resolves credentials per request, so OAuth tokens refresh during the run.
-        const registryStream = modelRegistry?.streamSimple?.bind(modelRegistry);
-        if (registryStream) return modelErrors.run(() => registryStream(m, ctx, merged));
-        if (auth.apiKey) (merged as Record<string, unknown>).apiKey = auth.apiKey;
-        if (auth.headers) (merged as Record<string, unknown>).headers = auth.headers;
-        return modelErrors.run(() => streamSimple(m as never, ctx as never, merged));
+        return modelErrors.run(() => streamModelRequest(registry, m, ctx, merged, auth));
       },
       convertToLlm: (msgs) => msgs as never[],
     });
@@ -349,14 +344,7 @@ export function countMemoryActions(messages: unknown[]): number {
   return count;
 }
 
-async function createFallbackRegistry() {
+async function createFallbackRegistry(): Promise<ConsolidationModelRegistry> {
   const modelRuntime = await ModelRuntime.create();
-  const registry = new ModelRegistry(modelRuntime);
-  return {
-    find: (provider: string, model: string) => registry.find(provider, model),
-    getApiKeyAndHeaders: async (model: unknown) => {
-      const auth = await registry.getApiKeyAndHeaders(model as never);
-      return auth;
-    },
-  };
+  return new ModelRegistry(modelRuntime);
 }

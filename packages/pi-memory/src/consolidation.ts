@@ -6,8 +6,12 @@
  */
 
 import { createModelErrorCapture, SafeToolError } from '@amaster.ai/pi-shared';
+import {
+  type ModelRequestAuth,
+  type ModelRequestRegistry,
+  streamModelRequest,
+} from '@amaster.ai/pi-shared/models';
 import { Agent } from '@earendil-works/pi-agent-core';
-import { streamSimple } from '@earendil-works/pi-ai/compat';
 import { MEMORY_GUIDANCE } from './guidance.js';
 import { historyExcerpt } from './history-text.js';
 import { MemoryStore } from './store.js';
@@ -25,15 +29,11 @@ export interface DreamTurn {
   createdAt: string;
 }
 
-export interface ConsolidationModelRegistry {
+export interface ConsolidationModelRegistry extends ModelRequestRegistry {
   find(provider: string, model: string): unknown;
-  getApiKeyAndHeaders(
-    model: unknown,
-  ): Promise<{ ok: boolean; apiKey?: string; headers?: Record<string, string>; error?: string }>;
+  getApiKeyAndHeaders(model: unknown): Promise<ModelRequestAuth & { ok: boolean; error?: string }>;
   /** False when Pi knows of no credentials for the model; absent before Pi exposes it. */
   hasConfiguredAuth?(model: unknown): boolean;
-  /** Pi's registry stream; unlike compat streaming it reaches providers from `pi.registerProvider()`. */
-  streamSimple?: typeof streamSimple;
 }
 
 export interface ConsolidationOptions {
@@ -143,16 +143,7 @@ export async function runConsolidation(opts: ConsolidationOptions): Promise<bool
           ? { signal: existingSignal ? AbortSignal.any([existingSignal, signal]) : signal }
           : {}),
       };
-      return modelErrors.run(() =>
-        // The registry resolves credentials per request, so OAuth tokens refresh during the run.
-        modelRegistry.streamSimple
-          ? modelRegistry.streamSimple(m, c, options)
-          : streamSimple(m, c, {
-              ...options,
-              ...(auth.apiKey ? { apiKey: auth.apiKey } : {}),
-              ...(auth.headers ? { headers: auth.headers } : {}),
-            }),
-      );
+      return modelErrors.run(() => streamModelRequest(modelRegistry, m, c, options, auth));
     },
     convertToLlm: (msgs) => msgs as never[],
   });

@@ -1,11 +1,13 @@
 import { createServer } from 'node:http';
 import { Agent } from '@earendil-works/pi-agent-core';
+import type { Context } from '@earendil-works/pi-ai';
 import {
   fauxAssistantMessage,
   getCurrentSystemPrompt,
   getCurrentTools,
   getModel,
   registerFauxProvider,
+  streamSimple,
 } from '@earendil-works/pi-ai/compat';
 import { describe, expect, it, vi } from 'vitest';
 import { completeOnce } from '../llm.js';
@@ -301,6 +303,35 @@ describe('completeOnce', () => {
       );
       expect(result).toBe('Goal completed.');
       expect(provider.state.callCount).toBe(1);
+    } finally {
+      provider.unregister();
+    }
+  });
+
+  it('reaches a provider registered by an extension through the registry', async () => {
+    const provider = registerFauxProvider({ provider: 'pi-goal-extension-provider' });
+    const backing = provider.getModel();
+    // compat streaming has no provider for this api; only the registry can serve it.
+    const model = { ...backing, api: 'pi-goal-extension-only-api' };
+    provider.setResponses([() => fauxAssistantMessage('Goal completed.')]);
+    // Like Pi's ModelRegistry, the stream is a method that needs its receiver.
+    const registry = {
+      backing,
+      find: () => model,
+      getApiKeyAndHeaders: async () => ({ ok: true, apiKey: 'test-key' }),
+      streamSimple(this: { backing: typeof backing }, _m: unknown, c: Context, o?: object) {
+        return streamSimple(this.backing, c, o);
+      },
+    };
+    try {
+      await expect(
+        completeOnce(
+          registry as never,
+          { provider: model.provider, model: model.id },
+          'Evaluate the goal.',
+          'Check progress.',
+        ),
+      ).resolves.toBe('Goal completed.');
     } finally {
       provider.unregister();
     }

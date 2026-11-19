@@ -1,5 +1,5 @@
+import { completeModelRequest } from '@amaster.ai/pi-shared/models';
 import type { TextContent as AiTextContent } from '@earendil-works/pi-ai';
-import { complete } from '@earendil-works/pi-ai/compat';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import type { SummaryModelConfig } from './types.js';
 
@@ -31,15 +31,8 @@ export async function summarizeContent(
       ? `${content.slice(0, MAX_CONTENT_LENGTH)}\n\n[Content truncated due to length...]`
       : content;
 
-  const options: Record<string, unknown> = {
-    signal,
-    temperature: 0,
-    maxTokens: 4096,
-  };
-  if (auth.apiKey) options.apiKey = auth.apiKey;
-  if (auth.headers) options.headers = auth.headers;
-
-  const result = await complete(
+  const result = await completeModelRequest(
+    ctx.modelRegistry,
     model,
     {
       systemPrompt: SYSTEM_PROMPT,
@@ -56,7 +49,8 @@ export async function summarizeContent(
         },
       ],
     },
-    options,
+    { ...(signal ? { signal } : {}), temperature: 0, maxTokens: 4096 },
+    auth,
   );
 
   signal?.throwIfAborted();

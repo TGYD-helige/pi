@@ -790,7 +790,7 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
     ): Promise<string> => {
       signal?.throwIfAborted();
       // Imported lazily: pi-ai is heavy and only needed when a vision call actually runs.
-      const { complete } = await import('@earendil-works/pi-ai/compat');
+      const { completeModelRequest } = await import('@amaster.ai/pi-shared/models');
       signal?.throwIfAborted();
       const model = ctx.modelRegistry.find(visionConfig.provider, visionConfig.model);
       if (!model) {
@@ -809,16 +809,9 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
         );
       }
 
-      const options: Record<string, unknown> = {
-        maxTokens: 2048,
-      };
-      if (auth.apiKey) options.apiKey = auth.apiKey;
-      if (auth.headers) options.headers = auth.headers;
-      if (signal) options.signal = signal;
-
       const modelErrors = createModelErrorCapture();
-      Object.assign(options, modelErrors.fetchOptions(model.api));
-      const result = await complete(
+      const result = await completeModelRequest(
+        ctx.modelRegistry,
         model,
         {
           systemPrompt: VISUAL_SYSTEM_PROMPT,
@@ -836,7 +829,8 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
             },
           ],
         },
-        options,
+        { maxTokens: 2048, ...(signal ? { signal } : {}), ...modelErrors.fetchOptions(model.api) },
+        auth,
       );
 
       signal?.throwIfAborted();
