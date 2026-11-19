@@ -30,7 +30,7 @@ export interface RunDreamOptions {
   dreaming?: DreamingConfig;
   memoryDir: string;
   modelRegistry: ConsolidationModelRegistry;
-  /** Active session model; used when `dreaming.model` is unset and the default model lacks credentials. */
+  /** Active session model; replaces the default model when `dreaming.model` is unset and Pi has no default credentials. */
   currentModel?: { provider: string; id: string };
   /** Current Pi session directory. */
   sessionDir?: string;
@@ -49,12 +49,15 @@ export async function runDream(options: RunDreamOptions): Promise<boolean> {
   if (config.enabled === false || options.signal?.aborted) return false;
 
   const registry = options.modelRegistry;
-  const candidates = (
-    config.model
-      ? [registry.find(config.model.provider, config.model.model)]
-      : [registry.find(DEFAULT_MODEL.provider, DEFAULT_MODEL.model), options.currentModel]
-  ).filter(Boolean);
-  if (candidates.length === 0) return false;
+  const { currentModel } = options;
+  let modelConfig = config.model ?? DEFAULT_MODEL;
+  let model = registry.find(modelConfig.provider, modelConfig.model);
+  // Without a configured model, use the active one rather than a default that has no credentials.
+  if (!config.model && currentModel && (!model || registry.hasConfiguredAuth?.(model) === false)) {
+    model = currentModel;
+    modelConfig = { provider: currentModel.provider, model: currentModel.id };
+  }
+  if (!model) return false;
 
   await mkdir(options.memoryDir, { recursive: true });
 
@@ -84,15 +87,12 @@ export async function runDream(options: RunDreamOptions): Promise<boolean> {
     const inputs = await readDreamInputs(
       options,
       state.lastConsolidatedAt,
-      candidates,
+      model,
       discovery,
       state.scanCursor,
     );
     if (!inputs || options.signal?.aborted) return false;
-    const { turns, turnCount, credentials, model } = inputs;
-    const { provider, id } = model as { provider?: string; id?: string };
-    const modelConfig = config.model ?? (provider && id ? { provider, model: id } : DEFAULT_MODEL);
-    const { streamSimple } = registry;
+    const { turns, turnCount, credentials } = inputs;
     const { scanCursor: _previousCursor, ...previous } = state;
     const progress = {
       ...previous,
@@ -116,7 +116,7 @@ export async function runDream(options: RunDreamOptions): Promise<boolean> {
       modelRegistry: {
         find: () => model,
         getApiKeyAndHeaders: async () => credentials,
-        ...(streamSimple ? { streamSimple: streamSimple.bind(registry) } : {}),
+        ...(registry.streamSimple ? { streamSimple: registry.streamSimple.bind(registry) } : {}),
       },
       ...(options.signal ? { signal: options.signal } : {}),
     });
@@ -197,7 +197,7 @@ const INVALID_HISTORY =
 async function readDreamInputs(
   options: RunDreamOptions,
   lastConsolidatedAt: string | null,
-  models: unknown[],
+  model: unknown,
   discovery: { active?: Promise<unknown> },
   cursor?: DreamScanCursor,
 ) {
@@ -207,15 +207,7 @@ async function readDreamInputs(
   ]);
   if (signal.aborted) return undefined;
   const operation = (async () => {
-    let model: unknown;
-    let credentials: Awaited<ReturnType<ConsolidationModelRegistry['getApiKeyAndHeaders']>> = {
-      ok: false,
-    };
-    // Prefer the first candidate with usable credentials.
-    for (model of models) {
-      credentials = await options.modelRegistry.getApiKeyAndHeaders(model);
-      if (credentials.ok || signal.aborted) break;
-    }
+    const credentials = await options.modelRegistry.getApiKeyAndHeaders(model);
     if (!credentials.ok || signal.aborted) return undefined;
     const history = await scanPiSessionTurns(
       options.sessionDir,
@@ -230,7 +222,7 @@ async function readDreamInputs(
         'Some history could not be read. The checkpoint was not advanced; restore access before retrying consolidation.',
       );
     });
-    return signal.aborted ? undefined : { ...history, credentials, model };
+    return signal.aborted ? undefined : { ...history, credentials };
   })();
   discovery.active = operation;
   void operation.then(

@@ -26,6 +26,7 @@ import {
 import { Agent, type AgentTool } from '@earendil-works/pi-agent-core';
 import { streamSimple } from '@earendil-works/pi-ai/compat';
 import { ModelRegistry, ModelRuntime } from '@earendil-works/pi-coding-agent';
+import type { ConsolidationModelRegistry } from './consolidation.js';
 import { MEMORY_GUIDANCE } from './guidance.js';
 import type { MemoryStore } from './store.js';
 import { createMemoryTools } from './tools.js';
@@ -45,14 +46,7 @@ export interface ExtractionRunnerOptions {
   /** How many user turns between extraction runs. */
   interval: number;
   /** Model registry for resolving provider/model. Falls back to the default ModelRuntime if omitted. */
-  modelRegistry?: {
-    find(provider: string, model: string): unknown;
-    getApiKeyAndHeaders(
-      model: unknown,
-    ): Promise<{ ok: boolean; apiKey?: string; headers?: Record<string, string>; error?: string }>;
-    /** Pi's registry stream; unlike compat streaming it reaches providers from `pi.registerProvider()`. */
-    streamSimple?: typeof streamSimple;
-  };
+  modelRegistry?: ConsolidationModelRegistry;
   /** Callback for user-visible notifications. */
   onNotify?: (message: string, level: 'info' | 'warning') => void;
 }
@@ -232,12 +226,13 @@ export function createExtractionRunner(opts: ExtractionRunnerOptions): Extractio
         tools,
       },
       streamFn: (m, ctx, streamOpts) => {
-        const merged = { ...streamOpts };
+        const merged = { ...streamOpts, ...modelErrors.fetchOptions(m.api, streamOpts?.fetch) };
+        // The registry resolves credentials per request, so OAuth tokens refresh during the run.
+        const registryStream = modelRegistry?.streamSimple?.bind(modelRegistry);
+        if (registryStream) return modelErrors.run(() => registryStream(m, ctx, merged));
         if (auth.apiKey) (merged as Record<string, unknown>).apiKey = auth.apiKey;
         if (auth.headers) (merged as Record<string, unknown>).headers = auth.headers;
-        Object.assign(merged, modelErrors.fetchOptions(m.api, merged.fetch));
-        const stream = modelRegistry?.streamSimple ?? streamSimple;
-        return modelErrors.run(() => stream(m as never, ctx as never, merged));
+        return modelErrors.run(() => streamSimple(m as never, ctx as never, merged));
       },
       convertToLlm: (msgs) => msgs as never[],
     });

@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import type { Context } from '@earendil-works/pi-ai';
 import {
   fauxAssistantMessage,
   fauxToolCall,
@@ -201,25 +202,25 @@ describe('consolidation', () => {
       // compat streaming has no provider for this api; only the registry can serve it.
       const model = { ...backing, api: 'pi-memory-extension-only-api' };
       provider.setResponses([() => fauxAssistantMessage('Nothing to change.')]);
-      const registryStream = vi.fn((_m, c, o) => streamSimple(backing, c, o));
+      // Like Pi's ModelRegistry, the stream is a method that needs its receiver.
+      const modelRegistry = {
+        backing,
+        find: () => model,
+        getApiKeyAndHeaders: async () => ({ ok: true, apiKey: 'test-key' }),
+        streamSimple(this: { backing: typeof backing }, _m: unknown, c: Context, o?: object) {
+          return streamSimple(this.backing, c, o);
+        },
+      };
       try {
         await expect(
           runConsolidation({
             memoryDir,
             turns: [],
             modelConfig: { provider: model.provider, model: model.id },
-            modelRegistry: {
-              find: () => model,
-              getApiKeyAndHeaders: async () => ({ ok: true, apiKey: 'test-key' }),
-              streamSimple: registryStream,
-            },
+            modelRegistry: modelRegistry as never,
           }),
         ).resolves.toBe(true);
-        expect(registryStream).toHaveBeenCalledWith(
-          model,
-          expect.anything(),
-          expect.objectContaining({ apiKey: 'test-key' }),
-        );
+        expect(provider.state.callCount).toBe(1);
       } finally {
         provider.unregister();
       }

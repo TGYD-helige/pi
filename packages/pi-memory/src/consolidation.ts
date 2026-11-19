@@ -30,6 +30,8 @@ export interface ConsolidationModelRegistry {
   getApiKeyAndHeaders(
     model: unknown,
   ): Promise<{ ok: boolean; apiKey?: string; headers?: Record<string, string>; error?: string }>;
+  /** False when Pi knows of no credentials for the model; absent before Pi exposes it. */
+  hasConfiguredAuth?(model: unknown): boolean;
   /** Pi's registry stream; unlike compat streaming it reaches providers from `pi.registerProvider()`. */
   streamSimple?: typeof streamSimple;
 }
@@ -134,17 +136,22 @@ export async function runConsolidation(opts: ConsolidationOptions): Promise<bool
     },
     streamFn: (m, c, streamOpts) => {
       const existingSignal = (streamOpts as { signal?: AbortSignal } | undefined)?.signal;
-      const stream = modelRegistry.streamSimple ?? streamSimple;
+      const options = {
+        ...streamOpts,
+        ...modelErrors.fetchOptions(m.api, streamOpts?.fetch),
+        ...(signal
+          ? { signal: existingSignal ? AbortSignal.any([existingSignal, signal]) : signal }
+          : {}),
+      };
       return modelErrors.run(() =>
-        stream(m, c, {
-          ...streamOpts,
-          ...modelErrors.fetchOptions(m.api, streamOpts?.fetch),
-          ...(auth.apiKey ? { apiKey: auth.apiKey } : {}),
-          ...(auth.headers ? { headers: auth.headers } : {}),
-          ...(signal
-            ? { signal: existingSignal ? AbortSignal.any([existingSignal, signal]) : signal }
-            : {}),
-        }),
+        // The registry resolves credentials per request, so OAuth tokens refresh during the run.
+        modelRegistry.streamSimple
+          ? modelRegistry.streamSimple(m, c, options)
+          : streamSimple(m, c, {
+              ...options,
+              ...(auth.apiKey ? { apiKey: auth.apiKey } : {}),
+              ...(auth.headers ? { headers: auth.headers } : {}),
+            }),
       );
     },
     convertToLlm: (msgs) => msgs as never[],

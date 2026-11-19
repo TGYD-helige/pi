@@ -646,9 +646,13 @@ describe('runDream', () => {
       provider,
       id,
     })) as never);
-    registry.getApiKeyAndHeaders.mockImplementation(async (model: { provider: string }) =>
-      model.provider === 'openai' ? { ok: false, error: 'no key' } : { ok: true, apiKey: 'test' },
+    // Real Pi resolves `{ ok: true }` without a key for an unconfigured built-in provider.
+    registry.hasConfiguredAuth.mockImplementation(
+      (model: { provider: string }) => model.provider !== 'openai',
     );
+    registry.streamSimple.mockImplementation(function (this: unknown) {
+      return this;
+    });
     await expect(
       runDream({
         memoryDir: path.join(home, 'memories'),
@@ -661,11 +665,12 @@ describe('runDream', () => {
     const consolidation = runConsolidationMock.mock.calls[0]![0];
     expect(consolidation.modelConfig).toEqual({ provider: 'claude-sdk', model: 'claude-opus' });
     expect(consolidation.modelRegistry.find()).toBe(current);
-    consolidation.modelRegistry.streamSimple(current, { messages: [] }, {});
-    expect(registry.streamSimple).toHaveBeenCalledWith(current, { messages: [] }, {});
+    expect(registry.getApiKeyAndHeaders).toHaveBeenCalledWith(current);
+    // The forwarded stream keeps the registry as its receiver.
+    expect(consolidation.modelRegistry.streamSimple(current, { messages: [] })).toBe(registry);
   });
 
-  it('keeps the default model when its credentials resolve', async () => {
+  it('keeps the default model when its credentials are configured', async () => {
     const registry = modelRegistry();
     registry.find.mockImplementation(((provider: string, id: string) => ({
       provider,
@@ -686,6 +691,7 @@ describe('runDream', () => {
 
   it('does not replace a configured model with the active model', async () => {
     const registry = modelRegistry();
+    registry.hasConfiguredAuth.mockReturnValue(false);
     registry.getApiKeyAndHeaders.mockResolvedValue({ ok: false, error: 'no key' });
     await expect(
       runDream({
@@ -696,7 +702,7 @@ describe('runDream', () => {
         dreaming: { minTurnsSinceLastRun: 1, model: { provider: 'openai', model: 'gpt-5' } },
       }),
     ).resolves.toBe(false);
-    expect(registry.getApiKeyAndHeaders).toHaveBeenCalledTimes(1);
+    expect(registry.getApiKeyAndHeaders).toHaveBeenCalledWith({ id: 'test-model' });
     expect(runConsolidationMock).not.toHaveBeenCalled();
   });
 
@@ -728,6 +734,7 @@ function modelRegistry() {
   return {
     find: vi.fn(() => ({ id: 'test-model' })),
     getApiKeyAndHeaders: vi.fn().mockResolvedValue({ ok: true, apiKey: 'test' }),
+    hasConfiguredAuth: vi.fn(() => true),
     streamSimple: vi.fn(),
   };
 }
