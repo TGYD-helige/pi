@@ -50,6 +50,8 @@ export interface ExtractionRunnerOptions {
     getApiKeyAndHeaders(
       model: unknown,
     ): Promise<{ ok: boolean; apiKey?: string; headers?: Record<string, string>; error?: string }>;
+    /** Pi's registry stream; unlike compat streaming it reaches providers from `pi.registerProvider()`. */
+    streamSimple?: typeof streamSimple;
   };
   /** Callback for user-visible notifications. */
   onNotify?: (message: string, level: 'info' | 'warning') => void;
@@ -234,7 +236,8 @@ export function createExtractionRunner(opts: ExtractionRunnerOptions): Extractio
         if (auth.apiKey) (merged as Record<string, unknown>).apiKey = auth.apiKey;
         if (auth.headers) (merged as Record<string, unknown>).headers = auth.headers;
         Object.assign(merged, modelErrors.fetchOptions(m.api, merged.fetch));
-        return modelErrors.run(() => streamSimple(m as never, ctx as never, merged));
+        const stream = modelRegistry?.streamSimple ?? streamSimple;
+        return modelErrors.run(() => stream(m as never, ctx as never, merged));
       },
       convertToLlm: (msgs) => msgs as never[],
     });

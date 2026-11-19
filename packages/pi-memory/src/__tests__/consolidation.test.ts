@@ -7,6 +7,7 @@ import {
   getCurrentSystemPrompt,
   getCurrentTools,
   registerFauxProvider,
+  streamSimple,
 } from '@earendil-works/pi-ai/compat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -189,6 +190,36 @@ describe('consolidation', () => {
           'The project uses Node 24.',
         );
         expect(provider.state.callCount).toBe(2);
+      } finally {
+        provider.unregister();
+      }
+    });
+
+    it('streams through the registry for providers registered by extensions', async () => {
+      const provider = registerFauxProvider({ provider: 'pi-memory-extension-provider' });
+      const backing = provider.getModel();
+      // compat streaming has no provider for this api; only the registry can serve it.
+      const model = { ...backing, api: 'pi-memory-extension-only-api' };
+      provider.setResponses([() => fauxAssistantMessage('Nothing to change.')]);
+      const registryStream = vi.fn((_m, c, o) => streamSimple(backing, c, o));
+      try {
+        await expect(
+          runConsolidation({
+            memoryDir,
+            turns: [],
+            modelConfig: { provider: model.provider, model: model.id },
+            modelRegistry: {
+              find: () => model,
+              getApiKeyAndHeaders: async () => ({ ok: true, apiKey: 'test-key' }),
+              streamSimple: registryStream,
+            },
+          }),
+        ).resolves.toBe(true);
+        expect(registryStream).toHaveBeenCalledWith(
+          model,
+          expect.anything(),
+          expect.objectContaining({ apiKey: 'test-key' }),
+        );
       } finally {
         provider.unregister();
       }

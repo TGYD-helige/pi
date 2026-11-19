@@ -639,6 +639,67 @@ describe('runDream', () => {
     );
   });
 
+  it('falls back to the active model when the default model has no credentials', async () => {
+    const registry = modelRegistry();
+    const current = { provider: 'claude-sdk', id: 'claude-opus' };
+    registry.find.mockImplementation(((provider: string, id: string) => ({
+      provider,
+      id,
+    })) as never);
+    registry.getApiKeyAndHeaders.mockImplementation(async (model: { provider: string }) =>
+      model.provider === 'openai' ? { ok: false, error: 'no key' } : { ok: true, apiKey: 'test' },
+    );
+    await expect(
+      runDream({
+        memoryDir: path.join(home, 'memories'),
+        modelRegistry: registry,
+        currentModel: current,
+        sessionDir,
+        dreaming: { minTurnsSinceLastRun: 1 },
+      }),
+    ).resolves.toBe(true);
+    const consolidation = runConsolidationMock.mock.calls[0]![0];
+    expect(consolidation.modelConfig).toEqual({ provider: 'claude-sdk', model: 'claude-opus' });
+    expect(consolidation.modelRegistry.find()).toBe(current);
+    consolidation.modelRegistry.streamSimple(current, { messages: [] }, {});
+    expect(registry.streamSimple).toHaveBeenCalledWith(current, { messages: [] }, {});
+  });
+
+  it('keeps the default model when its credentials resolve', async () => {
+    const registry = modelRegistry();
+    registry.find.mockImplementation(((provider: string, id: string) => ({
+      provider,
+      id,
+    })) as never);
+    await runDream({
+      memoryDir: path.join(home, 'memories'),
+      modelRegistry: registry,
+      currentModel: { provider: 'claude-sdk', id: 'claude-opus' },
+      sessionDir,
+      dreaming: { minTurnsSinceLastRun: 1 },
+    });
+    expect(runConsolidationMock.mock.calls[0]![0].modelConfig).toEqual({
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
+    });
+  });
+
+  it('does not replace a configured model with the active model', async () => {
+    const registry = modelRegistry();
+    registry.getApiKeyAndHeaders.mockResolvedValue({ ok: false, error: 'no key' });
+    await expect(
+      runDream({
+        memoryDir: path.join(home, 'memories'),
+        modelRegistry: registry,
+        currentModel: { provider: 'claude-sdk', id: 'claude-opus' },
+        sessionDir,
+        dreaming: { minTurnsSinceLastRun: 1, model: { provider: 'openai', model: 'gpt-5' } },
+      }),
+    ).resolves.toBe(false);
+    expect(registry.getApiKeyAndHeaders).toHaveBeenCalledTimes(1);
+    expect(runConsolidationMock).not.toHaveBeenCalled();
+  });
+
   it('skips a concurrent session while another dream holds the lock', async () => {
     let finish: ((value: boolean) => void) | undefined;
     runConsolidationMock.mockReturnValue(
@@ -667,6 +728,7 @@ function modelRegistry() {
   return {
     find: vi.fn(() => ({ id: 'test-model' })),
     getApiKeyAndHeaders: vi.fn().mockResolvedValue({ ok: true, apiKey: 'test' }),
+    streamSimple: vi.fn(),
   };
 }
 

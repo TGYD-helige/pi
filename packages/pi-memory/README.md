@@ -169,7 +169,7 @@ Add to `settings.json` under the `pi-memory` key:
 }
 ```
 
-All fields are optional with sensible defaults. The `model` field accepts any provider/model pair configured in your `~/.pi/agent/models.json` (built-in or custom). `minSessionsSinceLastRun` is accepted as a deprecated alias for `minTurnsSinceLastRun`.
+All fields are optional with sensible defaults. The `model` field accepts any provider/model pair known to Pi, including built-in models, `models.json` entries and providers registered by extensions. Without `model`, dreaming uses `openai/gpt-4.1-mini` when its credentials are available and otherwise the active session model. `minSessionsSinceLastRun` is accepted as a deprecated alias for `minTurnsSinceLastRun`.
 
 Set `"enabled": false` to disable background dreaming.
 

@@ -30,6 +30,8 @@ export interface ConsolidationModelRegistry {
   getApiKeyAndHeaders(
     model: unknown,
   ): Promise<{ ok: boolean; apiKey?: string; headers?: Record<string, string>; error?: string }>;
+  /** Pi's registry stream; unlike compat streaming it reaches providers from `pi.registerProvider()`. */
+  streamSimple?: typeof streamSimple;
 }
 
 export interface ConsolidationOptions {
@@ -132,8 +134,9 @@ export async function runConsolidation(opts: ConsolidationOptions): Promise<bool
     },
     streamFn: (m, c, streamOpts) => {
       const existingSignal = (streamOpts as { signal?: AbortSignal } | undefined)?.signal;
+      const stream = modelRegistry.streamSimple ?? streamSimple;
       return modelErrors.run(() =>
-        streamSimple(m, c, {
+        stream(m, c, {
           ...streamOpts,
           ...modelErrors.fetchOptions(m.api, streamOpts?.fetch),
           ...(auth.apiKey ? { apiKey: auth.apiKey } : {}),

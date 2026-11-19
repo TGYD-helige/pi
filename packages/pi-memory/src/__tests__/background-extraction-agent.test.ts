@@ -6,6 +6,7 @@ import {
   fauxAssistantMessage,
   fauxToolCall,
   registerFauxProvider,
+  streamSimple,
 } from '@earendil-works/pi-ai/compat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createExtractionRunner, type TurnEndEvent } from '../background-extraction.js';
@@ -71,6 +72,42 @@ describe('background extraction Agent boundary', () => {
         expect(onNotify).toHaveBeenCalledWith(expect.stringContaining(expected), 'warning'),
       );
       expect(JSON.stringify(onNotify.mock.calls)).not.toContain('test-token');
+    } finally {
+      runner.shutdown();
+      provider.unregister();
+    }
+  });
+
+  it('streams through the registry for providers registered by extensions', async () => {
+    const provider = registerFauxProvider({ provider: 'pi-memory-extraction-extension' });
+    const backing = provider.getModel();
+    // compat streaming has no provider for this api; only the registry can serve it.
+    const model = { ...backing, api: 'pi-memory-extension-only-api' };
+    provider.setResponses([() => fauxAssistantMessage('Nothing missed.')]);
+    const store = new MemoryStore({ dir });
+    await store.loadFromDisk();
+    const onNotify = vi.fn();
+    const registryStream = vi.fn((_m, c, o) => streamSimple(backing, c, o));
+    const runner = createExtractionRunner({
+      store,
+      interval: 1,
+      modelConfig: { provider: model.provider, model: model.id },
+      modelRegistry: {
+        find: () => model,
+        getApiKeyAndHeaders: async () => ({ ok: true, apiKey: 'test-key' }),
+        streamSimple: registryStream,
+      },
+      onNotify,
+    });
+    try {
+      runner.onTurnEnd(event);
+      await vi.waitFor(() => expect(provider.state.callCount).toBe(1));
+      expect(registryStream).toHaveBeenCalledWith(
+        model,
+        expect.anything(),
+        expect.objectContaining({ apiKey: 'test-key' }),
+      );
+      expect(onNotify).not.toHaveBeenCalledWith(expect.anything(), 'warning');
     } finally {
       runner.shutdown();
       provider.unregister();

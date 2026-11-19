@@ -164,6 +164,7 @@ export default function memoryExtension(
           !config.store && config.dataDir === path.join(resolveHome(), 'memories'),
         memoryDir: store.dir,
         modelRegistry: ctx.modelRegistry as never,
+        ...(ctx.model ? { currentModel: ctx.model } : {}),
         sessionDir: ctx.sessionManager.getSessionDir(),
         ...(config.dreaming ? { dreaming: config.dreaming } : {}),
         signal,
