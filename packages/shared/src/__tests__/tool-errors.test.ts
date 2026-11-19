@@ -82,6 +82,8 @@ describe('tool errors', () => {
     expect(errors.fetchOptions('google-generative-ai', request)).toEqual({});
     expect(errors.fetchOptions('google-vertex', request)).toEqual({});
     expect(errors.fetchOptions('bedrock-converse-stream', request)).toEqual({});
+    // A virtual model may route to an SDK that rejects custom fetch.
+    expect(errors.fetchOptions('pi-virtual', request)).toEqual({});
   });
 
   it('clears an earlier HTTP status when a later fetch fails without a recognized cause', async () => {
