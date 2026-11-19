@@ -6,8 +6,12 @@
  */
 
 import { createModelErrorCapture, SafeToolError } from '@amaster.ai/pi-shared';
+import {
+  type ModelRequestAuth,
+  type ModelRequestRegistry,
+  streamModelRequest,
+} from '@amaster.ai/pi-shared/models';
 import { Agent } from '@earendil-works/pi-agent-core';
-import { streamSimple } from '@earendil-works/pi-ai/compat';
 import { MEMORY_GUIDANCE } from './guidance.js';
 import { historyExcerpt } from './history-text.js';
 import { MemoryStore } from './store.js';
@@ -25,11 +29,11 @@ export interface DreamTurn {
   createdAt: string;
 }
 
-export interface ConsolidationModelRegistry {
+export interface ConsolidationModelRegistry extends ModelRequestRegistry {
   find(provider: string, model: string): unknown;
-  getApiKeyAndHeaders(
-    model: unknown,
-  ): Promise<{ ok: boolean; apiKey?: string; headers?: Record<string, string>; error?: string }>;
+  getApiKeyAndHeaders(model: unknown): Promise<ModelRequestAuth & { ok: boolean; error?: string }>;
+  /** False when Pi knows of no credentials for the model; absent before Pi exposes it. */
+  hasConfiguredAuth?(model: unknown): boolean;
 }
 
 export interface ConsolidationOptions {
@@ -132,17 +136,14 @@ export async function runConsolidation(opts: ConsolidationOptions): Promise<bool
     },
     streamFn: (m, c, streamOpts) => {
       const existingSignal = (streamOpts as { signal?: AbortSignal } | undefined)?.signal;
-      return modelErrors.run(() =>
-        streamSimple(m, c, {
-          ...streamOpts,
-          ...modelErrors.fetchOptions(m.api, streamOpts?.fetch),
-          ...(auth.apiKey ? { apiKey: auth.apiKey } : {}),
-          ...(auth.headers ? { headers: auth.headers } : {}),
-          ...(signal
-            ? { signal: existingSignal ? AbortSignal.any([existingSignal, signal]) : signal }
-            : {}),
-        }),
-      );
+      const options = {
+        ...streamOpts,
+        ...modelErrors.fetchOptions(m.api, streamOpts?.fetch),
+        ...(signal
+          ? { signal: existingSignal ? AbortSignal.any([existingSignal, signal]) : signal }
+          : {}),
+      };
+      return modelErrors.run(() => streamModelRequest(modelRegistry, m, c, options, auth));
     },
     convertToLlm: (msgs) => msgs as never[],
   });

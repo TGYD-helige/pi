@@ -1,20 +1,22 @@
 import { createModelErrorCapture, describeToolError, ValidationError } from '@amaster.ai/pi-shared';
+import {
+  type ModelRequestAuth,
+  type ModelRequestRegistry,
+  streamModelRequest,
+} from '@amaster.ai/pi-shared/models';
 /**
  * Single-turn, tool-less LLM completion helper shared by the derive and
- * evaluate steps. Wraps pi-agent-core's Agent + pi-ai's streamSimple, the same
- * primitives pi-memory uses for background work.
+ * evaluate steps. Wraps pi-agent-core's Agent + Pi's registry streaming, the
+ * same primitives pi-memory uses for background work.
  */
 
 import { Agent } from '@earendil-works/pi-agent-core';
-import { streamSimple } from '@earendil-works/pi-ai/compat';
 import type { GoalModelConfig } from './config.js';
 
 /** Minimal slice of ctx.modelRegistry we depend on (kept narrow for testability). */
-export interface GoalModelRegistry {
+export interface GoalModelRegistry extends ModelRequestRegistry {
   find(provider: string, model: string): unknown;
-  getApiKeyAndHeaders(
-    model: unknown,
-  ): Promise<{ ok: boolean; apiKey?: string; headers?: Record<string, string>; error?: string }>;
+  getApiKeyAndHeaders(model: unknown): Promise<ModelRequestAuth & { ok: boolean; error?: string }>;
 }
 
 interface AgentMessageLike {
@@ -57,21 +59,13 @@ export async function completeOnce(
     const modelErrors = createModelErrorCapture();
     const agent = new Agent({
       initialState: { systemPrompt, model: model as never, tools: [] as never[] },
-      streamFn: (m: unknown, c: unknown, streamOpts?: unknown) => {
-        const merged = { ...((streamOpts as Record<string, unknown>) ?? {}) };
-        if (auth.apiKey) merged.apiKey = auth.apiKey;
-        if (auth.headers) merged.headers = auth.headers;
-        const existingSignal = (streamOpts as { signal?: AbortSignal } | undefined)?.signal;
+      streamFn: (m, c, streamOpts) => {
+        const merged = { ...streamOpts, ...modelErrors.fetchOptions(m.api, streamOpts?.fetch) };
         if (signal)
-          merged.signal = existingSignal ? AbortSignal.any([existingSignal, signal]) : signal;
-        Object.assign(
-          merged,
-          modelErrors.fetchOptions(
-            (m as { api?: string }).api,
-            merged.fetch as typeof fetch | undefined,
-          ),
-        );
-        return modelErrors.run(() => streamSimple(m as never, c as never, merged as never));
+          merged.signal = streamOpts?.signal
+            ? AbortSignal.any([streamOpts.signal, signal])
+            : signal;
+        return modelErrors.run(() => streamModelRequest(registry, m, c, merged, auth));
       },
       convertToLlm: (msgs: unknown) => msgs as never[],
     });

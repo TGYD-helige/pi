@@ -77,9 +77,9 @@ export function createFetchVisionCaller(visionConfig: VisionModelConfig): Vision
         'Check the vision model registry before retrying.',
       );
     });
-    const [registry, { complete }] = await Promise.all([
+    const [registry, { completeModelRequest }] = await Promise.all([
       registryPromise,
-      import('@earendil-works/pi-ai/compat'),
+      import('@amaster.ai/pi-shared/models'),
     ]);
     signal?.throwIfAborted();
     const model = registry.find(visionConfig.provider, visionConfig.model);
@@ -99,16 +99,9 @@ export function createFetchVisionCaller(visionConfig: VisionModelConfig): Vision
       );
     }
 
-    const options: Record<string, unknown> = {
-      maxTokens: 2048,
-    };
-    if (auth.apiKey) options.apiKey = auth.apiKey;
-    if (auth.headers) options.headers = auth.headers;
-    if (signal) options.signal = signal;
-
     const modelErrors = createModelErrorCapture();
-    Object.assign(options, modelErrors.fetchOptions(model.api));
-    const result = await complete(
+    const result = await completeModelRequest(
+      registry,
       model,
       {
         systemPrompt: VISUAL_SYSTEM_PROMPT,
@@ -126,7 +119,8 @@ export function createFetchVisionCaller(visionConfig: VisionModelConfig): Vision
           },
         ],
       },
-      options,
+      { maxTokens: 2048, ...(signal ? { signal } : {}), ...modelErrors.fetchOptions(model.api) },
+      auth,
     );
 
     signal?.throwIfAborted();

@@ -188,10 +188,13 @@ export function createModelErrorCapture() {
       }
     },
     fetchOptions(api: unknown, fetchImpl: typeof globalThis.fetch = globalThis.fetch) {
-      // These SDKs reject or ignore custom fetch; leave their transport unchanged.
+      // These SDKs reject or ignore custom fetch; leave their transport unchanged. Pi passes a
+      // virtual model's fetch to the model it routes to, which may be one of them.
       if (
         typeof api !== 'string' ||
-        ['google-generative-ai', 'google-vertex', 'bedrock-converse-stream'].includes(api)
+        ['google-generative-ai', 'google-vertex', 'bedrock-converse-stream', 'pi-virtual'].includes(
+          api,
+        )
       )
         return {};
       return {

@@ -1,6 +1,6 @@
 import { createModelErrorCapture, ValidationError } from '@amaster.ai/pi-shared';
+import { completeModelRequest } from '@amaster.ai/pi-shared/models';
 import type { TextContent as AiTextContent } from '@earendil-works/pi-ai';
-import { complete } from '@earendil-works/pi-ai/compat';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import type { VisionModelConfig } from './config.js';
 
@@ -55,16 +55,9 @@ export function createPiVisionCaller(
       );
     }
 
-    const options: Record<string, unknown> = {
-      maxTokens: 2048,
-    };
-    if (auth.apiKey) options.apiKey = auth.apiKey;
-    if (auth.headers) options.headers = auth.headers;
-    if (signal) options.signal = signal;
-
     const modelErrors = createModelErrorCapture();
-    Object.assign(options, modelErrors.fetchOptions(model.api));
-    const result = await complete(
+    const result = await completeModelRequest(
+      ctx.modelRegistry,
       model,
       {
         systemPrompt: VISUAL_SYSTEM_PROMPT,
@@ -82,7 +75,8 @@ export function createPiVisionCaller(
           },
         ],
       },
-      options,
+      { maxTokens: 2048, ...(signal ? { signal } : {}), ...modelErrors.fetchOptions(model.api) },
+      auth,
     );
 
     signal?.throwIfAborted();
@@ -106,7 +100,7 @@ export function createPiVisionCaller(
         };
       });
       console.error(
-        '[pi-computer-use vision] complete() returned',
+        '[pi-computer-use vision] model returned',
         JSON.stringify(
           {
             provider: visionConfig.provider,

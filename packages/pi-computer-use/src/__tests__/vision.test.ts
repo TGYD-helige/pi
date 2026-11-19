@@ -1,4 +1,9 @@
-import { fauxAssistantMessage, registerFauxProvider } from '@earendil-works/pi-ai/compat';
+import type { Context } from '@earendil-works/pi-ai';
+import {
+  fauxAssistantMessage,
+  registerFauxProvider,
+  streamSimple,
+} from '@earendil-works/pi-ai/compat';
 import { describe, expect, it, test, vi } from 'vitest';
 import { createPiVisionCaller, VISUAL_SYSTEM_PROMPT } from '../vision.js';
 
@@ -39,6 +44,31 @@ describe('vision', () => {
           errorCategory: category,
           message: expect.not.stringContaining('test-token'),
         });
+      } finally {
+        provider.unregister();
+      }
+    });
+
+    it('reaches a provider registered by an extension through the registry', async () => {
+      const provider = registerFauxProvider({ provider: 'pi-computer-vision-extension' });
+      const backing = provider.getModel();
+      // compat has no provider for this api; only the registry can serve it.
+      const model = { ...backing, api: 'pi-computer-extension-only-api' };
+      provider.setResponses([() => fauxAssistantMessage('Button at (10, 20).')]);
+      // Like Pi's ModelRegistry, streamSimple is a method that needs its receiver.
+      const modelRegistry = {
+        backing,
+        find: () => model,
+        getApiKeyAndHeaders: async () => ({ ok: true, apiKey: 'test-key' }),
+        streamSimple(this: { backing: typeof backing }, _m: unknown, c: Context, o?: object) {
+          return streamSimple(this.backing, c, o);
+        },
+      };
+      try {
+        const caller = createPiVisionCaller({ provider: model.provider, model: model.id }, {
+          modelRegistry,
+        } as never);
+        await expect(caller('describe', 'image', 'image/png')).resolves.toBe('Button at (10, 20).');
       } finally {
         provider.unregister();
       }

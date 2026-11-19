@@ -204,7 +204,7 @@ When changing an extension's name, tagline, or scope of capabilities, update the
 
 When you need to read Pi's global config directory, project directory, or settings — use the shared module. Do NOT hardcode paths like `~/.pi/agent/`.
 
-This monorepo uses two npm scopes: `@earendil-works/*` for the Pi runtime core packages and `@amaster.ai/*` for our internal shared utilities. The shared package exposes two entry points: `@amaster.ai/pi-shared` (shared domain types and runtime type definitions) and `@amaster.ai/pi-shared/settings` (config/path utilities). **Import from `/settings` for settings and path utilities** — this is what all existing packages do:
+This monorepo uses two npm scopes: `@earendil-works/*` for the Pi runtime core packages and `@amaster.ai/*` for our internal shared utilities. The shared package exposes these entry points: `@amaster.ai/pi-shared` (shared domain types and runtime type definitions), `@amaster.ai/pi-shared/settings` (config/path utilities) and `@amaster.ai/pi-shared/models` (model requests, see below). **Import from `/settings` for settings and path utilities** — this is what all existing packages do:
 
 ```typescript
 import {
@@ -230,6 +230,10 @@ import {
 3. Trusted project: `<cwd>/.pi/settings.json`
 
 Extensions must pass `projectTrusted: isProjectTrusted(ctx)` when loading from an extension context. If trust is absent or declined, project settings and policies are ignored. `${ENV_VAR:-fallback}` and bare `$ENV_VAR` interpolation apply only to global and agent-dir settings, never to project settings. Loaders may opt out of bare `$ENV_VAR` compatibility with `expandBareEnvVars: false`; bare references do not support the `:-fallback` form.
+
+### Model Requests
+
+Send model requests with `streamModelRequest` or `completeModelRequest` from `@amaster.ai/pi-shared/models`, passing `ctx.modelRegistry` and the credentials from `ctx.modelRegistry.getApiKeyAndHeaders(model)`. Do not call `@earendil-works/pi-ai/compat` streaming directly: it cannot reach providers registered with `pi.registerProvider()`. The helpers use the registry's request methods, which resolve credentials per request, and fall back to compat with the given credentials on Pi versions without them.
 
 ---
 

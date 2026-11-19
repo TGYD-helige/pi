@@ -2,10 +2,12 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Agent } from '@earendil-works/pi-agent-core';
+import type { Context } from '@earendil-works/pi-ai';
 import {
   fauxAssistantMessage,
   fauxToolCall,
   registerFauxProvider,
+  streamSimple,
 } from '@earendil-works/pi-ai/compat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createExtractionRunner, type TurnEndEvent } from '../background-extraction.js';
@@ -71,6 +73,44 @@ describe('background extraction Agent boundary', () => {
         expect(onNotify).toHaveBeenCalledWith(expect.stringContaining(expected), 'warning'),
       );
       expect(JSON.stringify(onNotify.mock.calls)).not.toContain('test-token');
+    } finally {
+      runner.shutdown();
+      provider.unregister();
+    }
+  });
+
+  it('streams through the registry for providers registered by extensions', async () => {
+    const prompt = vi.spyOn(Agent.prototype, 'prompt');
+    const provider = registerFauxProvider({ provider: 'pi-memory-extraction-extension' });
+    const backing = provider.getModel();
+    // compat streaming has no provider for this api; only the registry can serve it.
+    const model = { ...backing, api: 'pi-memory-extension-only-api' };
+    provider.setResponses([() => fauxAssistantMessage('Nothing missed.')]);
+    const store = new MemoryStore({ dir });
+    await store.loadFromDisk();
+    const onNotify = vi.fn();
+    // Like Pi's ModelRegistry, the stream is a method that needs its receiver.
+    const modelRegistry = {
+      backing,
+      find: () => model,
+      getApiKeyAndHeaders: async () => ({ ok: true, apiKey: 'test-key' }),
+      streamSimple(this: { backing: typeof backing }, _m: unknown, c: Context, o?: object) {
+        return streamSimple(this.backing, c, o);
+      },
+    };
+    const runner = createExtractionRunner({
+      store,
+      interval: 1,
+      modelConfig: { provider: model.provider, model: model.id },
+      modelRegistry: modelRegistry as never,
+      onNotify,
+    });
+    try {
+      runner.onTurnEnd(event);
+      await vi.waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
+      await prompt.mock.results[0]!.value;
+      expect(provider.state.callCount).toBe(1);
+      expect(onNotify).not.toHaveBeenCalledWith(expect.anything(), 'warning');
     } finally {
       runner.shutdown();
       provider.unregister();

@@ -30,6 +30,8 @@ export interface RunDreamOptions {
   dreaming?: DreamingConfig;
   memoryDir: string;
   modelRegistry: ConsolidationModelRegistry;
+  /** Active session model; replaces the default model when `dreaming.model` is unset and Pi has no default credentials. */
+  currentModel?: { provider: string; id: string };
   /** Current Pi session directory. */
   sessionDir?: string;
   /** Include sessions from every default Pi project directory. Default: false. */
@@ -46,8 +48,15 @@ export async function runDream(options: RunDreamOptions): Promise<boolean> {
   const config = options.dreaming ?? {};
   if (config.enabled === false || options.signal?.aborted) return false;
 
-  const modelConfig = config.model ?? DEFAULT_MODEL;
-  const model = options.modelRegistry.find(modelConfig.provider, modelConfig.model);
+  const registry = options.modelRegistry;
+  const { currentModel } = options;
+  let modelConfig = config.model ?? DEFAULT_MODEL;
+  let model = registry.find(modelConfig.provider, modelConfig.model);
+  // Without a configured model, use the active one rather than a default that has no credentials.
+  if (!config.model && currentModel && (!model || registry.hasConfiguredAuth?.(model) === false)) {
+    model = currentModel;
+    modelConfig = { provider: currentModel.provider, model: currentModel.id };
+  }
   if (!model) return false;
 
   await mkdir(options.memoryDir, { recursive: true });
@@ -104,7 +113,11 @@ export async function runDream(options: RunDreamOptions): Promise<boolean> {
       memoryDir: options.memoryDir,
       turns,
       modelConfig,
-      modelRegistry: { find: () => model, getApiKeyAndHeaders: async () => credentials },
+      modelRegistry: {
+        find: () => model,
+        getApiKeyAndHeaders: async () => credentials,
+        ...(registry.streamSimple ? { streamSimple: registry.streamSimple.bind(registry) } : {}),
+      },
       ...(options.signal ? { signal: options.signal } : {}),
     });
 

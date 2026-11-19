@@ -4,6 +4,7 @@ import {
   SafeToolError,
   ValidationError,
 } from '@amaster.ai/pi-shared';
+import { streamModelRequest } from '@amaster.ai/pi-shared/models';
 /**
  * Background memory extraction via a sub-agent loop.
  *
@@ -24,8 +25,8 @@ import {
  */
 
 import { Agent, type AgentTool } from '@earendil-works/pi-agent-core';
-import { streamSimple } from '@earendil-works/pi-ai/compat';
 import { ModelRegistry, ModelRuntime } from '@earendil-works/pi-coding-agent';
+import type { ConsolidationModelRegistry } from './consolidation.js';
 import { MEMORY_GUIDANCE } from './guidance.js';
 import type { MemoryStore } from './store.js';
 import { createMemoryTools } from './tools.js';
@@ -45,12 +46,7 @@ export interface ExtractionRunnerOptions {
   /** How many user turns between extraction runs. */
   interval: number;
   /** Model registry for resolving provider/model. Falls back to the default ModelRuntime if omitted. */
-  modelRegistry?: {
-    find(provider: string, model: string): unknown;
-    getApiKeyAndHeaders(
-      model: unknown,
-    ): Promise<{ ok: boolean; apiKey?: string; headers?: Record<string, string>; error?: string }>;
-  };
+  modelRegistry?: ConsolidationModelRegistry;
   /** Callback for user-visible notifications. */
   onNotify?: (message: string, level: 'info' | 'warning') => void;
 }
@@ -230,11 +226,8 @@ export function createExtractionRunner(opts: ExtractionRunnerOptions): Extractio
         tools,
       },
       streamFn: (m, ctx, streamOpts) => {
-        const merged = { ...streamOpts };
-        if (auth.apiKey) (merged as Record<string, unknown>).apiKey = auth.apiKey;
-        if (auth.headers) (merged as Record<string, unknown>).headers = auth.headers;
-        Object.assign(merged, modelErrors.fetchOptions(m.api, merged.fetch));
-        return modelErrors.run(() => streamSimple(m as never, ctx as never, merged));
+        const merged = { ...streamOpts, ...modelErrors.fetchOptions(m.api, streamOpts?.fetch) };
+        return modelErrors.run(() => streamModelRequest(registry, m, ctx, merged, auth));
       },
       convertToLlm: (msgs) => msgs as never[],
     });
@@ -351,14 +344,7 @@ export function countMemoryActions(messages: unknown[]): number {
   return count;
 }
 
-async function createFallbackRegistry() {
+async function createFallbackRegistry(): Promise<ConsolidationModelRegistry> {
   const modelRuntime = await ModelRuntime.create();
-  const registry = new ModelRegistry(modelRuntime);
-  return {
-    find: (provider: string, model: string) => registry.find(provider, model),
-    getApiKeyAndHeaders: async (model: unknown) => {
-      const auth = await registry.getApiKeyAndHeaders(model as never);
-      return auth;
-    },
-  };
+  return new ModelRegistry(modelRuntime);
 }
