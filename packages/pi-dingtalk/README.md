@@ -6,7 +6,7 @@ Pi extension for [DingTalk](https://www.dingtalk.com/) workspace — calendar, d
 
 ## Features
 
-- Auto-installs `dws` CLI if not present
+- Uses `dws` from `PATH` first and auto-installs a local copy if needed
 - Initializes credentials from pi settings (non-interactive, via the `DWS_CLIENT_ID` / `DWS_CLIENT_SECRET` environment variables, so the secret never appears in process arguments)
 - Injects dws skills into the agent session (19 product skills)
 

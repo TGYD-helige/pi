@@ -9,8 +9,8 @@ import { loadWeComConfig } from './config.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const BUNDLED_SKILLS_DIR = join(__dirname, '..', 'skills');
 
-async function resolveSkillsDir(): Promise<string | undefined> {
-  const cliSkills = await getWeComCliSkillsDir();
+async function resolveSkillsDir(file: string, signal?: AbortSignal): Promise<string | undefined> {
+  const cliSkills = await getWeComCliSkillsDir(file, signal);
   if (cliSkills) return cliSkills;
   if (existsSync(BUNDLED_SKILLS_DIR)) return BUNDLED_SKILLS_DIR;
   return undefined;
@@ -27,19 +27,21 @@ export default function piWeComExtension(pi: ExtensionAPI): void {
       skillsDir = BUNDLED_SKILLS_DIR;
     }
 
+    const signal = ctx.signal;
     try {
-      const installed = await ensureWeComCli();
-      if (installed) {
-        skillsDir = await resolveSkillsDir();
-        ctx.ui.setStatus?.('pi-wecom', 'wecom-cli: ready');
-        if (!(await isWeComCliAuthenticated(ctx.signal))) {
-          ctx.ui.notify(
-            'pi-wecom: wecom-cli 未认证，请运行 wecom-cli auth init --noninteractive 完成扫码认证',
-            'warning',
-          );
-        }
+      const file = await ensureWeComCli(signal);
+      const discovered = await resolveSkillsDir(file, signal);
+      signal?.throwIfAborted();
+      skillsDir = discovered;
+      ctx.ui.setStatus?.('pi-wecom', 'wecom-cli: ready');
+      if (!(await isWeComCliAuthenticated(file, signal))) {
+        ctx.ui.notify(
+          'pi-wecom: wecom-cli 未认证，请运行 wecom-cli auth init --noninteractive 完成扫码认证',
+          'warning',
+        );
       }
     } catch (err) {
+      if (signal?.aborted) return;
       ctx.ui.notify(
         `pi-wecom: 初始化失败 — ${err instanceof Error ? err.message : String(err)}`,
         'warning',

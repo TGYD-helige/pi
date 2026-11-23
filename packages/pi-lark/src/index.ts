@@ -9,8 +9,8 @@ import { loadLarkConfig } from './config.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const BUNDLED_SKILLS_DIR = join(__dirname, '..', 'skills');
 
-async function resolveSkillsDir(): Promise<string | undefined> {
-  const cliSkills = await getLarkCliSkillsDir();
+async function resolveSkillsDir(file: string, signal?: AbortSignal): Promise<string | undefined> {
+  const cliSkills = await getLarkCliSkillsDir(file, signal);
   if (cliSkills) return cliSkills;
   if (existsSync(BUNDLED_SKILLS_DIR)) return BUNDLED_SKILLS_DIR;
   return undefined;
@@ -27,14 +27,17 @@ export default function piLarkExtension(pi: ExtensionAPI): void {
       skillsDir = BUNDLED_SKILLS_DIR;
     }
 
+    const signal = ctx.signal;
     try {
-      const installed = await ensureLarkCli();
-      if (installed) {
-        await initLarkCli(config);
-        skillsDir = await resolveSkillsDir();
-        ctx.ui.setStatus?.('pi-lark', 'lark-cli: ready');
-      }
+      const file = await ensureLarkCli(signal);
+      signal?.throwIfAborted();
+      await initLarkCli(config);
+      const discovered = await resolveSkillsDir(file, signal);
+      signal?.throwIfAborted();
+      skillsDir = discovered;
+      ctx.ui.setStatus?.('pi-lark', 'lark-cli: ready');
     } catch (err) {
+      if (signal?.aborted) return;
       ctx.ui.notify(
         `pi-lark: 初始化失败 — ${err instanceof Error ? err.message : String(err)}`,
         'warning',

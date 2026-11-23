@@ -1,54 +1,18 @@
-import { exec } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import {
+  createOfficeCli,
+  getOfficeCliSkillsDir,
+  runOfficeCommand,
+} from '@amaster.ai/pi-shared/office-cli';
 import type { LarkConfig } from './config.js';
 
 const NPM_PACKAGE = '@larksuite/cli';
-const INSTALL_DIR = join(homedir(), '.lark-cli');
-const BIN_PATH = join(INSTALL_DIR, 'node_modules', '.bin', 'lark-cli');
+const ensureCli = createOfficeCli('lark-cli', NPM_PACKAGE, join(homedir(), '.lark-cli'));
 
-let installAttempted = false;
-let cliAvailable: boolean | undefined;
-
-function execAsync(command: string): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    exec(command, (error, stdout, stderr) => {
-      if (error) reject(error);
-      else resolve({ stdout, stderr });
-    });
-  });
-}
-
-function larkCliBin(): string {
-  if (existsSync(BIN_PATH)) return BIN_PATH;
-  return 'lark-cli';
-}
-
-export async function isLarkCliInstalled(): Promise<boolean> {
-  if (cliAvailable !== undefined) return cliAvailable;
-  try {
-    await execAsync(`"${larkCliBin()}" --version`);
-    cliAvailable = true;
-    return true;
-  } catch {
-    cliAvailable = false;
-    return false;
-  }
-}
-
-export async function installLarkCli(): Promise<void> {
-  if (installAttempted) return;
-  installAttempted = true;
-  mkdirSync(INSTALL_DIR, { recursive: true });
-  await execAsync(`npm install --prefix "${INSTALL_DIR}" ${NPM_PACKAGE}@latest`);
-  cliAvailable = undefined;
-}
-
-export async function ensureLarkCli(): Promise<boolean> {
-  if (await isLarkCliInstalled()) return true;
-  await installLarkCli();
-  return isLarkCliInstalled();
+export function ensureLarkCli(signal?: AbortSignal) {
+  return ensureCli(signal);
 }
 
 export function initLarkCli(config: LarkConfig): Promise<void> {
@@ -88,29 +52,13 @@ export function initLarkCli(config: LarkConfig): Promise<void> {
   });
 }
 
-export async function getLarkCliSkillsDir(): Promise<string | undefined> {
-  const bin = larkCliBin();
+export async function getLarkCliSkillsDir(file: string, signal?: AbortSignal) {
   try {
-    const { stdout } = await execAsync(`"${bin}" skills path`);
+    const { stdout } = await runOfficeCommand(file, ['skills', 'path'], { signal });
     const output = stdout.trim();
     if (output && existsSync(output)) return output;
   } catch {
-    // fallback
+    signal?.throwIfAborted();
   }
-
-  const localSkills = join(INSTALL_DIR, 'node_modules', '@larksuite', 'cli', 'skills');
-  if (existsSync(localSkills)) return localSkills;
-
-  return undefined;
-}
-
-export async function checkLarkCliAuth(): Promise<{ ok: boolean; error?: string }> {
-  try {
-    const { stdout } = await execAsync(`"${larkCliBin()}" auth status --json`);
-    const status = JSON.parse(stdout);
-    if (status?.loggedIn || status?.authenticated) return { ok: true };
-    return { ok: false, error: 'not authenticated' };
-  } catch {
-    return { ok: false, error: 'lark-cli auth status failed' };
-  }
+  return getOfficeCliSkillsDir(file, NPM_PACKAGE, 'skills', signal);
 }

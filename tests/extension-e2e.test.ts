@@ -1,28 +1,6 @@
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
 import { createJiti } from 'jiti/static';
 import { describe, expect, it } from 'vitest';
-
-const ROOT = path.resolve(__dirname, '..');
-const PACKAGES_DIR = path.join(ROOT, 'packages');
-
-const EXTENSION_PACKAGES = [
-  'pi-attachments',
-  'pi-browser-use',
-  'pi-channels',
-  'pi-computer-use',
-  'pi-dingtalk',
-  'pi-image-gen',
-  'pi-lark',
-  'pi-memory',
-  'pi-memory-mem0',
-  'pi-security',
-  'pi-task-scheduler',
-  'pi-teamwork',
-  'pi-telemetry',
-  'pi-web-access',
-  'pi-wecom',
-] as const;
+import { extensionPackageNames, extensionSourcePaths } from './fixtures/extension-packages.js';
 
 interface CollectedExtension {
   handlers: Map<string, unknown[]>;
@@ -49,6 +27,7 @@ function createCollector(): { api: Record<string, unknown>; ext: CollectedExtens
     registerProvider() {},
     unregisterProvider() {},
     registerShortcut() {},
+    registerFlag() {},
     appendEntry() {},
     exec: async () => ({ stdout: '', stderr: '', code: 0 }),
     sendUserMessage() {},
@@ -61,18 +40,17 @@ function createCollector(): { api: Record<string, unknown>; ext: CollectedExtens
 
 async function loadExtensionWithJiti(
   pkgName: string,
-): Promise<{ factory: Function; ext: CollectedExtension }> {
-  const packageDir = path.join(PACKAGES_DIR, pkgName);
-  const packageJson = JSON.parse(readFileSync(path.join(packageDir, 'package.json'), 'utf8'));
-  const extensionEntry = packageJson.pi.extensions[0]
-    .replace('./dist/', './src/')
-    .replace(/\.js$/, '.ts');
-  const entryPath = path.join(packageDir, extensionEntry);
+  entryPath = extensionSourcePaths(pkgName)[0],
+): Promise<CollectedExtension> {
   const jiti = createJiti(entryPath, { moduleCache: false });
-  const factory = (await jiti.import(entryPath, { default: true })) as Function;
+  const factory = await jiti.import<(api: Record<string, unknown>) => void | Promise<void>>(
+    entryPath,
+    { default: true },
+  );
+  expect(typeof factory, entryPath).toBe('function');
   const { api, ext } = createCollector();
   await factory(api);
-  return { factory, ext };
+  return ext;
 }
 
 function findSchemaViolations(schema: unknown, path = ''): string[] {
@@ -96,61 +74,37 @@ function findSchemaViolations(schema: unknown, path = ''): string[] {
   return violations;
 }
 
-// Packages whose src/index.ts is a circular-import target: index.ts re-exports the extension
-// factory (`export { default } from './extension.js'`) while sibling modules import runtime
-// values back from index.ts. A static/bundling loader (jiti here, and Pi's own extension
-// loader) evaluates the entry before the cycle resolves, so the re-exported default comes back
-// `undefined`. The fix is to move the shared runtime values out of index.ts into a leaf module,
-// so nothing imports values back from the entry (pi-telemetry was fixed this way).
-// pi-task-scheduler still has this shape and is tracked separately.
-const JITI_FACTORY_INVOKE_SKIP = new Set([
-  'pi-task-scheduler',
-]);
-
 describe('Extension E2E loading via jiti', () => {
-  for (const pkgName of EXTENSION_PACKAGES) {
-    it(`${pkgName}: package.json declares pi.extensions`, () => {
-      const pkgJson = JSON.parse(
-        readFileSync(path.join(PACKAGES_DIR, pkgName, 'package.json'), 'utf8'),
-      );
-      expect(pkgJson.pi?.extensions).toBeInstanceOf(Array);
-      expect(pkgJson.pi.extensions.length).toBeGreaterThan(0);
-    });
-
-    if (JITI_FACTORY_INVOKE_SKIP.has(pkgName)) continue;
-
-    it(`${pkgName}: jiti loads default factory and invokes it without throwing`, async () => {
-      const { factory, ext } = await loadExtensionWithJiti(pkgName);
-      expect(typeof factory).toBe('function');
-      // At minimum, every Pi extension hooks at least one event or registers
-      // at least one tool/command. A factory that does nothing is almost
-      // certainly broken.
-      const totalRegistrations =
-        ext.handlers.size + ext.tools.size + ext.commands.size;
-      expect(totalRegistrations).toBeGreaterThan(0);
+  for (const pkgName of extensionPackageNames) {
+    it(`${pkgName}: jiti loads and invokes each declared factory`, async () => {
+      for (const entryPath of extensionSourcePaths(pkgName)) {
+        const ext = await loadExtensionWithJiti(pkgName, entryPath);
+        const totalRegistrations = ext.handlers.size + ext.tools.size + ext.commands.size;
+        expect(totalRegistrations, entryPath).toBeGreaterThan(0);
+      }
     });
   }
 
   it('pi-computer-use: loads via jiti and registers session handlers', async () => {
-    const { ext } = await loadExtensionWithJiti('pi-computer-use');
+    const ext = await loadExtensionWithJiti('pi-computer-use');
     expect(ext.handlers.has('session_start')).toBe(true);
     expect(ext.handlers.has('session_shutdown')).toBe(true);
   });
 
   it('pi-browser-use: loads via jiti and registers session handlers', async () => {
-    const { ext } = await loadExtensionWithJiti('pi-browser-use');
+    const ext = await loadExtensionWithJiti('pi-browser-use');
     expect(ext.handlers.has('session_start')).toBe(true);
     expect(ext.handlers.has('session_shutdown')).toBe(true);
   });
 
   it('pi-channels: registers /channel command and notify tool', async () => {
-    const { ext } = await loadExtensionWithJiti('pi-channels');
+    const ext = await loadExtensionWithJiti('pi-channels');
     expect(ext.commands.has('channel')).toBe(true);
     expect(ext.tools.has('notify')).toBe(true);
   });
 
   it('pi-image-gen: registers /image-gen command, and image_generate tool after session_start', async () => {
-    const { ext } = await loadExtensionWithJiti('pi-image-gen');
+    const ext = await loadExtensionWithJiti('pi-image-gen');
     expect(ext.commands.has('image-gen')).toBe(true);
     // The tool registers inside session_start: its schema is shaped for the
     // provider resolved from just-loaded settings (e.g. quality is exposed only
@@ -165,19 +119,14 @@ describe('Extension E2E loading via jiti', () => {
   });
 
   it('pi-memory: registers /memory command at top level', async () => {
-    const { ext } = await loadExtensionWithJiti('pi-memory');
+    const ext = await loadExtensionWithJiti('pi-memory');
     expect(ext.commands.has('memory')).toBe(true);
   });
 
   it('pi-teamwork: registers /teamwork-status command at top level', async () => {
-    const { ext } = await loadExtensionWithJiti('pi-teamwork');
+    const ext = await loadExtensionWithJiti('pi-teamwork');
     expect(ext.commands.has('teamwork-status')).toBe(true);
   });
-
-  // pi-task-scheduler is skipped above: its src/index.ts is a circular-import target
-  // (siblings import runtime values back from the entry that re-exports the factory), so a
-  // static loader returns `undefined` for the default. Its command registrations are covered by
-  // the vitest-native-loader path in tests/extension-loading.test.ts. See JITI_FACTORY_INVOKE_SKIP.
 });
 
 describe('findSchemaViolations regression', () => {
