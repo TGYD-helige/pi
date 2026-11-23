@@ -1,6 +1,10 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { createOfficeCli, getOfficeCliSkillsDir, runOfficeCommand } from '@amaster.ai/pi-shared';
+import {
+  createOfficeCli,
+  getOfficeCliSkillsDir,
+  runOfficeCommand,
+} from '@amaster.ai/pi-shared/office-cli';
 
 const NPM_PACKAGE = '@wecom/cli';
 const ensureCli = createOfficeCli('wecom-cli', NPM_PACKAGE, join(homedir(), '.wecom-cli'));

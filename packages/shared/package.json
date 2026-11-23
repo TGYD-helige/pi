@@ -23,6 +23,10 @@
       "types": "./dist/models.d.ts",
       "default": "./dist/models.js"
     },
+    "./office-cli": {
+      "types": "./dist/office-cli.d.ts",
+      "default": "./dist/office-cli.js"
+    },
     "./package.json": {
       "default": "./package.json"
     }

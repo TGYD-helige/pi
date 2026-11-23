@@ -1,7 +1,11 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { createOfficeCli, getOfficeCliSkillsDir, runOfficeCommand } from '@amaster.ai/pi-shared';
+import {
+  createOfficeCli,
+  getOfficeCliSkillsDir,
+  runOfficeCommand,
+} from '@amaster.ai/pi-shared/office-cli';
 import type { LarkConfig } from './config.js';
 
 const NPM_PACKAGE = '@larksuite/cli';

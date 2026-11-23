@@ -503,7 +503,6 @@ export {
   type TrustedHosts,
   trustedHostsFromUrls,
 } from './network.js';
-export { createOfficeCli, getOfficeCliSkillsDir, runOfficeCommand } from './office-cli.js';
 export {
   classifyError,
   createModelErrorCapture,

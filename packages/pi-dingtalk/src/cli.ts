@@ -1,6 +1,10 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { createOfficeCli, getOfficeCliSkillsDir, runOfficeCommand } from '@amaster.ai/pi-shared';
+import {
+  createOfficeCli,
+  getOfficeCliSkillsDir,
+  runOfficeCommand,
+} from '@amaster.ai/pi-shared/office-cli';
 import type { DingTalkConfig } from './config.js';
 
 const NPM_PACKAGE = 'dingtalk-workspace-cli';
