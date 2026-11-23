@@ -1,16 +1,30 @@
+import { EventEmitter } from 'node:events';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 
-const mockExecFile = vi.fn();
+const mockSpawn = vi.fn();
 
-vi.mock('node:child_process', () => ({
-  execFile: (...args: unknown[]) => mockExecFile(...args),
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:child_process')>()),
+  spawn: (...args: unknown[]) => mockSpawn(...args),
 }));
 
 const { ensureDws, initDws } = await import('../cli.js');
 const file = join(tmpdir(), 'dws.exe');
+
+function commandResult(code = 0, stderr = '') {
+  const child = Object.assign(new EventEmitter(), {
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+  });
+  child.stderr.once('end', () => child.emit('close', code, null));
+  child.stdout.end();
+  child.stderr.end(stderr);
+  return child;
+}
 
 describe('initDws', () => {
   it('rejects when clientId is missing', async () => {
@@ -26,18 +40,11 @@ describe('initDws', () => {
   });
 
   it('passes credentials through the environment instead of process arguments', async () => {
-    mockExecFile.mockImplementation(
-      (
-        _file: string,
-        _args: string[],
-        _options: unknown,
-        callback: (error: Error | null, stdout: string, stderr: string) => void,
-      ) => callback(null, '', ''),
-    );
+    mockSpawn.mockImplementationOnce(() => commandResult());
 
     await initDws(file, { clientId: 'id; touch /tmp/pwned', clientSecret: 'secret$(id)' });
 
-    expect(mockExecFile).toHaveBeenCalledWith(
+    expect(mockSpawn).toHaveBeenLastCalledWith(
       file,
       ['auth', 'login', '--yes'],
       expect.objectContaining({
@@ -46,19 +53,11 @@ describe('initDws', () => {
           DWS_CLIENT_SECRET: 'secret$(id)',
         }),
       }),
-      expect.any(Function),
     );
   });
 
   it('does not expose credentials when login fails', async () => {
-    mockExecFile.mockImplementation(
-      (
-        _file: string,
-        args: string[],
-        _options: unknown,
-        callback: (error: Error | null, stdout: string, stderr: string) => void,
-      ) => callback(new Error(`Command failed: dws ${args.join(' ')}`), '', ''),
-    );
+    mockSpawn.mockImplementationOnce(() => commandResult(1, 'Failed to log in with client-secret'));
 
     const result = initDws(file, { clientId: 'client-id', clientSecret: 'client-secret' });
 
@@ -78,20 +77,13 @@ describe('initDws', () => {
       vi.stubEnv('PATHEXT', '.COM;.EXE;.BAT;.CMD');
       vi.stubEnv('ComSpec', shell);
       Object.defineProperty(process, 'platform', { value: 'win32' });
-      mockExecFile.mockImplementation(
-        (
-          _file: string,
-          _args: string[],
-          _options: unknown,
-          callback: (error: Error | null, stdout: string, stderr: string) => void,
-        ) => callback(null, '', ''),
-      );
+      mockSpawn.mockImplementation(() => commandResult());
 
       const selected = await ensureDws();
       expect(selected).toBe(executable);
       await initDws(selected, { clientId: 'client-id', clientSecret: 'client-secret' });
 
-      expect(mockExecFile).toHaveBeenLastCalledWith(
+      expect(mockSpawn).toHaveBeenLastCalledWith(
         shell,
         [
           '/d',
@@ -112,7 +104,6 @@ describe('initDws', () => {
             PI_OFFICE_COMMAND_3: '--yes',
           }),
         }),
-        expect.any(Function),
       );
     } finally {
       Object.defineProperty(process, 'platform', platform);

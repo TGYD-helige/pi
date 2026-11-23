@@ -155,6 +155,16 @@ if (mode === '--self-test') {
   const ordered = Array.from({ length: 100 }, (_, i) => i + 1);
   assert.equal(percentile(ordered, 0.95), 95);
   assert.equal(percentile(ordered, 0.99), 99);
+} else if (mode === '--check-extension-entries') {
+  const root = candidate ?? process.cwd();
+  const packages = await discoverExtensions(root);
+  for (const name of packages) {
+    execFileSync(process.execPath, [script, '--import', path.resolve(root, 'packages', name)], {
+      stdio: ['ignore', 'ignore', 'inherit'],
+      timeout: 30_000,
+    });
+  }
+  console.log(`Checked built extension entries for ${packages.length} packages.`);
 } else if (mode === '--import') {
   const manifest = JSON.parse(readFileSync(path.join(candidate, 'package.json'), 'utf8'));
   const started = performance.now();

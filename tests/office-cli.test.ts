@@ -128,6 +128,22 @@ describe.skipIf(process.platform === 'win32').each(extensions)('$name CLI startu
     expect(readFileSync(join(home, 'cli.log'), 'utf8')).toContain('PATH --version\n');
   });
 
+  it('resolves parent directories after following a PATH symlink', async () => {
+    const actualBin = join(root, 'actual bin');
+    const target = join(actualBin, 'nested');
+    const link = join(root, 'linked bin');
+    mkdirSync(target, { recursive: true });
+    symlinkSync(target, link);
+    vi.stubEnv('PATH', `${link}/..`);
+    writeCli(actualBin, 'PATH');
+    writeCli(root, 'lexical parent');
+
+    await start();
+
+    expect(setStatus).toHaveBeenCalledWith(extension.name, `${extension.cli}: ready`);
+    expect(readFileSync(join(home, 'cli.log'), 'utf8')).toMatch(/^PATH --version\n/);
+  });
+
   it('discovers skills shipped with the selected PATH copy', async () => {
     const pinnedPackage = join(root, 'node_modules', extension.npmPackage);
     const pinnedSkills = join(pinnedPackage, extension.skillsSubdir);
