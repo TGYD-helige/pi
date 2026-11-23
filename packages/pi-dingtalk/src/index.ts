@@ -9,8 +9,8 @@ import { loadDingTalkConfig } from './config.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const BUNDLED_SKILLS_DIR = join(__dirname, '..', 'skills');
 
-async function resolveSkillsDir(): Promise<string | undefined> {
-  const cliSkills = await getDwsSkillsDir();
+async function resolveSkillsDir(file: string, signal?: AbortSignal): Promise<string | undefined> {
+  const cliSkills = await getDwsSkillsDir(file, signal);
   if (cliSkills) return cliSkills;
   if (existsSync(BUNDLED_SKILLS_DIR)) return BUNDLED_SKILLS_DIR;
   return undefined;
@@ -27,14 +27,16 @@ export default function piDingTalkExtension(pi: ExtensionAPI): void {
       skillsDir = BUNDLED_SKILLS_DIR;
     }
 
+    const signal = ctx.signal;
     try {
-      const installed = await ensureDws();
-      if (installed) {
-        await initDws(config);
-        skillsDir = await resolveSkillsDir();
-        ctx.ui.setStatus?.('pi-dingtalk', 'dws: ready');
-      }
+      const file = await ensureDws(signal);
+      await initDws(file, config, signal);
+      const discovered = await resolveSkillsDir(file, signal);
+      signal?.throwIfAborted();
+      skillsDir = discovered;
+      ctx.ui.setStatus?.('pi-dingtalk', 'dws: ready');
     } catch (err) {
+      if (signal?.aborted) return;
       ctx.ui.notify(
         `pi-dingtalk: 初始化失败 — ${err instanceof Error ? err.message : String(err)}`,
         'warning',

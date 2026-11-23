@@ -6,7 +6,7 @@ Pi extension for [Lark/Feishu](https://www.feishu.cn/) workspace — calendar, d
 
 ## Features
 
-- Auto-installs `lark-cli` if not present
+- Uses `lark-cli` from `PATH` first and auto-installs a local copy if needed
 - Initializes credentials from pi settings (non-interactive)
 - Injects lark-cli skills into the agent session (calendar, IM, docs, drive, sheets, tasks, mail, wiki, etc.)
 

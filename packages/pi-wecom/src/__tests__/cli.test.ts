@@ -1,40 +1,43 @@
 import { describe, expect, it, vi } from 'vitest';
 
-const mockExec = vi.fn();
+const mockExecFile = vi.fn();
 
 vi.mock('node:child_process', () => ({
-  exec: (...args: unknown[]) => mockExec(...args),
+  execFile: (...args: unknown[]) => mockExecFile(...args),
 }));
 
 const { isWeComCliAuthenticated } = await import('../cli.js');
 
 describe('isWeComCliAuthenticated', () => {
+  const file = 'wecom-cli.exe';
   it('uses the CLI 1.2 status command and accepts authorized', async () => {
     const signal = new AbortController().signal;
-    mockExec.mockImplementation(
+    mockExecFile.mockImplementation(
       (
         command: string,
-        options: { signal?: AbortSignal },
+        args: string[],
+        _options: unknown,
         callback: (error: Error | null, stdout: string, stderr: string) => void,
       ) => {
-        expect(options.signal).toBe(signal);
-        if (command.endsWith('auth show --status')) callback(null, 'authorized\n', '');
+        if (command === file && args.join(' ') === 'auth show --status')
+          callback(null, 'authorized\n', '');
         else callback(new Error('unrecognized subcommand'), '', '');
       },
     );
 
-    await expect(isWeComCliAuthenticated(signal)).resolves.toBe(true);
+    await expect(isWeComCliAuthenticated(file, signal)).resolves.toBe(true);
   });
 
   it('rejects unauthorized', async () => {
-    mockExec.mockImplementation(
+    mockExecFile.mockImplementation(
       (
         _command: string,
+        _args: string[],
         _options: { signal?: AbortSignal },
         callback: (error: Error | null, stdout: string, stderr: string) => void,
       ) => callback(null, 'unauthorized\n', ''),
     );
 
-    await expect(isWeComCliAuthenticated()).resolves.toBe(false);
+    await expect(isWeComCliAuthenticated(file)).resolves.toBe(false);
   });
 });

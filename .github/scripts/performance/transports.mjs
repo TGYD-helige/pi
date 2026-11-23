@@ -35,7 +35,7 @@ const patches = new Map([
   [
     'pi-dingtalk/dist/cli.js',
     `
-    ensureDws = async () => { __perfHit('dingtalk.ready'); return true; };
+    ensureDws = async () => { __perfHit('dingtalk.ready'); return '/fixture/bin/dws'; };
     initDws = async () => { __perfHit('dingtalk.init'); };
     getDwsSkillsDir = async () => undefined;
   `,
@@ -43,7 +43,7 @@ const patches = new Map([
   [
     'pi-lark/dist/cli.js',
     `
-    ensureLarkCli = async () => { __perfHit('lark.ready'); return true; };
+    ensureLarkCli = async () => { __perfHit('lark.ready'); return '/fixture/bin/lark-cli'; };
     initLarkCli = async () => { __perfHit('lark.init'); };
     getLarkCliSkillsDir = async () => undefined;
   `,
@@ -51,7 +51,7 @@ const patches = new Map([
   [
     'pi-wecom/dist/cli.js',
     `
-    ensureWeComCli = async () => { __perfHit('wecom.ready'); return true; };
+    ensureWeComCli = async () => { __perfHit('wecom.ready'); return '/fixture/bin/wecom-cli'; };
     isWeComCliAuthenticated = async () => true;
     getWeComCliSkillsDir = async () => undefined;
   `,

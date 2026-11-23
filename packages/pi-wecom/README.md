@@ -6,7 +6,7 @@ Pi extension for [WeCom (企业微信)](https://work.weixin.qq.com/) workspace �
 
 ## Features
 
-- Auto-installs `wecom-cli` if not present
+- Uses `wecom-cli` from `PATH` first and auto-installs a local copy if needed
 - Injects wecom-cli skills into the agent session
 - Detects authentication status and prompts for QR code login if needed
 
