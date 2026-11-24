@@ -25,6 +25,7 @@ async function collectRpcEvents(child) {
   const events = [];
   let partial = '';
   let bytes = 0;
+  let framingError;
   child.stdout.setEncoding('utf8');
   for await (const chunk of child.stdout) {
     bytes += Buffer.byteLength(chunk);
@@ -33,13 +34,20 @@ async function collectRpcEvents(child) {
     partial = lines.pop();
     for (const line of lines) {
       if (!line.trim()) continue;
-      const event = JSON.parse(line);
+      let event;
+      try {
+        event = JSON.parse(line);
+        assert.equal(typeof event?.type, 'string', 'Expected an RPC record with a type');
+      } catch (error) {
+        framingError ??= error;
+        continue;
+      }
       events.push(event);
       if (event.type === 'agent_end') child.stdin.end();
     }
   }
-  assert.equal(partial.trim(), '', 'Incomplete RPC record');
-  return events;
+  if (partial.trim()) framingError ??= new Error('Incomplete RPC record');
+  return { events, framingError };
 }
 
 async function runProbe({ version, cli }) {
@@ -96,6 +104,7 @@ async function runProbe({ version, cli }) {
     child.once('error', (error) => {
       processError = error;
     });
+    // A failed spawn also emits 'close' after 'error' and stdio cleanup.
     const closed = new Promise((finish) => child.once('close', finish));
     const timeout = setTimeout(() => {
       timedOut = true;
@@ -105,11 +114,12 @@ async function runProbe({ version, cli }) {
       child.stdin.write(
         `${JSON.stringify({ id: 'probe', type: 'prompt', message: 'Exercise both fixture tools.' })}\n`,
       );
-      const events = await collectRpcEvents(child);
+      const { events, framingError } = await collectRpcEvents(child);
       const exitCode = await closed;
       if (processError) throw processError;
       assert.ok(!timedOut, `Pi ${version} RPC timed out after ${timeoutMs} ms`);
       assert.equal(exitCode, 0, `Pi ${version} RPC exited with ${exitCode}\n${stderr}`);
+      if (framingError) throw framingError;
       if (stdinError) throw stdinError;
       return events;
     } finally {
