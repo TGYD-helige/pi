@@ -25,7 +25,7 @@ Trace input, callers, state, and side effects to the observable outcome before e
 
 ## Pi runtime contracts
 
-Read the [Pi extension API](https://pi.dev/docs/latest/extensions) for hooks, registration, and UI. Check the affected package's declared minimum Pi version when relying on an API.
+Read the [Pi extension API](https://pi.dev/docs/latest/extensions) for hooks, registration, and UI. When relying on a runtime field such as `ctx.mode`, inspect the installed Pi type declarations or source at the target release. Check the API against the affected package's declared minimum Pi version.
 
 ### Settings, trust, and models
 
