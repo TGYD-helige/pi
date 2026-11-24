@@ -89,6 +89,7 @@ Import settings and path helpers from `@amaster.ai/pi-shared/settings`. Use `res
 - Check local links when editing this guide. For a workflow or guardrail change, compare the guides on the same tasks, source, model, and harness. For a model or harness change, keep the guide, tasks, and source fixed.
 - Fix each case's observable pass criteria before either run. Compare anonymized outputs against the same criteria and check actual reads, tool calls, diffs, or executed checks. Any applicable hard rule missed fails that case. Record versions, evidence, and coverage gaps per case.
 - Read-only cases can verify routing and review findings. Claims about compatibility, packaging, or persisted behavior require execution through the affected public entry point. Reuse representative cases for project trust, user data, cancellation, and package or RPC behavior. See [Skill Eval](docs/agents/skill-evaluation.md) for fixed rubrics for packaged skills and [product evals](tests/eval/README.md) for independent runtime assertions.
+- When rechecking tool failures after a model or harness change, reuse the [legacy RPC tool failure case](tests/eval/README.md#rpc-tool-failure-case).
 - The [automated reviewer](.github/scripts/publish-pi-review.mjs) takes Standards from the trusted base's root and applicable directory `AGENTS.md` files. Keep mandatory review rules in those files.
 
 ## GitHub and worktrees

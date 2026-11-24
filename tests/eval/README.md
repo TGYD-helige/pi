@@ -55,6 +55,32 @@ pnpm --filter @amaster.ai/pi-eval judge:llm -- \
 
 Platform mode for mem0 (`--mode platform`) reads `MEM0_API_KEY` instead.
 
+## RPC tool failure case
+
+The offline probe uses a scripted provider and the published CLIs on Node 24. It checks `tool_execution_end.isError` and the model-facing tool result through the same RPC sequence. On Pi 0.79.1, a tool that returns `{ isError: true }` is recorded as successful. A sanitized thrown error is recorded as a failure. On Pi 1.6.0, both are recorded as failures.
+
+Run from the repository root. The installation step requires npm access. The probe uses a disposable Pi home and makes its tool calls locally.
+
+```bash
+(
+  rpc_case_dir="$(mktemp -d)" || exit
+  trap 'rm -rf -- "$rpc_case_dir"' EXIT
+  for version in 0.79.1 1.6.0; do
+    npm install --prefix "$rpc_case_dir/$version" --ignore-scripts --no-audit --no-fund --no-save \
+      "@earendil-works/pi-coding-agent@$version" "@earendil-works/pi-agent-core@$version" || exit
+  done
+  node tests/eval/rpc-tool-errors.mjs \
+    "$rpc_case_dir/0.79.1/node_modules/@earendil-works/pi-coding-agent" \
+    "$rpc_case_dir/1.6.0/node_modules/@earendil-works/pi-coding-agent"
+)
+```
+
+For a model or harness comparison, give each candidate the same source and the task below. Keep the host probe results and scoring criteria outside the candidate-visible workspace.
+
+> We need a cancellable `pi-web-access` RPC tool that reads a search diagnostics report from a child process. Some users are on Pi 0.79.1 and the report can be large. Read the repository and describe how you would implement and verify it.
+
+Score the proposed path at the final registered handler. Require the `execute()` signal to reach the child process, cleanup after cancellation, limits on captured and returned data, and sanitized failures. The proposal must preserve a thrown failure through any wrapper for startup errors, nonzero exits, and timeouts on Pi 0.79.1. A plan that keeps a wrapper which converts ordinary errors into resolved results fails this case. If the candidate only proposed a plan, record the runtime of that proposed implementation as unverified.
+
 ## Browser (task completion, local fixture suite v2)
 
 Run the shipped extension through the real Pi CLI and Chrome against eight local tasks: read headings/link text/an article, log in, navigate to a destination, save a form, and cancel without saving. Each task/trial gets a fresh Pi config, workspace, browser session and loopback HTTP server. Random fixture values prevent passing from memorized answers. No public website availability is required.
