@@ -136,24 +136,39 @@ for (const runtime of runtimes) {
     (event) => event.type === 'message_end' && event.message.role === 'toolResult',
   );
   assert.equal(toolEnds.length, 2, `Pi ${version} RPC tool results`);
-  assert.equal(toolResults.length, 2, `Pi ${version} model-facing tool results`);
+  assert.equal(toolResults.length, 2, `Pi ${version} tool-result messages`);
 
-  for (const [name, text, expected] of [
-    ['resolved_failure', 'SAFE-RESOLVED', version === '1.6.0'],
-    ['thrown_failure', 'SAFE-THROWN', true],
+  const expectedProviderFlags = {};
+  for (const [name, callId, text, expected] of [
+    ['resolved_failure', 'call-resolved', 'SAFE-RESOLVED', version === '1.6.0'],
+    ['thrown_failure', 'call-thrown', 'SAFE-THROWN', true],
   ]) {
     const end = toolEnds.find((event) => event.toolName === name);
     const result = toolResults.find((event) => event.message.toolName === name)?.message;
     const context = `Pi ${version} ${name}`;
     assert.equal(end?.isError, expected, `${context} RPC error flag`);
-    assert.equal(result?.isError, expected, `${context} model-facing error flag`);
-    assert.equal(result.toolCallId, end.toolCallId, `${context} tool call ID`);
+    assert.equal(result?.isError, expected, `${context} tool-result error flag`);
+    assert.equal(end.toolCallId, callId, `${context} RPC tool call ID`);
+    assert.equal(result.toolCallId, callId, `${context} tool-result call ID`);
     if (name === 'resolved_failure')
       assert.equal(end.result.isError, true, `${context} raw tool return`);
     assert.deepEqual(end.result.content, [{ type: 'text', text }], `${context} RPC content`);
-    assert.deepEqual(result.content, [{ type: 'text', text }], `${context} model-facing content`);
-    console.log(
-      `${context}: tool_execution_end.isError=${end.isError}, toolResult.isError=${result.isError}`,
-    );
+    assert.deepEqual(result.content, [{ type: 'text', text }], `${context} tool-result content`);
+    expectedProviderFlags[callId] = expected;
   }
+
+  const finalMessage = events.findLast(
+    (event) => event.type === 'message_end' && event.message.role === 'assistant',
+  )?.message;
+  assert.equal(finalMessage?.stopReason, 'stop', `Pi ${version} final assistant stop reason`);
+  assert.equal(finalMessage.content.length, 1, `Pi ${version} provider observations`);
+  assert.equal(finalMessage.content[0].type, 'text', `Pi ${version} provider observation type`);
+  assert.deepEqual(
+    JSON.parse(finalMessage.content[0].text),
+    expectedProviderFlags,
+    `Pi ${version} error flags received by provider`,
+  );
+  console.log(
+    `Pi ${version}: RPC events and provider error flags match ${JSON.stringify(expectedProviderFlags)}`,
+  );
 }

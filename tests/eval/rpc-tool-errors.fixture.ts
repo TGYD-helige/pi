@@ -38,8 +38,8 @@ export default function (pi: ExtensionAPI) {
     ],
     streamSimple(model, context) {
       const stream = createAssistantMessageEventStream();
-      const afterTools = context.messages.some((message) => message.role === 'toolResult');
-      const stopReason = afterTools ? 'stop' : 'toolUse';
+      const toolResults = context.messages.filter((message) => message.role === 'toolResult');
+      const stopReason = toolResults.length ? 'stop' : 'toolUse';
       const output: AssistantMessage = {
         role: 'assistant',
         api: model.api,
@@ -55,8 +55,17 @@ export default function (pi: ExtensionAPI) {
           totalTokens: 0,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
         },
-        content: afterTools
-          ? [{ type: 'text', text: 'FIXTURE-DONE' }]
+        content: toolResults.length
+          ? [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  Object.fromEntries(
+                    toolResults.map(({ toolCallId, isError }) => [toolCallId, isError]),
+                  ),
+                ),
+              },
+            ]
           : [
               { type: 'toolCall', id: 'call-resolved', name: 'resolved_failure', arguments: {} },
               { type: 'toolCall', id: 'call-thrown', name: 'thrown_failure', arguments: {} },

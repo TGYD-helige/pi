@@ -57,7 +57,7 @@ Platform mode for mem0 (`--mode platform`) reads `MEM0_API_KEY` instead.
 
 ## RPC tool failure case
 
-The offline probe uses a scripted provider and the published CLIs on Node 24. It checks `tool_execution_end.isError` and the model-facing tool result through the same RPC sequence. On Pi 0.79.1, a tool that returns `{ isError: true }` is recorded as successful. A sanitized thrown error is recorded as a failure. On Pi 1.6.0, both are recorded as failures.
+The offline probe uses a scripted provider and the published CLIs on Node 24. It checks the error flags in `tool_execution_end`, the tool-result message events, and the results received by the provider. It also checks that the final assistant message succeeds. On Pi 0.79.1, a tool that returns `{ isError: true }` is recorded as successful. A sanitized thrown error is recorded as a failure. On Pi 1.6.0, both are recorded as failures.
 
 Run from the repository root. The installation step requires npm access. The probe uses a disposable Pi home and makes its tool calls locally.
 
@@ -75,7 +75,7 @@ Run from the repository root. The installation step requires npm access. The pro
 )
 ```
 
-For a model or harness comparison, give each candidate the same source and the task below. Keep the host probe results and scoring criteria outside the candidate-visible workspace.
+For a guide, model, or harness comparison, extract `git archive d67830e57aa10551613fabcd33a43f28eb0ddd8e` into a fresh directory per candidate. This source revision predates the probe and rubric. Copy the chosen root `AGENTS.md` into each copy, changing it between candidates only when comparing guides. Give each candidate the task below and access only to its source copy. Keep the original checkout, Git history, probe results, and scoring criteria outside candidate access.
 
 > We need a cancellable `pi-web-access` RPC tool that reads a search diagnostics report from a child process. Some users are on Pi 0.79.1 and the report can be large. Read the repository and describe how you would implement and verify it.
 
