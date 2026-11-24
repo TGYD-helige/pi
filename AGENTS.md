@@ -1,444 +1,69 @@
-# Pi Extensions Monorepo — Agent Guidelines
+# Pi repository guide
 
-## Project Overview
+This monorepo ships Pi extensions in `packages/pi-*`, shared contracts in `packages/shared`, and persistence adapters in `packages/storage`. See the [package list and development setup](README.md).
 
-This monorepo contains Pi extensions (`packages/pi-*`), a shared library (`packages/shared`), and integration tests (`tests/`). Most packages are **Pi extensions** — TypeScript modules that hook into the Pi agent runtime.
+## Choose a workflow
 
----
+- **For bug fixes**, use `diagnosing-bugs` to reproduce the reported failure and confirm the cause before editing. Use `tdd` for behavior changes in packages with existing coverage. If two attempts based on the same assumption fail the same check, test that assumption directly before another attempt.
+- **For new public contracts, multi-package features, or migrations**, use `to-spec` and `to-tickets` (or the equivalent installed skills) to settle the observable behavior and break delivery into verifiable steps.
+- **Before a cross-package refactor**, pin existing behavior with a passing test or a comparison of outputs before moving code. Follow shared consumers, persisted data, and external contracts as well as direct callers. Run the relevant check after each independently verifiable step.
+- **Before measuring performance**, read the [performance harness](.github/scripts/performance/README.md#run-locally). For a speed claim, compare the same successful workload on both revisions and report the measured result and material coverage gaps.
+- **For PR reviews**, use `code-review` and apply the contracts below as Standards. Use the PR title and body as the Spec, with [closing-keyword issue links as additional context](docs/agents/issue-tracker.md). Check the actual changed lines and cite the evidence for each finding.
+- **For issue and PR triage**, use `triage` and check the [PR labeler](.github/workflows/labeler.yml) for its managed labels.
+- **For research**, use `research` to verify claims against primary sources. **For merge or rebase conflicts**, use `resolving-merge-conflicts`.
+- **When adding or changing a bundled skill or its evaluation fixtures**, read the [skill evaluation guide](docs/agents/skill-evaluation.md).
 
-## Required Agent Skills
+Use the applicable installed skills. See [ponytail](https://github.com/DietrichGebert/ponytail) and [mattpocock/skills](https://github.com/mattpocock/skills) for setup. When a skill is unavailable, follow the workflow and verification rules here. Keep installer-generated local tooling out of commits unless the team adopts it.
 
-Two external skill sets are mandatory when developing in this repo. Install them for your harness before starting work; if your harness cannot install skills, follow the rules inlined below.
+## Implement the smallest complete change
 
-### ponytail — minimal-code discipline
+Trace input, callers, state, and side effects to the observable outcome before editing. Check the owning package, sibling implementations, and `packages/shared` for existing patterns and the same defect. Reuse them, then prefer standard or platform APIs and installed dependencies. Include affected paths within scope and report any related paths left out. Use direct control flow and concrete types. Keep parsing and decisions separate from I/O where useful, and share an interface only when callers need the same contract.
 
-> https://github.com/DietrichGebert/ponytail
+**For public contracts**, preserve tool and slash-command names and parameters, settings keys, persisted session data, and documented lifecycle behavior, or handle an intentional change with a documented migration. Update tests and the package README when parameters change, and update `promptSnippet` and `promptGuidelines` when user-facing behavior or tool selection changes. Add test coverage for each new config key.
 
-Every code change follows ponytail's ladder — stop at the first rung that holds:
+**Tool registration** requires a matching slash command for each new user-facing tool. Share the implementation between the two entry points. For tool parameters with fixed string choices, use `StringEnum` from `@earendil-works/pi-ai`. Exceptions cover internal bridges and low-level MCP wrappers, dangerous or destructive operations, and tools with no stable human-friendly input. For an existing tool, consider filling in its matching command when changing that tool. See the [working search tool and command](packages/pi-web-access/src/index.ts).
 
-```
-1. Does this need to exist?   → no: skip it (YAGNI)
-2. Already in this codebase?  → reuse it, don't rewrite (check sibling packages and packages/shared first)
-3. Stdlib does it?            → use it
-4. Native platform feature?   → use it
-5. Installed dependency?      → use it — no new deps for one-call problems
-6. One line?                  → one line
-7. Only then: the minimum that works
-```
+## Pi runtime contracts
 
-The ladder runs *after* understanding the problem, never instead of it: read the code the change touches and trace the real flow before picking a rung. Lazy about the solution, never about reading — and never about trust-boundary validation, data-loss handling, security, or accessibility.
+Read the [Pi extension API](https://pi.dev/docs/latest/extensions) for hooks, registration, and UI. Check the affected package's declared minimum Pi version when relying on an API.
 
-Install:
-- Claude Code: `/plugin marketplace add DietrichGebert/ponytail`, then `/plugin install ponytail@ponytail` (two separate prompts)
-- Codex: `codex plugin marketplace add DietrichGebert/ponytail && codex plugin add ponytail@ponytail`, then trust its two lifecycle hooks under `/hooks`
+### Settings, trust, and models
 
-### mattpocock/skills — engineering workflow skills
+- **For settings and paths**, import path and configuration helpers from `@amaster.ai/pi-shared/settings`. Use `resolveHome()` for runtime data and `resolveConfigDir()` for config. Read the [shared implementation](packages/shared/src/settings.ts) for path precedence and interpolation. Settings load from global, then agent dir, then trusted project. Pass `cwd: ctx.cwd` and `projectTrusted: isProjectTrusted(ctx)` when loading from an extension context. Read project settings and policies only with established trust. Keep project environment placeholders literal and expand placeholders only in global and agent-dir settings.
+- **For authorization decisions**, use `loadPiSettingsAsync` and `loadPiPolicyProfilesAsync` for settings and policies that inform an authorization decision. Pass the working directory, current trust, and the operation's signal, as in [pi-security](packages/pi-security/src/extension.ts). Deny the decision when configuration is unreadable or invalid. Read mutable policy for each decision unless invalidation guarantees equally prompt revocation.
+- **For model requests**, use `streamModelRequest` or `completeModelRequest` from `@amaster.ai/pi-shared/models` with `ctx.modelRegistry`. The registry resolves credentials per request and routes registered providers and virtual models. Pass an empty auth object when targeting registry-only Pi. Supply credentials from `getApiKeyAndHeaders(model)` for the [shared helper's compatibility fallback](packages/shared/src/models.ts) on older Pi. Keep provider calls on this shared path.
 
-> https://github.com/mattpocock/skills
+### Tools, lifecycle, and logs
 
-Use this skill set for process work in this repo:
-- `triage` — processing new issues/PRs (labels: the `type/*` + `P0`–`P3` set managed by `.github/workflows/labeler.yml`)
-- `to-spec` / `to-tickets` — before non-trivial implementations
-- `tdd` — behavior changes in packages with existing coverage (see Unit Test Convention)
-- `diagnosing-bugs` — no fix without a reproduced root cause
-- `research`, `code-review`, `resolving-merge-conflicts` — as named
+- **For tool output**, bound external data before materializing it and set limits on final results and progress updates, including `content`, `details`, and `structuredContent`. Reuse the package's helper or Pi's `truncateHead`/`truncateTail` for text and the shared `boundStructuredContent` for structured results. Pi's built-in 50 KB and 2,000-line limits are reference points for extension budgets. Include truncation notices and other formatting in the budget.
+- **For tool failures**, return sanitized failures. Use `isError: true` where supported by the package's Pi range. Pi 0.x can treat a resolved result as successful, so use a sanitized thrown error when the runtime must mark failure on an affected version. Check actual failure behavior at the package's compatibility floor when it changes. Keep credentials, raw response bodies, and stack traces out of tool results and logs.
+- **For cancellable tool work**, forward the `signal` supplied to tool `execute()` into downstream I/O. For other work tied to an agent run, `ctx.signal` is available while that run is active. Give independent work its own cancellation and deadline. Cover queue wait, DNS, response body, and child processes with one end-to-end deadline per external operation. Clean up listeners and timers, block late side effects, and keep uncancellable work single-flight until it settles.
+- **For lifecycle hooks**, use `agent_end` for run completion and `session_shutdown` for runtime teardown on exit, reload, or session replacement. Rebuild runtime state in `session_start`. Read the [session replacement lifecycle](https://pi.dev/docs/latest/extensions#session-replacement-lifecycle-and-footguns) when changing these hooks or commands. Guard dialogs with `ctx.hasUI`, and keep independently configurable side effects under their own flags.
+- **For logging**, use `console.error` with a `[package-name]` prefix for sanitized unexpected errors and one-time startup diagnostics. Gate verbose logs with `DEBUG`; use runtime tool events for normal execution. Reserve stdout for expected machine-readable CLI or migration output. Keep credentials and full user messages out of logs. Read credentials from environment variables or user and agent-dir settings, and validate required values before use.
 
-Install:
-- Any harness (skills.sh): `npx skills@latest add mattpocock/skills` — include `/setup-matt-pocock-skills` and run it once per clone (issue tracker: GitHub)
-- Claude Code plugin: `/plugin marketplace add mattpocock/skills`, then `/plugin install mattpocock-skills@mattpocock`
+### User data and recurring work
 
-Files the skills.sh installer copies into the repo are local tooling — do not commit them unless the team explicitly adopts a skill as a local fork.
+- **Before writing configuration**, distinguish a missing file from an unreadable or malformed one. Preserve existing data on read failure and report the error. Preserve explicit user settings and unrelated fields. Replace whole files by renaming a temporary file in the same directory. Restrict sensitive file access from creation and preserve or tighten permissions on replacement. Coordinate overlapping read-modify-write operations. Test fresh and user-edited data for defaults, sync, or migration, and state how existing data is migrated or recovered.
+- **For background writes**, bound queues and shutdown waits. Persist accepted writes before acknowledging them, preserve order, and retain unfinished data for recovery. Report capacity rejections and ambiguous outcomes. For changes to retryable writes, verify the observable result of replay or recovery after interruption.
+- **On startup and recurring paths**, perform cheap enabled/model/trust checks before imports, scans, or I/O. Use asynchronous I/O and child processes. Select by metadata before decoding and bound reads, results, and concurrency. Keep independent work off the prompt's critical path.
+- **For repeated work**, remove redundant calls before adding concurrency or caching. Reuse consistent snapshots, batch supported lookups, and skip known unchanged writes. Bound cache size and lifetime, include trust and all result-affecting inputs in keys, and preserve individual cancellation when coalescing work. Cover changed limits, cancellation, overload, or invalidation with focused tests. Preserve lifecycle, trace, privacy, and durability behavior.
 
----
+## Extension packaging and previews
 
-## Pi Extension Fundamentals
+- **For a new extension**, use a working sibling manifest, TypeScript configuration, and entry as references. Export the extension factory as the default export from `src/index.ts` and point `pi.extensions` at its built entry. Declare `pi.skills` when shipping skills. Declare any used Pi runtime packages and `typebox` as peers and keep them external to bundled output. Choose a minimum compatible with the APIs used. Add the package README and tests and check [workspace discovery](pnpm-workspace.yaml).
+- **For a listed extension**, include a package-root preview and set `pi.image` to that asset. Follow the [existing previews](README.md#extension-previews). Use a 1672 × 941 PNG with extension copy on the left, relevant UI or icons on the right, and a distinct central beaver. Prefer blue and white and include an instrument when it fits. For listing changes to name, tagline, or capability scope, update the preview, root listing, package README, and manifest together.
 
-> Full docs: https://pi.dev/docs/latest/extensions
+## Verify the change
 
-### Entry Point
+- **For package tests**, put Vitest unit tests in `src/__tests__/<module>.test.ts` with a module-level `describe` and `it` cases. Keep cross-package and end-to-end tests in `tests/`. Reuse a focused test or mock the smallest interface that exhibits the behavior. Use `mkdtemp` with a `pi-<pkg>-<suite>-` prefix and isolate settings and environment from the real Pi home. Wait for servers, processes, timers, and background work before cleaning up. Use observable state or controlled clocks for timing. Keep unit tests offline and put live providers behind explicit integration runs.
+- **For a runtime regression**, use the reported Pi mode or a sanitized fixture of the failing input. Show that the same check fails before the fix and passes after, using the original entry point when available. In [Integration](.github/workflows/integration.yml), assert the actual tool event or business effect for changed tool behavior. Record the mode, scenario, or platform exercised and any material gap when using a substitute.
+- **For a new or changed extension entry**, run `pnpm pr-check`. It includes loading built entries. Use the root [scripts](package.json) to choose the focused or full checks.
+- **When changing a package's `files`, `exports`, `pi` manifest, or bundled assets**, build the current revision, run `pnpm --dir <package> pack --pack-destination <temp-dir>` and check the tarball for the relevant entries and assets. See the [release workflow](.github/workflows/npm-publish.yml) for the WeCom skill pack check.
+- **When changing the root agent guide**, check local links. For changes to workflows or guardrails, compare representative tasks against the old and revised guide with the same model. Check the references opened, the verification selected, and whether the revised guide preserves applicable guardrails. The [automated reviewer](.github/scripts/publish-pi-review.mjs) takes standards from the trusted base's root and applicable directory `AGENTS.md` files. Keep mandatory review rules in those files. The current Skill Eval covers packaged skills.
 
-Every extension exports a default factory receiving `ExtensionAPI`:
+## GitHub and worktrees
 
-```typescript
-import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
-
-export default function (pi: ExtensionAPI) {
-  pi.on('session_start', async (event, ctx) => { /* ... */ });
-  pi.registerTool({ /* ... */ });
-  pi.registerCommand('name', { /* ... */ });
-}
-```
-
-### Lifecycle
-
-Events grouped by phase:
-
-**Session-level:**
-1. `project_trust`
-2. `session_start`
-3. `resources_discover`
-
-**Agent-level (per user prompt):**
-4. `input`
-5. `before_agent_start`
-6. `agent_start`
-
-**Per-turn loop** (repeats until agent is done):
-- `turn_start`
-- `context`
-- `before_provider_request`
-- tool calls (may be multiple per turn)
-- `turn_end`
-
-**Agent completion:**
-7. `agent_end`
-
-**Shutdown:**
-8. `session_shutdown`
-
-Session transitions (`/new`, `/resume`, `/fork`) emit `session_before_switch`/`session_before_fork`, then `session_shutdown`, then `session_start` on the new session.
-
-Note: `agent_end` fires after each user prompt completes; `session_shutdown` only fires on session exit or transition — not between prompts in the same session.
-
-### Key APIs
-
-| API | Purpose |
-|-----|---------|
-| `pi.on(event, handler)` | Subscribe to lifecycle events |
-| `pi.registerTool({...})` | Register a tool callable by the LLM |
-| `pi.registerCommand(name, {handler, ...})` | Register a `/slash` command |
-| `pi.registerShortcut(...)` | Keyboard shortcuts |
-| `pi.registerProvider(...)` | Model providers |
-| `pi.appendEntry(key, data)` | Persist state in session (not sent to LLM) |
-
-### Tool Registration
-
-```typescript
-pi.registerTool({
-  name: 'my_tool',
-  label: 'My Tool',
-  description: 'What this tool does',
-  parameters: Type.Object({ /* typebox schema */ }),
-  // Use StringEnum from @earendil-works/pi-ai for string enums (Google compatibility)
-  promptSnippet: 'One-line for Available tools list',
-  promptGuidelines: ['Use my_tool when...'],
-  async execute(toolCallId, params, signal, onUpdate, ctx) {
-    return { content: [{ type: 'text', text: 'result' }], details: {} };
-  },
-});
-
-// On expected error (config missing, invalid input, etc.):
-// return { isError: true, content: [{ type: 'text', text: 'sanitized message' }], details: {} };
-```
-
-**Tool output must be bounded** — tool results flow into `pi-coding-agent`, which truncates at `DEFAULT_MAX_BYTES` (50KB) and `DEFAULT_MAX_LINES` (2000). Extensions should proactively keep outputs below these limits rather than rely on runtime truncation.
-
-Truncation priority:
-1. If the package already has a local `truncateText` or similar helper, use it (keeps the package internally consistent)
-2. Otherwise import `truncateHead`/`truncateTail` from `@earendil-works/pi-coding-agent` (v0.74+)
-3. Do not pull in external deps just for truncation
-
-What to truncate:
-- Large strings, large arrays, and external response bodies in both `content` and `details`; preserve small structured metadata as-is
-- Error messages — a stack trace can easily exceed limits
-
-### ExtensionContext (`ctx`)
-
-Every handler receives `ctx` (type: `ExtensionContext` from `@earendil-works/pi-coding-agent`):
-
-| Field | Purpose |
-|-------|---------|
-| `ctx.ui` | User interaction: confirm, select, input, notify, setStatus |
-| `ctx.cwd` | Current working directory |
-| `ctx.mode` | `'tui'` \| `'rpc'` \| `'json'` \| `'print'` |
-| `ctx.hasUI` | Boolean — guard dialog methods with this |
-| `ctx.signal` | AbortSignal for cancellation — long-running tool calls must propagate this to fetch/child processes; the runtime cancels via this signal |
-| `ctx.modelRegistry` | Model access and lookup |
-| `ctx.sessionManager` | Read-only session state |
-| `ctx.getContextUsage()` | Token usage info |
-| `ctx.compact()` | Trigger compaction |
-| `ctx.shutdown()` | Graceful exit |
-
----
-
-## Pi Packages
-
-> Full docs: https://pi.dev/docs/latest/packages
-
-Packages bundle extensions + skills + prompts + themes. Manifest in `package.json`:
-
-```json
-{
-  "pi": {
-    "extensions": ["./dist/index.js"],
-    "skills": ["./skills"]
-  }
-}
-```
-
-Only include `skills` when the package actually ships skill files. See the Adding a New Package checklist below for the full setup.
-
-Core Pi packages (`@earendil-works/pi-ai`, `pi-agent-core`, `pi-coding-agent`, `pi-tui`, `typebox`) must go in `peerDependencies` — never bundle these. Version ranges should follow the existing convention in this repo (e.g. `">=0.74.0"`); check a sibling package for the current pattern before adding.
-
----
-
-## Preview Images
-
-Pi extension packages should ship a package-root `preview.png` (for example, `packages/pi-foo/preview.png`) and reference it from `package.json` via `pi.image` when the package is intended to appear in extension/package listings.
-
-Preview requirements:
-- Use the repo's current preview size: `1672 x 941` PNG
-- Keep the overall layout consistent across packages: left-side extension text, right-side UI/icon cards, and a central beaver mascot
-- Do not reuse the same beaver image across packages; each extension should have a distinct mascot pose, outfit, expression, or instrument
-- Prefer a blue/white visual system; light or dark accents are fine when the result remains polished and consistent
-- Include a musical instrument when possible; Chinese and Western instruments are both welcome, and the instrument should help differentiate the mascot
-- The left-side title/tagline must be strongly related to the extension's actual purpose
-- The right-side UI/icon cards must be strongly related to the extension's domain and capabilities, not generic decoration
-- Keep the left text and right card styling visually aligned with existing previews so the package grid feels unified
-
-When changing an extension's name, tagline, or scope of capabilities, update the package `preview.png` together with the root README extension list, the package README, and `package.json` metadata.
-
----
-
-## Using `@packages/shared`
-
-When you need to read Pi's global config directory, project directory, or settings — use the shared module. Do NOT hardcode paths like `~/.pi/agent/`.
-
-This monorepo uses two npm scopes: `@earendil-works/*` for the Pi runtime core packages and `@amaster.ai/*` for our internal shared utilities. The shared package exposes these entry points: `@amaster.ai/pi-shared` (shared domain types and runtime type definitions), `@amaster.ai/pi-shared/settings` (config/path utilities) and `@amaster.ai/pi-shared/models` (model requests, see below). **Import from `/settings` for settings and path utilities** — this is what all existing packages do:
-
-```typescript
-import {
-  resolveHome,        // ~/.pi/agent (data dir: memories, skills, logs)
-  resolveConfigDir,   // config dir (settings.json, policy, auth, models)
-  loadPiSettings,     // load extension config (merges global < agentDir < project)
-  loadPiPolicyProfiles,
-} from '@amaster.ai/pi-shared/settings';
-```
-
-### Path Resolution
-
-| Function | Purpose | Env Override |
-|----------|---------|--------------|
-| `resolveHome()` | User data / runtime home | `PI_AGENT_HOME` |
-| `resolveConfigDir()` | System config dir | `PI_CODING_AGENT_DIR` or `PI_AGENT_HOME` |
-
-### Settings Loading
-
-`loadPiSettings<T>(key, options?)` merges config from three layers (low → high priority):
-1. Global: `~/.pi/agent/settings.json`
-2. Agent dir: `$PI_CODING_AGENT_DIR/settings.json`
-3. Trusted project: `<cwd>/.pi/settings.json`
-
-Extensions must pass `projectTrusted: isProjectTrusted(ctx)` when loading from an extension context. If trust is absent or declined, project settings and policies are ignored. `${ENV_VAR:-fallback}` and bare `$ENV_VAR` interpolation apply only to global and agent-dir settings, never to project settings. Loaders may opt out of bare `$ENV_VAR` compatibility with `expandBareEnvVars: false`; bare references do not support the `:-fallback` form.
-
-### Model Requests
-
-Send model requests with `streamModelRequest` or `completeModelRequest` from `@amaster.ai/pi-shared/models`, passing `ctx.modelRegistry` and the credentials from `ctx.modelRegistry.getApiKeyAndHeaders(model)`. Do not call `@earendil-works/pi-ai/compat` streaming directly: it cannot reach providers registered with `pi.registerProvider()`. The helpers use the registry's request methods, which resolve credentials per request, and fall back to compat with the given credentials on Pi versions without them.
-
----
-
-## Unit Test Convention
-
-Tests must live in `src/__tests__/`.
-
-### Required Structure
-
-```
-packages/pi-foo/
-  src/
-    __tests__/
-      extension.test.ts
-      config.test.ts
-      ...
-    index.ts
-    extension.ts
-```
-
-### Rules
-
-1. Test files go in `src/__tests__/<module>.test.ts`
-2. Use vitest: `import { describe, expect, it, vi } from 'vitest'`
-3. Top-level `describe` block named after the module/class under test
-4. Use `it(...)` (not `test(...)`) for individual cases
-5. Temp directories: `path.join(tmpdir(), 'pi-<pkg>-<suite>')` with `beforeEach`/`afterEach` cleanup. The `pi-` prefix isolates parallel suites and makes leftover dirs easy to grep/clean
-6. Mock the ExtensionAPI with a minimal object capturing `registerTool`, `registerCommand`, `on` calls
-7. Run: `pnpm test` (root) or `pnpm vitest run` (per-package)
-
-**Unit tests vs integration tests**: `src/__tests__/` holds unit tests scoped to one package. Cross-package and end-to-end tests live in the top-level `tests/` directory.
-
-### Regression and isolation
-
-- Test at the smallest boundary that exhibits the bug. Use the reported runtime mode or a sanitized fixture when the failure depends on that mode or input shape. A regression test must fail on the old behavior and pass with the fix; assert observable results rather than private implementation details.
-- Keep unit tests offline and isolate config, environment variables, and files from the user's real Pi home. Use mocks or local servers; keep live-provider checks in explicit integration/E2E runs.
-- Stop or await every server, child process, timer, and background task a test starts before removing its temporary files. Synchronize on observable state; use fake clocks or controlled delays instead of fixed sleeps to reproduce timing bugs.
-
-### Mock Pattern for Extensions
-
-```typescript
-const tools: Map<string, unknown> = new Map();
-const commands: Map<string, unknown> = new Map();
-
-const mockPi = {
-  on: vi.fn(),
-  registerTool: vi.fn((t) => tools.set(t.name, t)),
-  registerCommand: vi.fn((name, opts) => commands.set(name, opts)),
-  appendEntry: vi.fn(),
-  // Extend as needed: registerShortcut, events, etc.
-};
-```
-
----
-
-## Tool + Command Registration
-
-**When registering a tool, also register a corresponding `/command`** so users can invoke it directly via slash command.
-
-- **New tools**: must have a matching command (hard requirement)
-- **Existing tools**: commands should be added over time (soft requirement, tracked as tech debt)
-
-Exceptions — do NOT add a command when:
-- The tool is an internal bridge or low-level MCP wrapper (not user-facing)
-- The tool performs dangerous/destructive operations that shouldn't be casually invokable
-- The tool has no stable human-friendly parameter form (e.g. takes complex nested JSON)
-
-```typescript
-// Tool (LLM-callable)
-pi.registerTool({
-  name: 'web_search',
-  // ...
-  async execute(toolCallId, params, signal, onUpdate, ctx) { /* ... */ },
-});
-
-// Matching command (user-callable via /web-search <query>)
-pi.registerCommand('web-search', {
-  description: 'Search the web',
-  args: [{ name: 'query', description: 'Search query', required: true }],
-  async handler(args, ctx) { /* reuse tool logic */ },
-});
-```
-
-Packages that currently lack commands for their user-facing tools should be backfilled when touching the package — no formal tracker; surface in PR review.
-
----
-
-## Logging
-
-Use `console.error` for all log output in extension code — stdout may be consumed by the runtime (e.g. stdio transport), only stderr is a safe side-channel.
-
-| Scenario | Log? | Example |
-|----------|------|---------|
-| Error / unexpected exception | Always | `console.error(`[pi-foo] failed to fetch: ${err.message}`)` |
-| Config loaded / connection established | Once at startup | `console.error(`[pi-foo] connected to ${host}`)` |
-| Normal tool execution | No | Rely on the runtime's tool event store |
-| Debug / verbose tracing | Gated only | Use `DEBUG=pi-foo*` env-based gate; never leave unconditional debug logs in PRs |
-
-Rules:
-- Prefix with `[package-name]` for easy grep
-- Never log sensitive data (tokens, keys, user content)
-- No `console.log` in extension code — it pollutes stdout
-- Exception: CLI scripts / migration tools where stdout IS the expected machine-readable output may use `console.log` for that output; diagnostic messages still go to stderr
-
----
-
-## Implementation Discipline
-
-- Before modifying code, look at the same package's existing patterns first — match style, naming, structure
-- Trace the change from user input through callers, state, and side effects to the final result. Search sibling implementations for the same defect; cover affected instances without unrelated refactors, and report any affected instance left outside this change.
-- Keep lifecycle handlers linear and readable: validate shared input first, perform independently configurable side effects independently, then use early returns for disabled or already-completed paths; each flag should govern only its own behavior.
-- Write only user-facing usage documentation. Do not add internal implementation notes, investigation logs, plans, or work/review reports; put necessary change rationale and verification in the PR description.
-- Do not hard-wrap Markdown prose. Keep each paragraph on one source line; use line breaks only for Markdown structure such as lists, tables, blockquotes, and code fences.
-- Do not make cross-package refactors unrelated to the current task
-- New config keys must have corresponding test coverage
-- Modifying a public tool or command's parameters requires updating its tests and README; update `promptSnippet` and `promptGuidelines` when the user-facing behavior or tool selection guidance changes
-- Do not swallow exceptions — expected errors (config missing, user input invalid) should return sanitized `isError: true` results; unexpected exceptions should log to stderr but not expose full stack traces or raw request/response bodies to the user
-- Keep changes minimal and scoped; don't "improve" surrounding code unless asked
-
-### Code clarity and coupling
-
-- Name operations in the package’s vocabulary and make inputs and outputs explicit; extract a helper when it names a meaningful operation or isolates side effects, rather than to meet a line-count limit.
-- Keep parsing and domain decisions separate from filesystem, network, and runtime calls when they can be tested independently. Pass the specific values or capabilities needed instead of an entire extension context or mutable global state.
-- Keep module interfaces small and hide implementation details. Reuse sibling patterns and `packages/shared`; promote code to shared only when existing consumers need the same contract, and keep package-specific policy in its owning package.
-- Prefer direct control flow and concrete types. Keep a call direct when a wrapper only forwards its arguments. Add configuration when a caller needs a choice between supported behaviors.
-
-### User data and configuration writes
-
-- Distinguish a missing file from an unreadable or malformed one. A failed read is unknown state: preserve existing data, report the failure, and fail closed for authorization decisions instead of treating it as an empty configuration.
-- Preserve explicit user settings during defaults, sync, and migrations. Test existing user-edited data as well as fresh installs; state how previously persisted data is migrated or recovered.
-- For whole-file updates, preserve unrelated fields and rename a temporary file from the same directory over the target. Restrict access to sensitive files from creation and preserve or tighten access on replacement. Coordinate read-modify-write operations that can overlap; atomic replacement alone does not prevent lost updates.
-
----
-
-## Execution Efficiency and Performance
-
-- Trace startup, per-prompt, per-tool, and shutdown paths before optimizing. Run cheap enabled/model/trust checks before imports, history scans, or external work; keep independent work off the prompt's critical path.
-- Use asynchronous I/O and child processes on runtime paths. Select files by metadata before decoding history, and bound bytes read, items retained, aggregate payload size, and concurrent work before materializing full inputs. Include the newest item and formatting overhead in output budgets.
-- For recurring paths, estimate how reads, writes, subprocesses, and requests scale with input size and invocation rate. Reuse a read or parsed snapshot within one operation when its consistency requirements allow; batch lookups when supported, and skip unchanged writes when the current value is already known. Follow the authorization freshness rule below when reusing policy data.
-- Eliminate redundant calls before adding concurrency, caching, or background work. Use bounded concurrency when independent operations cause delay; preserve dependencies and write ordering.
-- Give each external operation one end-to-end deadline, including metadata, queue waits, DNS, response bodies, and subprocesses. Propagate caller cancellation, clean up listeners/timers, and prevent late completions from starting work or publishing stale results. An uncancellable underlying operation must remain single-flight until it actually settles.
-- Bound background queues and shutdown waits. Persist accepted writes before acknowledging them, retain unfinished data for recovery, and make capacity rejection visible; preserve write ordering and report ambiguous outcomes rather than silently discarding or repeatedly retrying them.
-- Bound cache size and lifetime, key by all result-affecting inputs and trust scope, and coalesce identical in-flight work while preserving each caller's cancellation. Re-read mutable authorization policy for each decision unless invalidation guarantees equally prompt revocation.
-- Preserve public lifecycle, trace, privacy, and durability contracts while reducing work. Add focused regressions for the changed limit, cancellation, overload, or invalidation behavior; use representative measurements for speed claims and state untested environments.
-
----
-
-## GitHub Issues and Pull Requests
-
-- All authored GitHub content MUST be written in English when creating or updating issues, pull requests, comments, reviews, or discussions, including titles, bodies, and review comments. Preserve exact code, identifiers, logs, and source quotations when needed as evidence.
-- Before drafting or opening an issue, read and follow `.github/ISSUE_TEMPLATE/issue.md`; before drafting or opening a pull request, read and follow `.github/pull_request_template.md`.
-- Keep titles specific and bodies brief. Include only the context needed to understand, reproduce, or review the work; link to longer logs or design notes instead of copying them.
-- Issues should identify the affected package and version when applicable, then state the problem or motivation, expected outcome, and minimal reproduction or context. Omit sections that do not apply.
-- Pull requests should summarize what changed and why, list verification performed, and reference the related issue when one exists. Use the conventional-commit title prefix recognized by `.github/workflows/labeler.yml`.
-- Report the checks run on the final reviewed commit and their results, including failures. Mention a skipped check only when it leaves a material verification gap. Re-run affected checks after a rebase or subsequent edits; a cancelled or unfinished run is not a pass. Before calling a failure pre-existing, reproduce it with the same check and environment on the base commit used for the comparison and record its SHA; link an existing issue or report the unresolved failure explicitly.
-- Use a separate worktree when another session or unrelated changes occupy the checkout. Preserve others' files, index, and logs; stage explicit paths and inspect the staged diff before committing.
-
----
-
-## Security / Secrets
-
-- Never log tokens, API keys, cookies, or full user message content
-- Never embed secrets in source — use env vars and user/agent-dir `loadPiSettings` values with `${ENV_VAR}` interpolation (or `$ENV_VAR` only where the loader documents support)
-- Error messages exposed to users must not leak internal secrets or full stack traces
-- When reading config that may contain credentials, validate early and fail clearly rather than passing bad values downstream
-- Enforcement: no automated pre-commit hook currently — relies on code review. Reviewers should check for: raw error objects passed to `console.error`, response bodies logged verbatim, secrets in string interpolation, and stack traces reaching tool results
-
----
-
-## Code Review Rules
-
-### Trust and configuration boundaries
-
-- Flag extension changes that read project settings or policies without first establishing project trust, expand environment variables from project-controlled settings, or bypass `@amaster.ai/pi-shared/settings` with hardcoded Pi paths. Safe path: pass `projectTrusted: isProjectTrusted(ctx)` and ignore project configuration when trust is absent or declined.
-
-### External I/O and model-visible output
-
-- Flag network or child-process paths that drop caller cancellation, return unbounded external data, or expose raw errors, response bodies, stack traces, credentials, or user content through tool results or logs. Safe path: propagate the provided `AbortSignal`, bound both `content` and `details`, return sanitized `isError` results for expected failures, and log only non-sensitive diagnostics to stderr.
-
-### Public extension contracts
-
-- Flag breaking changes to public tool or command names and parameters, settings keys, persisted session data, or documented lifecycle behavior unless compatibility is preserved or the break is explicitly intentional. Safe path: keep the existing contract or provide a migration, and update the corresponding tests, README, `promptSnippet`, and `promptGuidelines` together.
-
----
-
-## Adding a New Package
-
-Minimal checklist:
-
-1. Copy a sibling `package.json` — update `name`, `description`, `peerDependencies` version range
-2. Create `src/index.ts` (extension entry) + `src/__tests__/`
-3. Add `"pi": { "extensions": ["./dist/index.js"] }` to `package.json` (see Pi Packages section for the full `pi` block when adding skills/prompts/themes)
-4. Add `README.md`; add `preview.png` and `pi.image` when the package appears in listings (see Preview Images section)
-5. Register in `pnpm-workspace.yaml` if not auto-discovered by glob
-6. Run `pnpm build && pnpm test` from root to verify integration
-
----
-
-## Build & Test
-
-```bash
-pnpm build        # Build all packages
-pnpm test         # Run all tests (vitest)
-pnpm typecheck    # Type-check all packages
-pnpm lint         # Biome check
-pnpm lint:fix     # Biome auto-fix
-pnpm pr-check     # build + test + typecheck (CI gate)
-```
+- Write authored GitHub issues, PRs, reviews, comments, and discussions in English. Preserve exact identifiers, logs, or quotations when evidence requires them. Use the [issue template](.github/ISSUE_TEMPLATE/issue.md) and [PR template](.github/pull_request_template.md). For issues, include the affected package and version where applicable, the expected outcome, and the smallest reproduction or relevant context. Use a conventional-commit PR title prefix supported by the labeler.
+- Keep each PR focused. State the change, rationale, intended behavior, and verification in the PR body. Link the related issue when one exists. Use package READMEs for usage and the PR for implementation rationale and verification. Keep each Markdown prose paragraph on one source line.
+- Report checks on the final reviewed commit, including failed checks and material gaps. Re-run affected checks after edits or a rebase. Count only completed passing checks as passes. To call a failure pre-existing, reproduce it with the same command and environment on the base and report the base SHA.
+- Use a separate worktree when another session or unrelated changes occupy the checkout. Preserve others' files, index, and logs. Stage explicit paths and inspect the staged diff before committing.
