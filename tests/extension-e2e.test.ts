@@ -74,15 +74,19 @@ function findSchemaViolations(schema: unknown, path = ''): string[] {
   return violations;
 }
 
+// A cold Jiti import of the Feishu SDK can exceed Vitest's default timeout on CI.
+const CHANNELS_JITI_TIMEOUT_MS = 15_000;
+
 describe('Extension E2E loading via jiti', () => {
   for (const pkgName of extensionPackageNames) {
+    const timeout = pkgName === 'pi-channels' ? CHANNELS_JITI_TIMEOUT_MS : undefined;
     it(`${pkgName}: jiti loads and invokes each declared factory`, async () => {
       for (const entryPath of extensionSourcePaths(pkgName)) {
         const ext = await loadExtensionWithJiti(pkgName, entryPath);
         const totalRegistrations = ext.handlers.size + ext.tools.size + ext.commands.size;
         expect(totalRegistrations, entryPath).toBeGreaterThan(0);
       }
-    });
+    }, timeout);
   }
 
   it('pi-computer-use: loads via jiti and registers session handlers', async () => {
@@ -101,7 +105,7 @@ describe('Extension E2E loading via jiti', () => {
     const ext = await loadExtensionWithJiti('pi-channels');
     expect(ext.commands.has('channel')).toBe(true);
     expect(ext.tools.has('notify')).toBe(true);
-  });
+  }, CHANNELS_JITI_TIMEOUT_MS);
 
   it('pi-image-gen: registers /image-gen command, and image_generate tool after session_start', async () => {
     const ext = await loadExtensionWithJiti('pi-image-gen');

@@ -55,7 +55,7 @@
   },
   "dependencies": {
     "@amaster.ai/pi-shared": "workspace:*",
-    "croner": "^11.0.1"
+    "croner": "^10.0.1"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=0.79.1",
