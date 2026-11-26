@@ -487,6 +487,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
       capabilities: caps,
       referenceAssets,
       hasFirstFrame: Boolean(firstFrame),
+      hasLastFrame: Boolean(lastFrame),
       hasGeneralImageReferences: Boolean(toolParams.referenceImages?.length),
       localImageReferences:
         (firstFrame ? 1 : 0) + (lastFrame ? 1 : 0) + (toolParams.referenceImages?.length ?? 0),

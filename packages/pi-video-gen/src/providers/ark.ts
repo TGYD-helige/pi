@@ -288,7 +288,14 @@ export const arkAdapter: VideoProviderAdapter = {
     signal,
   ): Promise<VideoFileMeta> {
     try {
-      return await downloadFile({ url: videoUrl, destPath, fetchImpl, provider, signal });
+      return await downloadFile({
+        url: videoUrl,
+        destPath,
+        fetchImpl,
+        provider,
+        signal,
+        trustMediaHost: provider.style !== 'sand',
+      });
     } catch (error) {
       if (error instanceof VideoGenError) throw error;
       throw new VideoGenError(

@@ -992,6 +992,20 @@ describe('pi-video-gen extension', () => {
       }),
     );
     try {
+      if (provider === 'sand') {
+        const invalid = await tools
+          .get('video_generate')!
+          .execute(
+            'tail-only',
+            { ...VALID_GENERATE_PARAMS, lastFrame: framePath },
+            undefined,
+            undefined,
+            fakeCtx(cwd),
+          );
+        expect(invalid.isError).toBe(true);
+        expect(invalid.content[0]?.text).toMatch(/lastFrame requires firstFrame/);
+        expect(seen).toHaveLength(0);
+      }
       const result = await tools.get('video_generate')!.execute(
         'c1',
         {

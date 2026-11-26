@@ -63,12 +63,16 @@ export function referenceAssetPreflightError(options: {
   referenceAssets: ReferenceAsset[];
   localImageReferences: number;
   hasFirstFrame?: boolean;
+  hasLastFrame?: boolean;
   hasGeneralImageReferences?: boolean;
 }): string | undefined {
   const { providerStyle, modelId, capabilities, referenceAssets, localImageReferences } = options;
   const supported = supportsReferenceAssets(providerStyle)
     ? (capabilities.referenceAssetModalities ?? [])
     : [];
+  if (providerStyle === 'sand' && options.hasLastFrame && !options.hasFirstFrame) {
+    return 'MAGI-2 lastFrame requires firstFrame.';
+  }
   if (
     providerStyle === 'sand' &&
     options.hasFirstFrame &&

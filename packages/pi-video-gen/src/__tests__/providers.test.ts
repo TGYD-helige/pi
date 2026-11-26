@@ -406,6 +406,23 @@ describe('arkAdapter.downloadTo', () => {
     );
   });
 
+  it('keeps address validation for Sand response media hosts', async () => {
+    safeFetchMock.mockImplementation(mockFetch(mp4Response));
+    const sand = { ...provider, style: 'sand' as const, baseUrl: 'https://api.sand.ai' };
+    await arkAdapter.downloadTo(
+      sand,
+      handle,
+      'https://cdn.example/v.mp4',
+      join(suiteDir, 'sand.mp4'),
+      vi.fn<typeof fetch>(),
+    );
+    expect(safeFetchMock).toHaveBeenCalledWith(
+      'https://cdn.example/v.mp4',
+      expect.anything(),
+      expect.objectContaining({ trustedHosts: ['api.sand.ai'] }),
+    );
+  });
+
   it('refuses a pre-placed destination symlink (and never follows it)', async () => {
     const dir = join(suiteDir, `sym-${Math.random().toString(36).slice(2, 8)}`);
     mkdirSync(dir, { recursive: true });

@@ -144,6 +144,8 @@ export async function downloadFile(opts: {
   fetchImpl: typeof fetch;
   /** The provider this download belongs to — its baseUrl host is trusted for SSRF. */
   provider: { baseUrl: string };
+  /** Disable the response-host exception for providers that require public media URLs. */
+  trustMediaHost?: boolean;
   signal?: AbortSignal | undefined;
   maxBytes?: number | undefined;
   timeoutMs?: number | undefined;
@@ -187,7 +189,9 @@ export async function downloadFile(opts: {
   const mediaHost = hostFromUrl(opts.url);
   const trustedHosts = trustedHostsFromUrls(
     opts.provider.baseUrl,
-    mediaHost && !isIP(mediaHost.replace(/^\[|\]$/g, '')) ? opts.url : undefined,
+    opts.trustMediaHost !== false && mediaHost && !isIP(mediaHost.replace(/^\[|\]$/g, ''))
+      ? opts.url
+      : undefined,
   );
   let res: Response;
   try {

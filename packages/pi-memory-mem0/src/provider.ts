@@ -760,6 +760,31 @@ class OSSProvider implements Mem0Provider {
       }
     }
 
+    const { config: llmConfig } = builtConfig.llm as { config: { extraBody?: unknown } };
+    const { extraBody } = llmConfig;
+    if (
+      extraBody !== undefined &&
+      Object.hasOwn(mod, 'OpenAILLM') &&
+      mem.llm instanceof mod.OpenAILLM &&
+      !('extraBody' in mem.llm)
+    ) {
+      // Published mem0ai 3.3.1 lacks the workspace patch. Remove once upstream forwards extraBody.
+      if (!extraBody || typeof extraBody !== 'object' || Array.isArray(extraBody)) {
+        throw new ValidationError('Mem0 LLM extraBody must be an object.', 'configuration_error');
+      }
+      const reserved = ['model', 'messages', 'tools', 'tool_choice', 'response_format', 'stream'];
+      if (reserved.some((key) => Object.hasOwn(extraBody, key))) {
+        throw new ValidationError(
+          'Mem0 LLM extraBody contains a reserved field.',
+          'configuration_error',
+        );
+      }
+      const completions = mem.llm.openai.chat.completions;
+      const create = completions.create.bind(completions);
+      completions.create = (body: Record<string, unknown>, ...options: unknown[]) =>
+        create({ ...extraBody, ...body }, ...options);
+    }
+
     this.memory = mem;
 
     await mem.getAll({ filters: { user_id: '__warmup__' } });

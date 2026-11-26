@@ -134,7 +134,7 @@ Reuses API keys and base URLs from Pi's configured model providers. Embedded def
 }
 ```
 
-Defaults to OpenAI `text-embedding-3-small` for embeddings and DeepSeek `deepseek-flash` with thinking disabled for extraction. An explicit `oss.llm` keeps its configured provider and model. Set an explicit LLM if your memories should be extracted by another provider.
+Defaults to OpenAI `text-embedding-3-small` for embeddings and DeepSeek `deepseek-flash` with thinking disabled for extraction. An explicit `oss.llm` keeps its configured provider and model. Existing embedded configurations without `oss.llm` now send extraction requests to DeepSeek. Set an explicit LLM to keep extraction on your chosen provider.
 
 To use Jina embeddings, point the OpenAI-compatible embedder at Jina and use a distinct vector database. Vectors from different embedding models cannot share an index. Existing memories stay in their original database and can be re-embedded separately.
 
@@ -225,7 +225,7 @@ The extension automatically:
 
 ### Extra OpenAI Request Parameters (Embedded)
 
-This repository patches `mem0ai@3.3.1` to support `oss.llm.config.extraBody` for the `openai` LLM provider. Parameters are merged into both extraction and chat request bodies, so OpenAI-compatible endpoints can receive vendor-specific options:
+The extension supports `oss.llm.config.extraBody` for the `openai` and `deepseek` LLM providers. Parameters are merged into both extraction and chat request bodies, including when the extension is installed outside this workspace.
 
 ```json
 {
@@ -251,7 +251,7 @@ This repository patches `mem0ai@3.3.1` to support `oss.llm.config.extraBody` for
 
 `extraBody` must be an object. It cannot override `model`, `messages`, `tools`, `tool_choice`, `response_format`, or `stream`; these fields belong to Mem0's request protocol. Use API field names such as `max_tokens`, `reasoning_effort`, or `chat_template_kwargs` inside `extraBody`. Endpoint support depends on the selected model and provider.
 
-The patch is applied by `pnpm install` in this workspace. Installing the published extension alone does not apply this workspace patch. Recheck or remove `patches/mem0ai@3.3.1.patch` when upgrading Mem0 to an upstream version with equivalent support.
+Workspace installs use the SDK patch. The packaged extension forwards the same fields when the installed SDK lacks the patch.
 
 ### Fully Local (Ollama)
 
