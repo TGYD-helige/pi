@@ -1,3 +1,4 @@
+import { modelResponseError, SafeToolError, ValidationError } from '@amaster.ai/pi-shared';
 import { completeModelRequest } from '@amaster.ai/pi-shared/models';
 import type { TextContent as AiTextContent } from '@earendil-works/pi-ai';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
@@ -16,15 +17,22 @@ export async function summarizeContent(
 ): Promise<string> {
   const model = ctx.modelRegistry.find(config.provider, config.model);
   if (!model) {
-    throw new Error(
-      `Summary model "${config.provider}/${config.model}" not found in model registry.`,
+    throw new ValidationError(
+      'Summary model not found in model registry. Check the web fetch summary model configuration.',
+      'configuration_error',
     );
   }
 
-  const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-  if (!auth.ok) {
-    throw new Error(`Auth failed for summary model: ${auth.error}`);
-  }
+  const auth =
+    typeof ctx.modelRegistry.streamSimple === 'function'
+      ? {}
+      : await ctx.modelRegistry.getApiKeyAndHeaders(model);
+  const missingCredentials = () =>
+    new ValidationError(
+      'Auth failed for summary model. Check the credentials for the provider that serves the configured summary model.',
+      'configuration_error',
+    );
+  if ('ok' in auth && !auth.ok) throw missingCredentials();
 
   const truncated =
     content.length > MAX_CONTENT_LENGTH
@@ -51,10 +59,24 @@ export async function summarizeContent(
     },
     { ...(signal ? { signal } : {}), temperature: 0, maxTokens: 4096 },
     auth,
-  );
+  ).catch((error) => {
+    signal?.throwIfAborted();
+    throw new SafeToolError('Summary model request', error);
+  });
 
   signal?.throwIfAborted();
-  if (result.stopReason === 'error') throw new Error('Summary model request failed.');
+  if (result.stopReason === 'error' || result.stopReason === 'aborted') {
+    // These Pi registry diagnostics are safe to classify, regardless of the provider name.
+    if (
+      result.errorMessage === `Provider is not configured: ${model.provider}` ||
+      result.errorMessage === 'authHeader requires a resolved API key' ||
+      (result.errorMessage?.startsWith(`Virtual model ${model.provider}/${model.id} routed to `) &&
+        result.errorMessage.endsWith(', which has no credentials.'))
+    ) {
+      throw missingCredentials();
+    }
+    throw modelResponseError('Summary model request', result);
+  }
   return result.content
     .filter((c): c is AiTextContent => c.type === 'text')
     .map((c) => c.text)

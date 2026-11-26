@@ -1,9 +1,17 @@
 import { addAbortListener } from 'node:events';
-import { boundStructuredContent, describeToolError, SafeToolError } from '@amaster.ai/pi-shared';
+import {
+  type AgentToolError,
+  agentToolErrorResult,
+  agentToolErrorSchema,
+  boundStructuredContent,
+  describeToolError,
+  SafeToolError,
+  withAgentToolErrors,
+} from '@amaster.ai/pi-shared';
 import { isProjectTrusted, loadPiSettings } from '@amaster.ai/pi-shared/settings';
 import { defineTool, type ExtensionAPI, truncateHead } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
-import { initMulticaProvider } from './adapters/multica.js';
+import { initMulticaProvider, MulticaExitError } from './adapters/multica.js';
 import type { ExecFn, TeamworkConfig, TeamworkProvider } from './types.js';
 
 const SETTINGS_KEY = 'pi-teamwork';
@@ -42,7 +50,7 @@ const WORKSPACE_ID_PARAM = Type.Optional(
 );
 
 const errorSchema = Type.Object({
-  error: Type.String(),
+  error: Type.Unsafe<AgentToolError>(agentToolErrorSchema),
   errorCategory: Type.Optional(Type.String()),
   httpStatus: Type.Optional(Type.Integer()),
   truncated: Type.Boolean(),
@@ -143,7 +151,7 @@ export default function piTeamworkExtension(pi: ExtensionAPI): void {
   function registerProviderTools(): void {
     for (const tool of teamworkTools) {
       if (registeredToolNames.has(tool.name)) continue;
-      pi.registerTool(tool);
+      pi.registerTool({ ...tool, execute: withAgentToolErrors(tool, pi, 'pi-teamwork') });
       registeredToolNames.add(tool.name);
     }
     alignActiveTeamworkTools(pi, TEAMWORK_TOOL_NAMES, suspendedToolNames);
@@ -634,6 +642,23 @@ function providerErrorResult(error: unknown) {
     'The operation may have completed. Inspect issue state before retrying a write.',
   );
   console.error(`[pi-teamwork] provider operation failed (category=${failure.errorCategory})`);
+  if (error instanceof MulticaExitError) {
+    const result = agentToolErrorResult({
+      code: 'multica_command_failed',
+      message: 'The teamwork operation failed.',
+      cause: { source: 'Multica CLI', message: `Exited with status ${error.exitCode}.` },
+      recovery: 'If this was a write, inspect issue state before retrying.',
+    });
+    return {
+      ...result,
+      details: failure,
+      structuredContent: {
+        ...result.structuredContent,
+        errorCategory: failure.errorCategory,
+        truncated: false,
+      },
+    };
+  }
   return textResult(failure, failure.error);
 }
 

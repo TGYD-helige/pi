@@ -1,4 +1,10 @@
-import { boundStructuredContent, describeToolError } from '@amaster.ai/pi-shared';
+import {
+  type AgentToolError,
+  agentToolErrorResult,
+  agentToolErrorSchema,
+  boundStructuredContent,
+  describeToolError,
+} from '@amaster.ai/pi-shared';
 /**
  * Active memory tool — the LLM-callable interface over the Mem0 provider.
  *
@@ -75,7 +81,7 @@ const mem0OutputSchema = Type.Union([
     truncated: Type.Boolean(),
   }),
   Type.Object({
-    error: Type.String(),
+    error: Type.Unsafe<AgentToolError>(agentToolErrorSchema),
     errorCategory: Type.Optional(Type.String()),
     httpStatus: Type.Optional(Type.Integer()),
     truncated: Type.Boolean(),
@@ -84,6 +90,7 @@ const mem0OutputSchema = Type.Union([
 
 function textResult(text: string, value: object = { message: text }): AgentToolResult<unknown> {
   const data = boundStructuredContent(value);
+  if (typeof data.error === 'string') return errorResult(data.error, 'mem0_output_limit', true);
   return {
     content: [
       {
@@ -93,12 +100,16 @@ function textResult(text: string, value: object = { message: text }): AgentToolR
     ],
     details: data,
     structuredContent: data,
-    ...('error' in data ? { isError: true } : {}),
   };
 }
 
-function errorResult(text: string): AgentToolResult<unknown> {
-  return { ...textResult(text, { error: text }), isError: true };
+function errorResult(text: string, errorCode: string, truncated = false): AgentToolResult<unknown> {
+  const result = agentToolErrorResult({ code: errorCode, message: text });
+  return {
+    ...result,
+    details: { error: result.structuredContent.error.message, truncated },
+    structuredContent: { ...result.structuredContent, truncated },
+  };
 }
 
 function formatEntry(entry: MemoryItem): string {
@@ -177,14 +188,14 @@ export function createMem0MemoryTool(opts: Mem0MemoryToolOptions): ToolDefinitio
       const signalOpts = signal ? { signal } : {};
 
       if (!opts.isEnabled()) {
-        return errorResult('mem0_memory is disabled in this session.');
+        return errorResult('mem0_memory is disabled in this session.', 'mem0_disabled');
       }
 
       const epoch = opts.getSessionEpoch?.();
       try {
         const provider = await waitWithCancellation(Promise.resolve(opts.getProvider()), signal);
         if (!provider || !opts.isEnabled() || epoch !== opts.getSessionEpoch?.()) {
-          return errorResult('Mem0 is not active.');
+          return errorResult('Mem0 is not active.', 'mem0_inactive');
         }
         const userId = opts.getUserId();
         const agentId = opts.getAgentId();
@@ -193,20 +204,27 @@ export function createMem0MemoryTool(opts: Mem0MemoryToolOptions): ToolDefinitio
         switch (action) {
           case 'search': {
             const query = redactMemoryText(String(params.query ?? '').trim());
-            if (!query) return errorResult('query is required for the search action.');
+            if (!query)
+              return errorResult('query is required for the search action.', 'mem0_query_required');
             const results = await provider.search(query, { ...scope, topK, ...signalOpts });
             return formatBlock(`## Memories matching "${query}"`, results);
           }
           case 'add': {
             const content = redactMemoryText(String(params.content ?? '').trim());
-            if (!content) return errorResult('content is required for the add action.');
+            if (!content)
+              return errorResult(
+                'content is required for the add action.',
+                'mem0_content_required',
+              );
             const result = await provider.add([{ role: 'user', content }], {
               ...scope,
               ...signalOpts,
             });
             const { message, memories: created, isError, writeStatus } = getAddResult(result);
             if (message)
-              return isError ? errorResult(message) : textResult(message, { message, writeStatus });
+              return isError
+                ? errorResult(message, 'mem0_write_rejected')
+                : textResult(message, { message, writeStatus });
             return formatBlock(`Saved ${created.length} memories:`, created, { writeStatus });
           }
           case 'get_all': {
@@ -215,13 +233,18 @@ export function createMem0MemoryTool(opts: Mem0MemoryToolOptions): ToolDefinitio
           }
           case 'delete': {
             const memoryId = String(params.memory_id ?? '').trim();
-            if (!memoryId) return errorResult('memory_id is required for the delete action.');
+            if (!memoryId)
+              return errorResult(
+                'memory_id is required for the delete action.',
+                'mem0_id_required',
+              );
             await provider.delete(memoryId, signalOpts);
             return textResult(`Deleted memory ${memoryId}.`, { deletedId: memoryId });
           }
           default:
             return errorResult(
               `Unknown action "${action}". Available: search, add, get_all, delete.`,
+              'mem0_invalid_action',
             );
         }
       } catch (err) {
@@ -234,7 +257,16 @@ export function createMem0MemoryTool(opts: Mem0MemoryToolOptions): ToolDefinitio
         console.error(
           `[pi-memory-mem0] mem0_memory failed (category=${failure.errorCategory}${failure.httpStatus ? `, HTTP ${failure.httpStatus}` : ''})`,
         );
-        return textResult(failure.error, failure);
+        const result = agentToolErrorResult({
+          code: failure.errorCategory,
+          message: failure.error,
+        });
+        const { error, ...metadata } = failure;
+        return {
+          ...result,
+          details: failure,
+          structuredContent: { ...metadata, ...result.structuredContent, truncated: false },
+        };
       }
     },
   };

@@ -4,6 +4,82 @@ import type { TaskScheduler } from '../index.js';
 import { createSchedulerTools } from '../tools.js';
 
 describe('createSchedulerTools', () => {
+  it.each([
+    ['2000-01-01T00:00:00Z', 'schedule_in_past', 'A one-time schedule must be in the future.'],
+    [
+      '+9999999999999999d',
+      'invalid_once_schedule',
+      'Use an ISO timestamp or a relative delay such as "+10m".',
+    ],
+  ])('rejects an invalid one-time schedule before any write (%s)', async (schedule, code, message) => {
+    const create = vi.fn();
+    const tool = createSchedulerTools({ create } as unknown as TaskScheduler).find(
+      (tool) => tool.name === 'scheduler_create',
+    )!;
+    const result = await tool.execute(
+      'call',
+      { type: 'once', schedule, prompt: 'fixture' },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    expect(create).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      isError: true,
+      content: [{ type: 'text', text: `[${code}] ${message}` }],
+      structuredContent: { error: { code, message } },
+    });
+    expect(Value.Check(tool.outputSchema!, result.structuredContent)).toBe(true);
+  });
+
+  it.each([
+    '0s',
+    '10000000000000s',
+  ])('rejects an invalid interval before creating or updating (%s)', async (schedule) => {
+    const create = vi.fn();
+    const update = vi.fn();
+    const get = vi.fn().mockResolvedValue({ type: 'interval', schedule: '1m' });
+    const tools = createSchedulerTools({ create, get, update } as unknown as TaskScheduler);
+    const ctx = { sessionManager: { getSessionId: () => 'fixture' } } as never;
+    for (const [name, params] of [
+      ['scheduler_create', { type: 'interval', schedule, prompt: 'fixture', enabled: false }],
+      ['scheduler_update', { taskId: 'fixture', schedule }],
+    ] as const) {
+      const tool = tools.find((tool) => tool.name === name)!;
+      const result = await tool.execute('call', params, undefined, undefined, ctx);
+      expect(result).toMatchObject({
+        isError: true,
+        structuredContent: { error: { code: 'invalid_interval_schedule' } },
+      });
+      expect(result.content[0]).toMatchObject({
+        text: expect.not.stringContaining('may have completed'),
+      });
+    }
+    expect(create).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('bounds error details and validates the result when task metadata exceeds the output limit', async () => {
+    const scheduler = {
+      get: vi.fn().mockResolvedValue(undefined),
+      delete: vi.fn().mockResolvedValue(true),
+    } as unknown as TaskScheduler;
+    const tools = createSchedulerTools(scheduler);
+    const ctx = { sessionManager: { getSessionId: () => 's1' } } as never;
+    const taskId = 'x'.repeat(20_000);
+    for (const [name, code] of [
+      ['scheduler_get', 'task_not_found'],
+      ['scheduler_delete', 'scheduler_output_limit'],
+    ]) {
+      const tool = tools.find((item) => item.name === name)!;
+      const result = await tool.execute('call', { taskId }, undefined, undefined, ctx);
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toHaveProperty('error.code', code);
+      expect(Value.Check(tool.outputSchema!, result.structuredContent)).toBe(true);
+      expect(Buffer.byteLength(JSON.stringify(result.details))).toBeLessThan(12 * 1024);
+    }
+  });
+
   it('does not misreport a create timeout as invalid configuration', async () => {
     const scheduler = {
       create: vi.fn().mockRejectedValue(new DOMException('secret-token', 'TimeoutError')),

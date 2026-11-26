@@ -92,6 +92,13 @@ export async function initMulticaProvider(
   return { adapter: new MulticaAdapter(config, exec), installResult };
 }
 
+export class MulticaExitError extends SafeToolError {
+  constructor(readonly exitCode: number) {
+    super('Multica operation', undefined);
+    this.message = `Multica CLI exited with status ${exitCode}.`;
+  }
+}
+
 export class MulticaAdapter implements TeamworkProvider {
   readonly name = 'multica';
   private readonly binary: string;
@@ -264,16 +271,13 @@ export class MulticaAdapter implements TeamworkProvider {
     this.execution?.signal?.throwIfAborted();
     if (this.execution && Date.now() >= this.execution.deadline)
       throw new DOMException('Teamwork operation timed out.', 'TimeoutError');
-    const { stdout, stderr, code } = await (this.execution
+    const { stdout, code } = await (this.execution
       ? this.exec(this.binary, args, this.execution)
       : this.exec(this.binary, args));
     this.execution?.signal?.throwIfAborted();
     if (this.execution && Date.now() >= this.execution.deadline)
       throw new DOMException('Teamwork operation timed out.', 'TimeoutError');
-    if (code !== 0) {
-      const message = stderr.trim() || stdout.trim() || `Exit code ${code}`;
-      throw new Error(`multica ${args[0]} failed: ${message}`);
-    }
+    if (code !== 0) throw new MulticaExitError(code);
     return stdout;
   }
 }

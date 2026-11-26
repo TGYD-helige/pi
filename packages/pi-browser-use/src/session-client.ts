@@ -22,7 +22,11 @@ import type { BrowserUseConfig } from './config.js';
 import { buildSubprocessEnv } from './config.js';
 import type { DevToolsClient } from './index.js';
 import { createHttpBrowserAdapter, type ManagedBrowser } from './session-backend.js';
-import { BrowserSessionError, type SessionAction } from './session-control.js';
+import {
+  BrowserSessionError,
+  BrowserToolNotDispatched,
+  type SessionAction,
+} from './session-control.js';
 
 export interface SessionRecord {
   port?: number;
@@ -343,7 +347,12 @@ export class BrowserSessionClient {
   }
 
   async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal) {
-    await this.connect(signal);
+    try {
+      await this.connect(signal);
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      throw new BrowserToolNotDispatched(error);
+    }
     return this.request<Awaited<ReturnType<DevToolsClient['callTool']>>>(
       'call',
       { name, args },

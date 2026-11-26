@@ -49,6 +49,7 @@ const mockPi = {
       events.set(event, handler);
     }),
   },
+  registerMcpServer: vi.fn(),
   registerTool: vi.fn(
     (tool: { name: string; execute: (id: string, params: unknown) => Promise<unknown> }) => {
       tools.set(tool.name, tool);
@@ -438,6 +439,24 @@ describe('piChannelsExtension', () => {
     });
   });
 
+  test('reports a missing raw payload without attempting webhook delivery', async () => {
+    piChannelsExtension(mockPi as never);
+    await handlers.get('session_start')!({}, mockCtx());
+    const result = await tools
+      .get('notify')!
+      .execute('notify', { action: 'send', adapter: 'ops', payloadMode: 'raw', method: 'POST' });
+    expect(result).toMatchObject({
+      isError: true,
+      content: [
+        {
+          text: '[invalid_request] The request was rejected before sending. Set json for a webhook raw payload or use envelope mode.',
+        },
+      ],
+      structuredContent: { error: { code: 'invalid_request' } },
+    });
+    expect(safeFetchMock).not.toHaveBeenCalled();
+  });
+
   test('notify rejects local channels plugin selector as a send target', async () => {
     const fetchMock = vi.fn(async () => new Response('', { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
@@ -452,7 +471,7 @@ describe('piChannelsExtension', () => {
     })) as { content: Array<{ text: string }> };
 
     expect(result.content[0]!.text).toBe(
-      '@local:channels selects the plugin, not a route. Use one of these channel route mentions: @local:channels_webhook:ops.',
+      '[invalid_adapter] @local:channels selects the plugin, not a route. Use one of these channel route mentions: @local:channels_webhook:ops.',
     );
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -539,7 +558,7 @@ describe('piChannelsExtension', () => {
     })) as { content: Array<{ text: string }> };
 
     expect(result.content[0]!.text).toBe(
-      'Channel route "ops" uses adapter "webhook", not "wecom".',
+      '[invalid_adapter] Channel route "ops" uses adapter "webhook", not "wecom".',
     );
     expect(fetchMock).not.toHaveBeenCalled();
   });

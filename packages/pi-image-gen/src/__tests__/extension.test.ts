@@ -43,6 +43,7 @@ function setup() {
     on: vi.fn((event: string, handler: Handler) => {
       handlers.set(event, handler);
     }),
+    registerMcpServer: vi.fn(),
     registerTool: vi.fn((t: ToolDef) => tools.set(t.name, t)),
     registerCommand: vi.fn((name: string, opts: CommandDef) => commands.set(name, opts)),
     appendEntry: vi.fn(),

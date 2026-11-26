@@ -5,6 +5,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   CuaDriverClient,
+  CuaDriverRequestNotDispatched,
   resolveBundledTarget,
   resolveDriverLayout,
   resolveUnixSocketPath,
@@ -20,6 +21,14 @@ vi.mock('@modelcontextprotocol/sdk/client/stdio.js', () => ({
 }));
 
 describe('CuaDriverClient', () => {
+  it('marks a tool request as not dispatched when its connection is closed', async () => {
+    const client = new CuaDriverClient({ mode: 'path', binaryPath: '/opt/cua-driver' });
+    await client.close();
+    await expect(client.callTool('click', {}, undefined)).rejects.toBeInstanceOf(
+      CuaDriverRequestNotDispatched,
+    );
+  });
+
   it.each([
     ['darwin', 'arm64', 'darwin-universal'],
     ['darwin', 'x64', 'darwin-universal'],

@@ -177,7 +177,7 @@ Dreaming is opportunistic: it runs while a Pi host is active and catches up on t
 
 ## Structured results (Pi 0.99+)
 
-`memory_read`, `memory_add`, `memory_replace`, and `memory_remove` declare `outputSchema` and return their live store results as `structuredContent`. Codemode receives entries and usage directly; writes also expose `success`, `target`, and `entryCount`. Failed writes set `isError: true` and preserve available `error`, `matches`, `currentEntries`, `usage`, and drift-remediation fields. Entry text remains the existing substring reference used by replace/remove; no new entry-ID format is introduced.
+`memory_read`, `memory_add`, `memory_replace`, and `memory_remove` declare `outputSchema` and return their live store results as `structuredContent`. Codemode receives entries and usage directly; writes also expose `success`, `target`, and `entryCount`. Failed writes set `isError: true` and preserve available `error.code`, `error.message`, `matches`, `currentEntries`, `usage`, and drift-remediation fields. Entry text remains the existing substring reference used by replace/remove; no new entry-ID format is introduced. See the [tool error migration guide](../../README.md#tool-error-migration) for existing scripts and older Pi versions.
 
 ```javascript
 const result = await tools.memory_read({ target: "memory" });

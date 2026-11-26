@@ -35,6 +35,7 @@ function createPi() {
   const listeners = new Map<string, (...args: any[]) => any>();
   return {
     tools,
+    registerMcpServer: vi.fn(),
     registerTool(tool: any) {
       tools.set(tool.name, tool);
     },

@@ -211,17 +211,17 @@ Crash or cancel mid-render? Rerun the same spec path — generated-shot handles 
 
 All four tools declare `outputSchema` and return bounded `structuredContent`; codemode receives the object directly. Generation returns `jobId`, `state`, `videoPath`, and available `taskId`/`bytes`; composition/rendering return `jobId`, `state`, `finalVideoPath`, and their existing composition metadata. `video_capabilities` exposes `activeId`, `activeResolved`, `provider`, `keyReady`, `capabilities`, `models`, and `totalModels`, without provider credentials or URLs.
 
-`qcStatus: "recorded"` means the result includes existing QC frame/report paths. It does not mean a human or visual inspection passed. `qcStatus: "not_performed"` covers single clips, concat, or historical jobs without recorded QC. Available `qcFrames`, `qcReportPath`, `subtitlePath`, and editable project paths are returned directly. Failures return `{ error, truncated }` with `isError: true` and available persisted `jobId`/`state`/`taskId` or render-shot states. An ambiguous or interrupted paid job must be inspected/resumed rather than submitted again.
+`qcStatus: "recorded"` means the result includes existing QC frame/report paths. It does not mean a human or visual inspection passed. `qcStatus: "not_performed"` covers single clips, concat, or historical jobs without recorded QC. Available `qcFrames`, `qcReportPath`, `subtitlePath`, and editable project paths are returned directly. Failures return `{ error: { code, message }, truncated }` with `isError: true` and available persisted `jobId`/`state`/`taskId` or render-shot states. An ambiguous or interrupted paid job must be inspected/resumed rather than submitted again. See the [tool error migration guide](../../README.md#tool-error-migration) for existing scripts and older Pi versions.
 
 ```javascript
 const image = await tools.image_generate({ prompt: "A blue product illustration" });
-if (image.error) throw new Error(image.error);
+if (image.error) throw new Error(image.error.message);
 await tools.write({ path: ".video-gen/demo/timeline-input.json", content: JSON.stringify({
   output: { resolution: "640x360", fps: 25 },
   segments: [{ id: "s1", image: image.images[0].path, durationSec: 1, motion: "static" }]
 }) });
 const video = await tools.video_compose({ composeSpecPath: ".video-gen/demo/timeline-input.json" });
-if (video.error) throw new Error(video.error);
+if (video.error) throw new Error(video.error.message);
 text({ path: video.finalVideoPath, qcStatus: video.qcStatus, frames: video.qcFrames });
 ```
 

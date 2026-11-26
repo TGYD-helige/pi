@@ -15,7 +15,7 @@ import { Agent } from '@earendil-works/pi-agent-core';
 import { MEMORY_GUIDANCE } from './guidance.js';
 import { historyExcerpt } from './history-text.js';
 import { MemoryStore } from './store.js';
-import { createMemoryTools } from './tools.js';
+import { createMemoryTools, preserveMemoryToolFailure } from './tools.js';
 
 const MAX_CONSOLIDATION_TURNS = 8;
 
@@ -145,6 +145,7 @@ export async function runConsolidation(opts: ConsolidationOptions): Promise<bool
       };
       return modelErrors.run(() => streamModelRequest(modelRegistry, m, c, options, auth));
     },
+    afterToolCall: preserveMemoryToolFailure,
     convertToLlm: (msgs) => msgs as never[],
   });
 

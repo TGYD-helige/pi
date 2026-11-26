@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { DevToolsClient } from '../index.js';
 import { BrowserAcquisitionError, type ManagedBrowser } from '../session-backend.js';
 import * as connectionModule from '../session-connection.js';
+import { BrowserSessionError } from '../session-control.js';
 import { serveBrowserSession } from '../session-server.js';
 
 vi.mock('node:net', async (importOriginal) => {
@@ -138,6 +139,12 @@ describe('browser session tool recovery', () => {
       await request('call', { name: 'list_pages', args: {} });
       await request('retain');
       expect(nonce).toMatch(/^[a-f0-9]{48}$/);
+      vi.spyOn(DevToolsClient.prototype, 'ensureReady').mockRejectedValueOnce(
+        new BrowserSessionError('The browser connection is unavailable.'),
+      );
+      expect(await request('call', { name: 'click', args: { uid: 'old_uid' } })).toMatchObject({
+        error: 'The browser tool call was not sent. The browser connection is unavailable.',
+      });
       state.mockReturnValue('stalled');
       expect(await request('call', { name: 'click', args: { uid: 'old_uid' } })).toMatchObject({
         error: expect.stringContaining('Page IDs and element UIDs may have changed'),

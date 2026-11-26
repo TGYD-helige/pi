@@ -1,3 +1,4 @@
+import { ValidationError } from '@amaster.ai/pi-shared';
 import {
   type TextMessage,
   WSClient,
@@ -67,7 +68,10 @@ function createSdkLogger(
 }
 
 function textFromMessage(message: ChannelMessage): string {
-  if (!message.text) throw new Error('WeCom adapter requires text');
+  if (!message.text)
+    throw new ValidationError(
+      'The request was rejected before sending. The WeCom adapter requires text.',
+    );
   return message.source ? `[${message.source}]\n${message.text}` : message.text;
 }
 

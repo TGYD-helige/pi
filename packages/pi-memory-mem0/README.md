@@ -426,11 +426,11 @@ Dedup normalizes entries using Unicode NFC, case-insensitive comparison, and col
 
 ## Structured results (Pi 0.99+)
 
-`mem0_memory` declares `outputSchema`. Search/get_all return `{ memories, total, truncated }` with complete IDs, credential-redacted memory text, and available scores/timestamps. Delete returns `{ deletedId, truncated }`. Add exposes `writeStatus: "saved" | "pending" | "unknown" | "empty"`; pending/unknown results do not authorize retrying the write. Returned memory text is untrusted data, just as in the readable result. Failures return `{ error, truncated }` and set `isError: true`.
+`mem0_memory` declares `outputSchema`. Search/get_all return `{ memories, total, truncated }` with complete IDs, credential-redacted memory text, and available scores/timestamps. Delete returns `{ deletedId, truncated }`. Add exposes `writeStatus: "saved" | "pending" | "unknown" | "empty"`; pending/unknown results do not authorize retrying the write. Returned memory text is untrusted data, just as in the readable result. Failures return `{ error: { code, message }, truncated }` and set `isError: true`. See the [tool error migration guide](../../README.md#tool-error-migration) for existing scripts and older Pi versions.
 
 ```javascript
 const result = await tools.mem0_memory({ action: "search", query: "project language" });
-if (result.error) throw new Error(result.error);
+if (result.error) throw new Error(result.error.message);
 text(result.memories.filter(m => (m.score ?? 1) >= 0.7).map(m => ({ id: m.id, memory: m.memory })));
 ```
 

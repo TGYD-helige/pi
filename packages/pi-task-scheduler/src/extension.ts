@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { describeToolError } from '@amaster.ai/pi-shared';
+import { describeToolError, withAgentToolErrors } from '@amaster.ai/pi-shared';
 import { isProjectTrusted, loadPiSettings, resolveHome } from '@amaster.ai/pi-shared/settings';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import {
@@ -110,7 +110,7 @@ export default function taskSchedulerExtension(
       // Register LLM-callable tools after scheduler is ready
       const tools = createSchedulerTools(scheduler);
       for (const tool of tools) {
-        pi.registerTool(tool);
+        pi.registerTool({ ...tool, execute: withAgentToolErrors(tool, pi, 'pi-task-scheduler') });
       }
     } catch (error) {
       const failure = describeToolError('Initialize scheduler', error);

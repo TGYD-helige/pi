@@ -1,3 +1,4 @@
+import { type AgentToolError, agentToolErrorSchema } from '@amaster.ai/pi-shared';
 import { truncateHead } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
 import type { ImageGenResult } from './types.js';
@@ -17,7 +18,7 @@ export const imageOutputSchema = Type.Union([
     totalImages: Type.Integer(),
   }),
   Type.Object({
-    error: Type.String(),
+    error: Type.Unsafe<AgentToolError>(agentToolErrorSchema),
     errorCategory: Type.Optional(Type.String()),
     httpStatus: Type.Optional(Type.Integer()),
   }),

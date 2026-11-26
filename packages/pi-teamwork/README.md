@@ -112,11 +112,11 @@ The extension uses a provider pattern — `index.ts` registers tools that delega
 
 ## Structured results (Pi 0.99+)
 
-Teamwork tools declare `outputSchema`: workspace_list/issue_list/project_list return `{ workspaces | issues | projects, total, truncated }`; issue_get/create/update return `{ issue, truncated }`; issue_comment returns `{ comment, truncated }`. Issue objects retain their existing IDs/statuses and public fields; arbitrary provider metadata is excluded. teamwork_status exposes the provider and available running/pid/status fields, excluding raw CLI output. Failures return `{ error, truncated }` with `isError: true`, without CLI diagnostics or credentials. Tracker writes still require user authorization.
+Teamwork tools declare `outputSchema`: workspace_list/issue_list/project_list return `{ workspaces | issues | projects, total, truncated }`; issue_get/create/update return `{ issue, truncated }`; issue_comment returns `{ comment, truncated }`. Issue objects retain their existing IDs/statuses and public fields; arbitrary provider metadata is excluded. teamwork_status exposes the provider and available running/pid/status fields, excluding raw CLI output. Failures return `{ error: { code, message }, truncated }` with `isError: true`, without CLI diagnostics or credentials. Tracker writes still require user authorization. See the [tool error migration guide](../../README.md#tool-error-migration) for existing scripts and older Pi versions.
 
 ```javascript
 const result = await tools.issue_list({ status: "todo" });
-if (result.error) throw new Error(result.error);
+if (result.error) throw new Error(result.error.message);
 text(result.issues.map(issue => ({ id: issue.id, title: issue.title, status: issue.status })));
 // Once the user has authorized this issue's status update:
 // await tools.issue_update({ id: result.issues[0].id, status: "in_progress" });

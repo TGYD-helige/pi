@@ -9,6 +9,7 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { withAgentToolErrors } from '@amaster.ai/pi-shared';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -209,22 +210,33 @@ async function main(): Promise<void> {
     const originalName = toolNameMap.get(name);
     if (!originalName) throw new Error(`Unknown tool: ${name}`);
 
-    if (originalName === 'session')
-      return sessionToolResult(
-        args?.action,
-        config.session?.enabled
-          ? (action, signal) => client.sessionControl(action, signal)
-          : undefined,
-        extra.signal,
-      );
+    const execute = withAgentToolErrors(
+      {
+        name,
+        async execute(_id: string, params: Record<string, unknown>, signal: AbortSignal) {
+          if (originalName === 'session')
+            return sessionToolResult(
+              params.action,
+              config.session?.enabled
+                ? (action, signal) => client.sessionControl(action, signal)
+                : undefined,
+              signal,
+            );
 
-    if (originalName === 'analyze_screenshot' && config.visionModel) {
-      const callVision = createFetchVisionCaller(config.visionModel);
-      return await handleAnalyzeScreenshot(client, callVision, args ?? {}, extra.signal);
-    }
+          if (originalName === 'analyze_screenshot' && config.visionModel) {
+            const callVision = createFetchVisionCaller(config.visionModel);
+            return await handleAnalyzeScreenshot(client, callVision, params, signal);
+          }
 
-    const result = await client.callTool(originalName, args ?? {}, extra.signal);
-    return toToolContent(result, originalName);
+          const result = await client.callTool(originalName, params, signal);
+          return toToolContent(result, originalName);
+        },
+      },
+      undefined,
+      'pi-browser-use',
+      'The action may have completed. Inspect the current page before retrying.',
+    );
+    return execute(name, args ?? {}, extra.signal);
   });
 
   const transport = new StdioServerTransport();

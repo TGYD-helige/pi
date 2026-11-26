@@ -57,6 +57,7 @@ function createMockPi(initialActiveTools: string[] = []) {
         if (!handlers[event]) handlers[event] = [];
         handlers[event].push(handler);
       },
+      registerMcpServer: vi.fn(),
       registerTool: (tool: { name: string }) => {
         const index = tools.findIndex((registered) => registered.name === tool.name);
         if (index === -1) {
@@ -606,7 +607,10 @@ describe('session_start — delayed backend init', () => {
     );
     controller.abort();
 
-    await expect(pending).rejects.toBe(controller.signal.reason);
+    await expect(pending).rejects.toMatchObject({
+      name: 'AbortError',
+      message: '[cancelled] The tool call was cancelled.',
+    });
   });
 
   it('reports not active and withdraws the tool when init fails', async () => {
@@ -628,7 +632,7 @@ describe('session_start — delayed backend init', () => {
     const result = await pending;
 
     expect(result.isError).toBe(true);
-    expect(result.content[0]!.text).toBe('Mem0 is not active.');
+    expect(result.content[0]!.text).toBe('[mem0_inactive] Mem0 is not active.');
     expect(pi.getActiveTools()).toEqual(['read']);
     expect(ctx.ui.setStatus).toHaveBeenLastCalledWith('mem0', 'mem0: init failed');
   });
@@ -687,7 +691,7 @@ describe('session_start — delayed backend init', () => {
     await startB;
 
     expect(result.isError).toBe(true);
-    expect(result.content[0]!.text).toBe('Mem0 is not active.');
+    expect(result.content[0]!.text).toBe('[mem0_inactive] Mem0 is not active.');
     expect(providerA.search).not.toHaveBeenCalled();
     expect(providerB.search).not.toHaveBeenCalled();
   });
@@ -721,10 +725,13 @@ describe('session_start — delayed backend init', () => {
       await handlers.session_shutdown![0]!({}, ctx);
     }
     try {
-      await vi.waitFor(() => expect(result?.content[0]?.text).toBe('Mem0 is not active.'), {
-        timeout: 100,
-        interval: 1,
-      });
+      await vi.waitFor(
+        () => expect(result?.content[0]?.text).toBe('[mem0_inactive] Mem0 is not active.'),
+        {
+          timeout: 100,
+          interval: 1,
+        },
+      );
       expect(result?.isError).toBe(true);
       expect(providerA.search).not.toHaveBeenCalled();
     } finally {

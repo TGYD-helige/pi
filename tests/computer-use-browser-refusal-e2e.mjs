@@ -82,7 +82,9 @@ async function nextCall(messages) {
     );
     assert.equal(refusal?.isError, true, 'The model must receive the refusal as an error');
     const text = refusal.content.find((item) => item.type === 'text')?.text ?? '';
-    assert(text.startsWith(missingTabReason), 'The model must receive the original refusal reason');
+    assert(text.startsWith('[browser_tab_required] '), 'The model must receive the unified error code');
+    assert(text.includes(`\nCause (Cua Driver): ${missingTabReason}`), 'The model must receive the original refusal reason');
+    assert(text.includes('\nRecovery: '), 'The model must receive the recovery guidance');
     assert.match(text, /tab_id.*same session/);
     return toolCall('recovered', stateTool, { target_id: targetId, tab_id: tabId });
   }
@@ -203,6 +205,8 @@ try {
   assert.equal(rejected.isError, true, 'Pi must mark the missing-tab snapshot as failed');
   assert.equal(rejected.result.details?.status, 'refused');
   assert.equal(rejected.result.details?.code, 'browser_tab_required');
+  assert.equal(rejected.result.structuredContent?.error?.code, 'browser_tab_required');
+  assert.equal(rejected.result.structuredContent?.error?.cause?.message, missingTabReason);
   const recovered = calls.get('recovered');
   assert.equal(recovered?.toolName, stateTool);
   assert.equal(recovered.isError, false, 'Snapshot with the recovered tab ID must succeed');

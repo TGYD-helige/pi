@@ -712,24 +712,35 @@ export function matchesScheduledTaskScope(
   );
 }
 
+export class ScheduleValidationError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 export function resolveScheduledTaskDefinition(input: {
   type?: ScheduledTaskType;
   schedule?: string;
 }): Pick<ScheduledTask, 'type' | 'schedule' | 'intervalSeconds'> {
   const type = input.type;
   if (!isScheduledTaskType(type)) {
-    throw new Error('Scheduled task type is required and must be one of: cron, once, interval');
+    throw new ScheduleValidationError(
+      'invalid_schedule_type',
+      'Choose cron, once, or interval as the schedule type.',
+    );
   }
   if (!input.schedule?.trim()) {
-    throw new Error(`${type} scheduled tasks require schedule`);
+    throw new ScheduleValidationError(
+      'schedule_required',
+      `${type} scheduled tasks require a schedule.`,
+    );
   }
   if (type === 'interval') {
     const intervalSeconds = parseIntervalSeconds(input.schedule);
-    if (!intervalSeconds) {
-      throw new Error(
-        `Invalid interval schedule: ${input.schedule}. Use formats like "30s", "5m", or "1h".`,
-      );
-    }
+    if (!intervalSeconds) throw invalidIntervalSchedule();
     return {
       type,
       schedule: input.schedule.trim(),
@@ -809,7 +820,9 @@ export function computeNextRunAt(task: ScheduledTask): string | undefined {
     return undefined;
   }
   if (task.type === 'interval') {
-    return new Date(Date.now() + task.intervalSeconds * 1000).toISOString();
+    const nextRun = intervalRunDate(task.intervalSeconds);
+    if (!nextRun) throw invalidIntervalSchedule();
+    return nextRun.toISOString();
   }
   if (task.type === 'once') {
     const target = new Date(task.schedule);
@@ -925,6 +938,18 @@ function sanitizeIntervalSeconds(value: number): number {
   return Math.max(5, Math.floor(value));
 }
 
+function invalidIntervalSchedule(): ScheduleValidationError {
+  return new ScheduleValidationError(
+    'invalid_interval_schedule',
+    'Use an interval such as "30s", "5m", or "1h".',
+  );
+}
+
+function intervalRunDate(seconds: number): Date | undefined {
+  const date = new Date(Date.now() + seconds * 1000);
+  return Number.isNaN(date.getTime()) ? undefined : date;
+}
+
 function parseIntervalSeconds(value: string): number | undefined {
   const match = value.trim().match(/^(\d+)(s|m|h|d)$/);
   if (!match) {
@@ -946,7 +971,11 @@ function parseIntervalSeconds(value: string): number | undefined {
   if (!Number.isFinite(amount) || !multiplier) {
     return undefined;
   }
-  return sanitizeIntervalSeconds(amount * multiplier);
+  const seconds = amount * multiplier;
+  if (!Number.isSafeInteger(seconds) || seconds <= 0 || !intervalRunDate(seconds)) {
+    return undefined;
+  }
+  return sanitizeIntervalSeconds(seconds);
 }
 
 function resolveOnceSchedule(value: string): string {
@@ -956,12 +985,16 @@ function resolveOnceSchedule(value: string): string {
   }
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
-    throw new Error(
-      `Invalid once schedule: ${value}. Use an ISO timestamp or relative time like "+10m".`,
+    throw new ScheduleValidationError(
+      'invalid_once_schedule',
+      'Use an ISO timestamp or a relative delay such as "+10m".',
     );
   }
   if (date.getTime() <= Date.now()) {
-    throw new Error(`Scheduled time is in the past: ${date.toISOString()}`);
+    throw new ScheduleValidationError(
+      'schedule_in_past',
+      'A one-time schedule must be in the future.',
+    );
   }
   return date.toISOString();
 }
@@ -987,17 +1020,27 @@ function parseRelativeSchedule(value: string): string | undefined {
   if (!Number.isFinite(amount) || !multiplier || amount <= 0) {
     return undefined;
   }
-  return new Date(Date.now() + amount * multiplier).toISOString();
+  const date = new Date(Date.now() + amount * multiplier);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
 function validateCronSchedule(value: string): void {
   const schedule = scheduleExpressionForCroner(value);
   const fields = schedule.split(/\s+/);
   if (fields.length !== 5 && fields.length !== 6) {
-    throw new Error(`Cron schedule must have 5 or 6 fields, got ${fields.length}`);
+    throw new ScheduleValidationError(
+      'invalid_cron_schedule',
+      `Cron schedule must have 5 or 6 fields, got ${fields.length}.`,
+    );
   }
-  const cron = new Cron(schedule, { paused: true });
-  cron.stop();
+  try {
+    new Cron(schedule, { paused: true }).stop();
+  } catch {
+    throw new ScheduleValidationError(
+      'invalid_cron_schedule',
+      'Use a valid cron expression such as "0 9 * * 1-5".',
+    );
+  }
 }
 
 function rruleToCronSchedule(value: string): string {
@@ -1021,7 +1064,10 @@ function rruleToCronSchedule(value: string): string {
     const day = rruleDayToCron(parts.BYDAY);
     return `${minute} ${hour} * * ${day}`;
   }
-  throw new Error(`Unsupported RRULE frequency: ${freq || 'missing'}`);
+  throw new ScheduleValidationError(
+    'unsupported_schedule_frequency',
+    'Use an hourly, daily, or weekly recurrence.',
+  );
 }
 
 function parseRruleNumber(

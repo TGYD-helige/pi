@@ -49,6 +49,16 @@ jobs:
       - run: pnpm --filter @amaster.ai/pi-storage prisma:generate
       - run: pnpm --filter @amaster.ai/pi-shared build
       - run: pnpm test
+      - name: Check registered tool errors on Pi 0.79.1 and current Pi
+        run: |
+          pnpm --filter @amaster.ai/pi-channels build
+          rpc_case_dir="$(mktemp -d)"
+          trap 'rm -rf -- "$rpc_case_dir"' EXIT
+          npm install --prefix "$rpc_case_dir" --ignore-scripts --no-audit --no-fund --no-save \
+            @earendil-works/pi-coding-agent@0.79.1 @earendil-works/pi-agent-core@0.79.1
+          node tests/eval/rpc-tool-errors.mjs \
+            "$rpc_case_dir/node_modules/@earendil-works/pi-coding-agent" \
+            packages/pi-channels/node_modules/@earendil-works/pi-coding-agent
 
   build:
     name: Build

@@ -1,4 +1,4 @@
-import { describeToolError } from '@amaster.ai/pi-shared';
+import { agentToolErrorResult, withAgentToolErrors } from '@amaster.ai/pi-shared';
 import { isProjectTrusted } from '@amaster.ai/pi-shared/settings';
 import type {
   ExtensionAPI,
@@ -63,25 +63,12 @@ export default function piChannelsExtension(pi: ExtensionAPI): void {
   const registerTool = (tool: ToolDefinition) =>
     pi.registerTool({
       ...tool,
-      async execute(...args) {
-        try {
-          return await tool.execute(...args);
-        } catch (error) {
-          if (args[2]?.aborted) throw error;
-          const failure = describeToolError(
-            tool.name,
-            error,
-            'Delivery may have completed. Inspect delivery state before retrying.',
-          );
-          console.error(`[pi-channels] ${tool.name} failed (category=${failure.errorCategory})`);
-          return {
-            content: [{ type: 'text' as const, text: failure.error }],
-            structuredContent: failure,
-            details: undefined,
-            isError: true,
-          };
-        }
-      },
+      execute: withAgentToolErrors(
+        tool,
+        pi,
+        'pi-channels',
+        'Delivery may have completed. Inspect delivery state before retrying.',
+      ),
     });
 
   const registry = new ChannelRegistry();
@@ -335,18 +322,34 @@ export default function piChannelsExtension(pi: ExtensionAPI): void {
         };
       }
 
-      if (!params.adapter) return textToolResult('Missing required field: adapter.');
+      if (!params.adapter)
+        return {
+          ...agentToolErrorResult({
+            code: 'adapter_required',
+            message: 'Specify an adapter or route before sending.',
+          }),
+          details: undefined,
+        };
       const adapterName = normalizeAdapterName(params.adapter, params.recipient, registry.list());
-      if (!adapterName.ok) return textToolResult(adapterName.error);
+      if (!adapterName.ok)
+        return {
+          ...agentToolErrorResult({ code: 'invalid_adapter', message: adapterName.error }),
+          details: undefined,
+        };
 
       let rawBody: unknown;
       if (params.json) {
         try {
           rawBody = JSON.parse(params.json);
-        } catch (error) {
-          return textToolResult(
-            `Invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
-          );
+        } catch {
+          return {
+            ...agentToolErrorResult({
+              code: 'invalid_payload_json',
+              message:
+                'The request was rejected before sending. Provide valid JSON in the json field.',
+            }),
+            details: undefined,
+          };
         }
       }
 

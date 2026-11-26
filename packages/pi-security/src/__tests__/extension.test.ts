@@ -34,7 +34,8 @@ describe('pi security extension', () => {
 
     expect(result).toEqual({
       block: true,
-      reason: 'User denied approval: Workspace file modifications require approval.',
+      reason:
+        '[tool_call_blocked] The tool did not execute. User denied approval: Workspace file modifications require approval.',
     });
     expect(ctx.ui.select).toHaveBeenCalledOnce();
   });

@@ -57,21 +57,21 @@ Platform mode for mem0 (`--mode platform`) reads `MEM0_API_KEY` instead.
 
 ## RPC tool failure case
 
-The offline probe uses a scripted provider and the published CLIs on Node 24. It checks the error flags in `tool_execution_end`, the tool-result message events, and the results received by the provider. It also checks that the final assistant message succeeds. On Pi 0.79.1, a tool that returns `{ isError: true }` is recorded as successful. A sanitized thrown error is recorded as a failure. On Pi 1.6.0, both are recorded as failures.
+The offline probe runs a scripted provider with Pi 0.79.1 and the workspace's current Pi on Node 24. The two fixture tools expose the legacy error-flag difference for returned versus thrown errors. The installed Channels extension rejects a webhook request before sending. The probe asserts the tool execution flag, model-visible text, and current-host structured error. The CI Test job runs this probe.
 
-Run from the repository root. The installation step requires npm access. The probe uses a disposable Pi home and makes its tool calls locally.
+Run from the repository root after installing workspace dependencies. The temporary legacy installation requires npm access.
 
 ```bash
 (
+  pnpm --filter @amaster.ai/pi-shared build &&
+  pnpm --filter @amaster.ai/pi-channels build || exit
   rpc_case_dir="$(mktemp -d)" || exit
   trap 'rm -rf -- "$rpc_case_dir"' EXIT
-  for version in 0.79.1 1.6.0; do
-    npm install --prefix "$rpc_case_dir/$version" --ignore-scripts --no-audit --no-fund --no-save \
-      "@earendil-works/pi-coding-agent@$version" "@earendil-works/pi-agent-core@$version" || exit
-  done
+  npm install --prefix "$rpc_case_dir" --ignore-scripts --no-audit --no-fund --no-save \
+    @earendil-works/pi-coding-agent@0.79.1 @earendil-works/pi-agent-core@0.79.1 || exit
   node tests/eval/rpc-tool-errors.mjs \
-    "$rpc_case_dir/0.79.1/node_modules/@earendil-works/pi-coding-agent" \
-    "$rpc_case_dir/1.6.0/node_modules/@earendil-works/pi-coding-agent"
+    "$rpc_case_dir/node_modules/@earendil-works/pi-coding-agent" \
+    packages/pi-channels/node_modules/@earendil-works/pi-coding-agent
 )
 ```
 

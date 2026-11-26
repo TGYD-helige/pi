@@ -47,6 +47,7 @@ const mockPi = {
   on: vi.fn((event: string, handler: (event: unknown, ctx: unknown) => Promise<void>) =>
     handlers.set(event, handler),
   ),
+  registerMcpServer: vi.fn(),
   registerTool: vi.fn((t: ToolDef) => tools.set(t.name, t)),
   registerCommand: vi.fn(
     (
@@ -407,7 +408,10 @@ describe('pi-video-gen extension', () => {
       fakeCtx(cwd, true),
     );
     expect(result.isError).toBe(true);
-    expect(result.structuredContent?.error).toContain('qcTimesSec');
+    expect(result.structuredContent).toHaveProperty(
+      'error.message',
+      expect.stringContaining('qcTimesSec'),
+    );
     expect(Value.Check(tool.outputSchema as never, result.structuredContent)).toBe(true);
   });
 

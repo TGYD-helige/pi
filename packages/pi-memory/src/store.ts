@@ -36,6 +36,7 @@ export type MemoryDriftError = {
 
 export type MemoryErrorResult = {
   success: false;
+  code?: string;
   error: string;
   matches?: string[];
   currentEntries?: string[];
@@ -120,11 +121,11 @@ export class MemoryStore {
   async add(target: MemoryTarget, content: string): Promise<MemoryResult> {
     const trimmed = content.trim();
     if (!trimmed) {
-      return { success: false, error: 'Content cannot be empty.' };
+      return { success: false, code: 'memory_content_required', error: 'Content cannot be empty.' };
     }
     const scanError = firstThreatMessage(trimmed, 'strict');
     if (scanError) {
-      return { success: false, error: scanError };
+      return { success: false, code: 'memory_content_blocked', error: scanError };
     }
 
     return this.withFileLock(target, async () => {
@@ -144,6 +145,7 @@ export class MemoryStore {
         const current = this.charCount(target);
         return {
           success: false,
+          code: 'memory_capacity_exceeded',
           error:
             `Memory at ${current.toLocaleString()}/${limit.toLocaleString()} chars. ` +
             `Adding this entry (${trimmed.length} chars) would exceed the limit. ` +
@@ -162,15 +164,21 @@ export class MemoryStore {
   async replace(target: MemoryTarget, oldText: string, newContent: string): Promise<MemoryResult> {
     const oldTrim = oldText.trim();
     const newTrim = newContent.trim();
-    if (!oldTrim) return { success: false, error: 'oldText cannot be empty.' };
+    if (!oldTrim)
+      return {
+        success: false,
+        code: 'memory_search_text_required',
+        error: 'oldText cannot be empty.',
+      };
     if (!newTrim)
       return {
         success: false,
+        code: 'memory_content_required',
         error: "newContent cannot be empty. Use 'remove' to delete entries.",
       };
 
     const scanError = firstThreatMessage(newTrim, 'strict');
-    if (scanError) return { success: false, error: scanError };
+    if (scanError) return { success: false, code: 'memory_content_blocked', error: scanError };
 
     return this.withFileLock(target, async () => {
       const drift = await this.reloadTarget(target);
@@ -182,7 +190,11 @@ export class MemoryStore {
         .filter(({ entry }) => entry.includes(oldTrim));
 
       if (matches.length === 0) {
-        return { success: false, error: `No entry matched '${oldTrim}'.` };
+        return {
+          success: false,
+          code: 'memory_entry_not_found',
+          error: `No entry matched '${oldTrim}'.`,
+        };
       }
 
       if (matches.length > 1) {
@@ -190,6 +202,7 @@ export class MemoryStore {
         if (uniqueTexts.size > 1) {
           return {
             success: false,
+            code: 'memory_entry_ambiguous',
             error: `Multiple entries matched '${oldTrim}'. Be more specific.`,
             matches: matches.map(({ entry }) =>
               entry.length > 80 ? `${entry.slice(0, 80)}...` : entry,
@@ -206,6 +219,7 @@ export class MemoryStore {
       if (newTotal > limit) {
         return {
           success: false,
+          code: 'memory_capacity_exceeded',
           error:
             `Replacement would put memory at ${newTotal.toLocaleString()}/${limit.toLocaleString()} chars. ` +
             `Shorten the new content or remove other entries first.`,
@@ -220,7 +234,12 @@ export class MemoryStore {
 
   async remove(target: MemoryTarget, oldText: string): Promise<MemoryResult> {
     const oldTrim = oldText.trim();
-    if (!oldTrim) return { success: false, error: 'oldText cannot be empty.' };
+    if (!oldTrim)
+      return {
+        success: false,
+        code: 'memory_search_text_required',
+        error: 'oldText cannot be empty.',
+      };
 
     return this.withFileLock(target, async () => {
       const drift = await this.reloadTarget(target);
@@ -232,7 +251,11 @@ export class MemoryStore {
         .filter(({ entry }) => entry.includes(oldTrim));
 
       if (matches.length === 0) {
-        return { success: false, error: `No entry matched '${oldTrim}'.` };
+        return {
+          success: false,
+          code: 'memory_entry_not_found',
+          error: `No entry matched '${oldTrim}'.`,
+        };
       }
 
       if (matches.length > 1) {
@@ -240,6 +263,7 @@ export class MemoryStore {
         if (uniqueTexts.size > 1) {
           return {
             success: false,
+            code: 'memory_entry_ambiguous',
             error: `Multiple entries matched '${oldTrim}'. Be more specific.`,
             matches: matches.map(({ entry }) =>
               entry.length > 80 ? `${entry.slice(0, 80)}...` : entry,

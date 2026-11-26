@@ -36,6 +36,7 @@ function createMockPi() {
     tools,
     commands,
     eventHandlers,
+    registerMcpServer: vi.fn(),
     registerTool: vi.fn((tool: RegisteredTool) => {
       tools.set(tool.name, tool);
     }),
@@ -430,7 +431,7 @@ describe('extension — tool operations with injected scheduler', () => {
       createMockCtx(),
     )) as any;
 
-    expect(result.content[0].text).toBe('Task not found: nonexistent');
+    expect(result.content[0].text).toBe('[task_not_found] Task not found: nonexistent');
   });
 
   it('scheduler_update modifies task fields', async () => {
@@ -500,7 +501,7 @@ describe('extension — tool operations with injected scheduler', () => {
       undefined,
       createMockCtx(),
     )) as any;
-    expect(result.content[0].text).toBe('Task not found: ghost');
+    expect(result.content[0].text).toBe('[task_not_found] Task not found: ghost');
   });
 
   it('scheduler_run_now triggers a task', async () => {

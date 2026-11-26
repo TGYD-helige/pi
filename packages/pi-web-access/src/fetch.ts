@@ -48,7 +48,7 @@ async function fetchViaJina(
   });
 
   if (!response.ok) {
-    throw new Error(`Jina Reader error ${response.status}`);
+    throw Object.assign(new Error('Jina Reader request failed.'), { status: response.status });
   }
 
   const body = await readResponsePrefix(response, MAX_FETCH_BYTES);

@@ -45,6 +45,13 @@ export async function sessionToolResult(
   }
 }
 
+export class BrowserToolNotDispatched extends SafeToolError {
+  constructor(error: unknown) {
+    super('Browser preflight', error, 'Check the browser connection before retrying.');
+    this.message = `The browser tool call was not sent. ${this.message}`;
+  }
+}
+
 export class BrowserSessionError extends SafeToolError {
   constructor(message: string, cause?: unknown) {
     super('Browser session', cause ?? new Error(message));
