@@ -9,6 +9,7 @@ describe('BUILT_IN_MODELS registry', () => {
       ['gemini-nano-banana-2.1', 'nano-banana-2.1', 'gemini', 14],
       ['qwen-image-2.1-pro', 'qwen-image-2.1-pro', 'dashscope', 10],
       ['qwen-image-2.1-turbo', 'qwen-image-2.1-turbo', 'dashscope', 10],
+      ['doubao-seedream-5-5-261028', 'doubao-seedream-5-5-261028', 'ark', 10],
       ['doubao-seedream-5-0-flash-260915', 'seedream-5-flash', 'ark', 10],
     ] as const) {
       const entry = findBuiltInModel(alias);

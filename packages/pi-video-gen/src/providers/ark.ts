@@ -5,6 +5,7 @@ import {
   httpStatusError,
   missingKeyError,
   networkError,
+  providerLabel,
   redactUrl,
   safeBasename,
   VideoGenError,
@@ -41,6 +42,7 @@ import { downloadFile } from './task.js';
  */
 
 export const ARK_DEFAULT_BASE_URL = 'https://ark.cn-beijing.volces.com/api/v3';
+export const SAND_DEFAULT_BASE_URL = 'https://api.sand.ai/compatible/ark/api/v3';
 
 const MIME_BY_EXT: Record<string, string> = {
   '.png': 'image/png',
@@ -76,9 +78,9 @@ function bearerHeaders(apiKey: string): Record<string, string> {
 export { requestFingerprint as fingerprint };
 
 /** Thrown when submit failed without a definitive server verdict (network/5xx). */
-function ambiguousSubmitError(error?: unknown): AmbiguousSubmitError {
+function ambiguousSubmitError(style: 'ark' | 'sand', error?: unknown): AmbiguousSubmitError {
   return new AmbiguousSubmitError(
-    'Task creation failed with an ambiguous result (network error or server 5xx). The provider MAY have created a paid task — check the Volcengine Ark console before retrying to avoid double billing.',
+    `Task creation failed with an ambiguous result (network error or server 5xx). The provider MAY have created a paid task — check the ${providerLabel(style)} console before retrying to avoid double billing.`,
     'ark submit: ambiguous outcome',
     error,
   );
@@ -106,7 +108,14 @@ async function portraitPrivacyError(res: Response): Promise<VideoGenError | unde
 
 export const arkAdapter: VideoProviderAdapter = {
   async submit(provider, remoteModelId, params, fetchImpl, signal): Promise<RemoteTaskHandle> {
-    if (!provider.apiKey) throw missingKeyError('ark', 'ARK_API_KEY', provider.apiKeyPath);
+    const style = provider.style === 'sand' ? 'sand' : 'ark';
+    if (!provider.apiKey) {
+      throw missingKeyError(
+        style,
+        style === 'sand' ? 'SAND_API_KEY' : 'ARK_API_KEY',
+        provider.apiKeyPath,
+      );
+    }
 
     const content: Record<string, unknown>[] = [{ type: 'text', text: params.prompt }];
     if (params.firstFramePath) {
@@ -155,7 +164,7 @@ export const arkAdapter: VideoProviderAdapter = {
     const body: Record<string, unknown> = {
       model: remoteModelId,
       content,
-      watermark: false,
+      ...(style === 'ark' ? { watermark: false } : {}),
     };
     if (params.resolution) body.resolution = params.resolution;
     if (
@@ -171,22 +180,23 @@ export const arkAdapter: VideoProviderAdapter = {
     try {
       res = await fetchImpl(`${provider.baseUrl}/contents/generations/tasks`, {
         method: 'POST',
+        ...(style === 'sand' ? { redirect: 'error' } : {}),
         headers: bearerHeaders(provider.apiKey),
         body: JSON.stringify(body),
         signal: signal ?? null,
       });
     } catch (error) {
-      throw ambiguousSubmitError(error);
+      throw ambiguousSubmitError(style, error);
     }
 
     if (!res.ok) {
       if (res.status >= 500)
-        throw ambiguousSubmitError(Object.assign(new Error(), { status: res.status }));
-      if (res.status === 400) {
+        throw ambiguousSubmitError(style, Object.assign(new Error(), { status: res.status }));
+      if (style === 'ark' && res.status === 400) {
         const privacyError = await portraitPrivacyError(res);
         if (privacyError) throw privacyError;
       }
-      throw httpStatusError('ark', 'submit', res.status);
+      throw httpStatusError(style, 'submit', res.status);
     }
 
     let taskId: string | undefined;
@@ -195,13 +205,13 @@ export const arkAdapter: VideoProviderAdapter = {
       taskId = json.id;
     } catch (error) {
       // A body failure cannot tell us whether the paid task was created.
-      throw ambiguousSubmitError(error);
+      throw ambiguousSubmitError(style, error);
     }
     if (!taskId) {
       // 2xx but no id: the task MAY exist server-side — this is ambiguous,
       // not a clean failure, and must park the shot rather than re-submit.
       throw new AmbiguousSubmitError(
-        'The provider accepted the request but returned no task id. Not retrying automatically; check the Ark console.',
+        `The provider accepted the request but returned no task id. Not retrying automatically; check the ${providerLabel(style)} console.`,
         'ark submit: no task id',
       );
     }
@@ -214,21 +224,29 @@ export const arkAdapter: VideoProviderAdapter = {
   },
 
   async inspect(provider, handle, fetchImpl, signal): Promise<RemoteTaskStatus> {
-    if (!provider.apiKey) throw missingKeyError('ark', 'ARK_API_KEY', provider.apiKeyPath);
+    const style = provider.style === 'sand' ? 'sand' : 'ark';
+    if (!provider.apiKey) {
+      throw missingKeyError(
+        style,
+        style === 'sand' ? 'SAND_API_KEY' : 'ARK_API_KEY',
+        provider.apiKeyPath,
+      );
+    }
 
     let res: Response;
     try {
       res = await fetchImpl(
         `${provider.baseUrl}/contents/generations/tasks/${encodeURIComponent(handle.taskId)}`,
         {
+          ...(style === 'sand' ? { redirect: 'error' } : {}),
           headers: { authorization: `Bearer ${provider.apiKey}` },
           signal: signal ?? null,
         },
       );
     } catch (error) {
-      throw networkError('ark', 'inspect', error);
+      throw networkError(style, 'inspect', error);
     }
-    if (!res.ok) throw httpStatusError('ark', 'inspect', res.status);
+    if (!res.ok) throw httpStatusError(style, 'inspect', res.status);
 
     const json = (await res.json()) as {
       status?: string;
@@ -250,6 +268,9 @@ export const arkAdapter: VideoProviderAdapter = {
         }
         return { phase: 'succeeded', videoUrl };
       }
+      case 'cancelled':
+      case 'expired':
+        return { phase: 'failed', message: `The provider task ${json.status}.` };
       case 'failed':
         return { phase: 'failed', message: json.error?.message ?? 'unknown provider error' };
       default:
@@ -269,11 +290,18 @@ export const arkAdapter: VideoProviderAdapter = {
     signal,
   ): Promise<VideoFileMeta> {
     try {
-      return await downloadFile({ url: videoUrl, destPath, fetchImpl, provider, signal });
+      return await downloadFile({
+        url: videoUrl,
+        destPath,
+        fetchImpl,
+        provider,
+        signal,
+        trustMediaHost: provider.style !== 'sand',
+      });
     } catch (error) {
       if (error instanceof VideoGenError) throw error;
       throw new VideoGenError(
-        `Downloading the video failed (${redactUrl(videoUrl)}). The URL expires after 24h — rerun to regenerate.`,
+        `Downloading the video failed (${redactUrl(videoUrl)}). Retry the download with a fresh URL from the existing task.`,
         'ark download: failed',
       );
     }

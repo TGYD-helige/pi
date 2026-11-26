@@ -98,16 +98,20 @@ describe('klingAdapter.submit (API 2.0)', () => {
     expect(externalIds[0]).not.toBe(externalIds[1]);
   });
 
-  it('i2v: contents array with first_frame (+last_frame for omni), no ratio', async () => {
+  it.each([
+    'kling-3.0',
+    'kling-4.0',
+  ])('sends both frame roles with the correct %s shape', async (model) => {
     let body: Record<string, unknown> | undefined;
-    const fetchImpl = mockFetch((_url, init) => {
+    const fetchImpl = mockFetch((url, init) => {
+      expect(url).toBe(`${provider.baseUrl}/image-to-video/${model}`);
       body = JSON.parse(String(init?.body));
       return jsonResponse(200, { code: 0, data: { id: 'kt-2' } });
     });
 
     const handle = await klingAdapter.submit(
       provider,
-      'kling-3.0',
+      model,
       {
         prompt: 'cat runs',
         firstFramePath: join(suiteDir, 'frame.png'),
@@ -118,11 +122,13 @@ describe('klingAdapter.submit (API 2.0)', () => {
     );
 
     expect(handle.meta?.taskType).toBe('image-to-video');
-    const contents = (body?.contents ?? []) as { type: string; url?: string }[];
+    const contents = (body?.contents ?? []) as { type: string; url?: string; id?: string }[];
     expect(contents[0]).toEqual({ type: 'prompt', text: 'cat runs' });
     expect(contents[1]!.type).toBe('first_frame');
     expect(contents[1]!.url!.startsWith('data:image/png;base64,')).toBe(true);
     expect(contents[2]!.type).toBe('last_frame');
+    expect(contents[1]?.id).toBe(model === 'kling-4.0' ? 'first_frame' : undefined);
+    expect(contents[2]?.id).toBe(model === 'kling-4.0' ? 'last_frame' : undefined);
     const settings = (body?.settings ?? {}) as Record<string, unknown>;
     expect(settings.aspect_ratio).toBeUndefined(); // follows the frame
   });

@@ -619,18 +619,21 @@ class OSSProvider implements Mem0Provider {
     const config: Record<string, unknown> = {};
 
     const defaultEmbedder = { provider: 'openai', config: { model: 'text-embedding-3-small' } };
-    const defaultLlm = { provider: 'openai', config: { model: 'gpt-4.1-nano' } };
-
+    const llm = this.ossConfig?.llm;
     let embedderProvider = this.ossConfig?.embedder?.provider || defaultEmbedder.provider;
     const embedderCfg: Record<string, unknown> = {
       ...defaultEmbedder.config,
       ...(this.ossConfig?.embedder?.config ?? {}),
     };
 
-    let llmProvider = this.ossConfig?.llm?.provider || defaultLlm.provider;
+    let llmProvider = llm?.provider || (llm ? 'openai' : 'deepseek');
     const llmCfg: Record<string, unknown> = {
-      ...defaultLlm.config,
-      ...(this.ossConfig?.llm?.config ?? {}),
+      ...(llmProvider === 'deepseek'
+        ? { model: 'deepseek-flash', extraBody: { thinking: { type: 'disabled' } } }
+        : llmProvider === 'openai'
+          ? { model: 'gpt-6-luna' }
+          : {}),
+      ...llm?.config,
     };
 
     // Resolve provider info (apiKey + baseUrl + api) from pi model registry
@@ -648,7 +651,10 @@ class OSSProvider implements Mem0Provider {
         if (info) {
           if (info.apiKey) llmCfg.apiKey = info.apiKey;
           if (info.baseUrl) llmCfg.baseURL = info.baseUrl;
-          llmProvider = mapApiToMem0Provider(info.api, llmProvider);
+          // Keep the DeepSeek SDK's endpoint and DEEPSEEK_API_KEY fallback.
+          if (llmProvider !== 'deepseek') {
+            llmProvider = mapApiToMem0Provider(info.api, llmProvider);
+          }
         }
       }
     } else if (this.resolveKey) {
@@ -663,6 +669,10 @@ class OSSProvider implements Mem0Provider {
       }
     }
 
+    if (llmProvider === 'deepseek' && !llmCfg.apiKey) {
+      // An explicit empty key prevents Mem0's config merge from substituting OPENAI_API_KEY.
+      llmCfg.apiKey = llmCfg.api_key ?? process.env.DEEPSEEK_API_KEY ?? '';
+    }
     config.embedder = { provider: embedderProvider, config: embedderCfg };
     config.llm = { provider: llmProvider, config: llmCfg };
 
@@ -748,6 +758,31 @@ class OSSProvider implements Mem0Provider {
       } else {
         throw err;
       }
+    }
+
+    const { config: llmConfig } = builtConfig.llm as { config: { extraBody?: unknown } };
+    const { extraBody } = llmConfig;
+    if (
+      extraBody !== undefined &&
+      Object.hasOwn(mod, 'OpenAILLM') &&
+      mem.llm instanceof mod.OpenAILLM &&
+      !('extraBody' in mem.llm)
+    ) {
+      // Published mem0ai 3.3.1 lacks the workspace patch. Remove once upstream forwards extraBody.
+      if (!extraBody || typeof extraBody !== 'object' || Array.isArray(extraBody)) {
+        throw new ValidationError('Mem0 LLM extraBody must be an object.', 'configuration_error');
+      }
+      const reserved = ['model', 'messages', 'tools', 'tool_choice', 'response_format', 'stream'];
+      if (reserved.some((key) => Object.hasOwn(extraBody, key))) {
+        throw new ValidationError(
+          'Mem0 LLM extraBody contains a reserved field.',
+          'configuration_error',
+        );
+      }
+      const completions = mem.llm.openai.chat.completions;
+      const create = completions.create.bind(completions);
+      completions.create = (body: Record<string, unknown>, ...options: unknown[]) =>
+        create({ ...extraBody, ...body }, ...options);
     }
 
     this.memory = mem;

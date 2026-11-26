@@ -11,7 +11,15 @@ import type {
 const REFERENCE_ASSET_MODALITIES = new Set<ReferenceAssetModality>(['image', 'video', 'audio']);
 const ASSET_ID = /^asset-[A-Za-z0-9_-]{1,128}$/;
 
-/** Validate public JSON and normalize `asset://asset-...` to canonical `asset-...`. */
+function isSandAssetId(id: string): boolean {
+  return /^[1-9][0-9]{0,18}$/.test(id) && BigInt(id) <= 9223372036854775807n;
+}
+
+export function supportsReferenceAssets(style: VideoApiStyle | undefined): boolean {
+  return style === 'ark' || style === 'sand';
+}
+
+/** Validate provider asset IDs and strip the optional asset:// prefix. */
 export function normalizeReferenceAssets(
   value: unknown,
   path = 'referenceAssets',
@@ -37,9 +45,9 @@ export function normalizeReferenceAssets(
     }
     const assetId =
       typeof rawAssetId === 'string' ? rawAssetId.trim().replace(/^asset:\/\//, '') : '';
-    if (!ASSET_ID.test(assetId)) {
+    if (!ASSET_ID.test(assetId) && !isSandAssetId(assetId)) {
       throw new VideoGenError(
-        `${where}.assetId must be an Asset ID like "asset-..." or an URI like "asset://asset-..." from the current account/project.`,
+        `${where}.assetId must be an Asset ID like "asset-..." or a numeric Sand asset ID from the current account/project. An asset:// prefix is optional.`,
         'request: bad reference asset id',
       );
     }
@@ -54,15 +62,37 @@ export function referenceAssetPreflightError(options: {
   capabilities: VideoModelCapabilities;
   referenceAssets: ReferenceAsset[];
   localImageReferences: number;
+  hasFirstFrame?: boolean;
+  hasLastFrame?: boolean;
+  hasGeneralImageReferences?: boolean;
 }): string | undefined {
   const { providerStyle, modelId, capabilities, referenceAssets, localImageReferences } = options;
-  const supported = providerStyle === 'ark' ? (capabilities.referenceAssetModalities ?? []) : [];
+  const supported = supportsReferenceAssets(providerStyle)
+    ? (capabilities.referenceAssetModalities ?? [])
+    : [];
+  if (providerStyle === 'sand' && options.hasLastFrame && !options.hasFirstFrame) {
+    return 'MAGI-2 lastFrame requires firstFrame.';
+  }
+  if (
+    providerStyle === 'sand' &&
+    options.hasFirstFrame &&
+    (referenceAssets.length > 0 || options.hasGeneralImageReferences)
+  ) {
+    return 'MAGI-2 accepts either first/last frames or general references in one request.';
+  }
   if (referenceAssets.length > 0 && supported.length === 0) {
     return `The active ${providerStyle} provider/model (${modelId}) does not support trusted asset references. Remove referenceAssets or switch models.`;
   }
   const unsupported = referenceAssets.find((asset) => !supported.includes(asset.modality));
   if (unsupported) {
     return `The active model (${modelId}) does not support ${unsupported.modality} trusted assets. Supported modalities: ${supported.join(', ')}.`;
+  }
+
+  const validAssetId = providerStyle === 'sand' ? isSandAssetId : (id: string) => ASSET_ID.test(id);
+  if (referenceAssets.some(({ assetId }) => !validAssetId(assetId))) {
+    return providerStyle === 'sand'
+      ? 'Sand references require numeric asset IDs from the current organization.'
+      : 'Ark references require asset-... IDs from the current account/project.';
   }
 
   const counts: Record<ReferenceAssetModality, number> = {

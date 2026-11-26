@@ -123,7 +123,7 @@ Store configuration in user/agent settings or in a trusted project's `.pi/settin
 
 ### Embedded Mode (Recommended)
 
-Reuses API keys and base URLs from pi's configured model providers — **no extra environment variables needed**.
+Reuses API keys and base URLs from Pi's configured model providers. Embedded defaults require OpenAI access for embeddings and DeepSeek access for extraction. The SDK also accepts `OPENAI_API_KEY` and `DEEPSEEK_API_KEY`.
 
 ```json
 {
@@ -134,7 +134,31 @@ Reuses API keys and base URLs from pi's configured model providers — **no extr
 }
 ```
 
-Defaults to OpenAI `text-embedding-3-small` (embedding) + `gpt-4.1-nano` (extraction). API keys and base URLs are automatically resolved from pi's model registry.
+Defaults to OpenAI `text-embedding-3-small` for embeddings and DeepSeek `deepseek-flash` with thinking disabled for extraction. An explicit `oss.llm` keeps its configured provider and model. Existing embedded configurations without `oss.llm` now send extraction requests to DeepSeek. Set an explicit LLM to keep extraction on your chosen provider.
+
+To use Jina embeddings, point the OpenAI-compatible embedder at Jina and use a distinct vector database. Vectors from different embedding models cannot share an index. Existing memories stay in their original database and can be re-embedded separately.
+
+```json
+{
+  "pi-memory-mem0": {
+    "mode": "embedded",
+    "oss": {
+      "embedder": {
+        "provider": "openai",
+        "config": {
+          "apiKey": "${JINA_API_KEY}",
+          "baseURL": "https://api.jina.ai/v1",
+          "model": "jina-embeddings-v5-text-small"
+        }
+      },
+      "vectorStore": {
+        "provider": "memory",
+        "config": { "dbPath": "/path/to/mem0-jina-vectors.db", "dimension": 1024 }
+      }
+    }
+  }
+}
+```
 
 Use `oss.customInstructions` to refine Mem0's fact extraction, for example to keep memories in a specific language:
 
@@ -201,7 +225,7 @@ The extension automatically:
 
 ### Extra OpenAI Request Parameters (Embedded)
 
-This repository patches `mem0ai@3.3.1` to support `oss.llm.config.extraBody` for the `openai` LLM provider. Parameters are merged into both extraction and chat request bodies, so OpenAI-compatible endpoints can receive vendor-specific options:
+The extension supports `oss.llm.config.extraBody` for the `openai` and `deepseek` LLM providers. Parameters are merged into both extraction and chat request bodies, including when the extension is installed outside this workspace.
 
 ```json
 {
@@ -227,7 +251,7 @@ This repository patches `mem0ai@3.3.1` to support `oss.llm.config.extraBody` for
 
 `extraBody` must be an object. It cannot override `model`, `messages`, `tools`, `tool_choice`, `response_format`, or `stream`; these fields belong to Mem0's request protocol. Use API field names such as `max_tokens`, `reasoning_effort`, or `chat_template_kwargs` inside `extraBody`. Endpoint support depends on the selected model and provider.
 
-The patch is applied by `pnpm install` in this workspace. Installing the published extension alone does not apply this workspace patch. Recheck or remove `patches/mem0ai@3.3.1.patch` when upgrading Mem0 to an upstream version with equivalent support.
+Workspace installs use the SDK patch. The packaged extension forwards the same fields when the installed SDK lacks the patch.
 
 ### Fully Local (Ollama)
 
@@ -294,7 +318,7 @@ The configured vector store always owns persistence. To request an intentionally
 | `topK` | integer greater than `0` | `5` | Max results for automatic recall and `mem0_memory` search; use `autoRecall: false` to disable automatic recall |
 | `useRegistryKeys` | boolean | `true` | Whether OSS mode resolves keys from pi registry |
 | `oss.customInstructions` | string | — | Additional Mem0 fact-extraction instructions; does not modify pi's system prompt |
-| `oss.llm` | object | OpenAI gpt-4.1-nano | OSS extraction model |
+| `oss.llm` | object | DeepSeek `deepseek-flash` | OSS extraction model |
 | `oss.embedder` | object | OpenAI text-embedding-3-small | OSS embedding model |
 | `oss.vectorStore` | object | `memory` at `<home>/memories/mem0-vectors.db` | Custom vector store config |
 | `oss.historyStore` | object | SQLite at `<home>/memories/mem0-history.db` | Custom mem0 history store config |

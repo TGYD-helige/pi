@@ -180,9 +180,18 @@ export const klingAdapter: VideoProviderAdapter = {
       if (params.aspectRatio) settings.aspect_ratio = params.aspectRatio;
     } else {
       const contents: Record<string, unknown>[] = [{ type: 'prompt', text: params.prompt }];
-      contents.push({ type: 'first_frame', url: await imageFileToDataUri(params.firstFramePath!) });
+      const v4 = remoteModelId === 'kling-4.0' || remoteModelId === 'kling-4.0-flash';
+      contents.push({
+        type: 'first_frame',
+        url: await imageFileToDataUri(params.firstFramePath!),
+        ...(v4 ? { id: 'first_frame' } : {}),
+      });
       if (params.lastFramePath) {
-        contents.push({ type: 'last_frame', url: await imageFileToDataUri(params.lastFramePath) });
+        contents.push({
+          type: 'last_frame',
+          url: await imageFileToDataUri(params.lastFramePath),
+          ...(v4 ? { id: 'last_frame' } : {}),
+        });
       }
       body.contents = contents;
     }

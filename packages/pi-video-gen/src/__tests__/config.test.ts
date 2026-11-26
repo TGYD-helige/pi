@@ -402,6 +402,39 @@ describe('resolveModel', () => {
     expect(resolved?.entry.defaultResolution).toBe('720p');
   });
 
+  it('requires HTTPS for built-in and custom Sand endpoints', () => {
+    const baseUrl = 'http://sand-relay.example/v3';
+    expect(() => resolveModel({ providers: { sand: { baseUrl } } }, 'magi-2')).toThrow(/HTTPS/);
+    expect(() =>
+      resolveModel(
+        {
+          customProviders: { proxy: { api: 'sand', baseUrl, models: ['magi-2'] } },
+        },
+        'magi-2',
+      ),
+    ).toThrow(/HTTPS/);
+    expect(resolveModel({}, 'magi-2')?.provider.baseUrl).toBe(
+      'https://api.sand.ai/compatible/ark/api/v3',
+    );
+  });
+
+  it('keeps legacy MAGI-2 relay defaults when the relay uses an existing wire format', () => {
+    const result = resolveModel(
+      {
+        customProviders: {
+          relay: { api: 'ark', baseUrl: 'https://relay.example/v3', models: ['magi-2'] },
+        },
+      },
+      'magi-2',
+    );
+    expect(result?.provider.style).toBe('ark');
+    expect(result?.entry).toMatchObject({
+      defaultResolution: '720p',
+      defaultDurationSec: 4,
+      capabilities: { nativeAudio: false, resolutions: ['720p'] },
+    });
+  });
+
   it('custom models inherit built-in capabilities when the id names a known model', () => {
     const resolved = resolveModel(
       {
@@ -416,13 +449,13 @@ describe('resolveModel', () => {
       },
       'h3-relay',
     );
-    // No capabilities declared: the registry's H3 contract applies (768P/2K,
+    // No capabilities declared: the registry's H3 contract applies (480P/768P/2K,
     // flf, 4-15s) instead of the conservative 720p/16:9 fallback, while the
     // relay keeps its own wire format, endpoint and remote id.
     expect(resolved?.provider.style).toBe('minimax');
     expect(resolved?.provider.baseUrl).toBe('https://relay.example');
     expect(resolved?.remoteId).toBe('MiniMax-H3');
-    expect(resolved?.entry.capabilities.resolutions).toEqual(['768P', '2K']);
+    expect(resolved?.entry.capabilities.resolutions).toEqual(['480P', '768P', '2K']);
     expect(resolved?.entry.capabilities.supportsFirstLastFrame).toBe(true);
     expect(resolved?.entry.defaultResolution).toBe('768P');
     expect(resolved?.entry.defaultAspectRatio).toBe('16:9');
@@ -470,7 +503,12 @@ describe('listModelRegistry', () => {
     expect(info.models.filter((m) => m.provider === 'dashscope').every((m) => !m.keyReady)).toBe(
       true,
     );
-    expect(info.models).toHaveLength(19);
+    expect(info.models.find((model) => model.id === 'magi-2')?.keyReady).toBe(false);
+    expect(
+      listModelRegistry({ providers: { sand: { apiKey: 'sand-key' } } }).models.find(
+        (model) => model.id === 'magi-2',
+      )?.keyReady,
+    ).toBe(true);
   });
 
   it('includes custom provider models in the registry view', () => {

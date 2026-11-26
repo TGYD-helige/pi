@@ -1,7 +1,22 @@
 import { createServer, type Server } from 'node:http';
 import { createRequire } from 'node:module';
 import { OpenAILLM } from 'mem0ai/oss';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createMem0Provider } from '../provider.js';
+
+vi.mock('mem0ai/oss', async (importOriginal) => {
+  const sdk = await importOriginal<typeof import('mem0ai/oss')>();
+  return {
+    ...sdk,
+    Memory: class extends sdk.Memory {
+      constructor(...args: ConstructorParameters<typeof sdk.Memory>) {
+        super(...args);
+        // Published 3.3.1 has the same request methods without the extraBody spread.
+        Reflect.deleteProperty(Reflect.get(this, 'llm'), 'extraBody');
+      }
+    },
+  };
+});
 
 const require = createRequire(import.meta.url);
 const messages = [{ role: 'user', content: 'Extract facts.' }];
@@ -19,11 +34,15 @@ describe('OpenAILLM extraBody dependency patch', () => {
     server = createServer(async (request, response) => {
       let body = '';
       for await (const chunk of request) body += chunk;
-      bodies.push(JSON.parse(body));
+      const payload = JSON.parse(body);
+      bodies.push(payload);
       response.writeHead(200, { 'Content-Type': 'application/json' });
-      response.end(
-        JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' } }] }),
-      );
+      if (request.url?.endsWith('/embeddings')) {
+        response.end(JSON.stringify({ data: [{ index: 0, embedding: [1, 0, 0] }] }));
+        return;
+      }
+      const content = payload.model === 'deepseek-flash' ? '{"memory":[]}' : 'ok';
+      response.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content } }] }));
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
@@ -36,6 +55,35 @@ describe('OpenAILLM extraBody dependency patch', () => {
       server.close((error) => (error ? reject(error) : resolve()));
       server.closeAllConnections();
     });
+  });
+
+  it.each([
+    'disabled',
+    'enabled',
+  ])('forwards thinking %s when the embedded SDK omits extraBody', async (type) => {
+    const provider = await createMem0Provider({
+      config: {
+        mode: 'embedded',
+        oss: {
+          disableHistory: true,
+          vectorStore: { provider: 'memory', config: { dimension: 3, dbPath: ':memory:' } },
+          ...(type === 'enabled' && {
+            llm: {
+              provider: 'deepseek',
+              config: { extraBody: { thinking: { type }, max_tokens: 256 } },
+            },
+          }),
+        },
+      },
+      resolveProvider: async () => ({ baseUrl: baseURL, apiKey: 'test-only' }),
+    });
+    await provider.add(messages, { userId: 'fixture' });
+    const request = bodies.find((body) => body.model === 'deepseek-flash');
+    expect(request).toMatchObject({
+      thinking: { type },
+      response_format: { type: 'json_object' },
+    });
+    if (type === 'enabled') expect(request?.max_tokens).toBe(256);
   });
 
   it.each([

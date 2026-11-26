@@ -84,6 +84,7 @@ export function safeBasename(path: string): string {
 
 const PROVIDER_LABELS: Record<VideoApiStyle, string> = {
   ark: 'Volcengine Ark',
+  sand: 'Sand AI',
   kling: 'Kling',
   dashscope: 'DashScope',
   openrouter: 'OpenRouter',

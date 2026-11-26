@@ -43,7 +43,7 @@ export interface Mem0ExtensionConfig {
     llm?: {
       provider: string;
       config?: Record<string, unknown> & {
-        /** Extra OpenAI request-body fields; requires the workspace's mem0ai patch. */
+        /** Extra fields for OpenAI-compatible extraction and chat requests. */
         extraBody?: Record<string, unknown>;
       };
     };

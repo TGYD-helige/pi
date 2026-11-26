@@ -1156,7 +1156,16 @@ describe('mem0Extension recallFrequency', () => {
 // ---------------------------------------------------------------------------
 
 describe('passive capture', () => {
-  it('restores the originating session outbox after shutdown without exposing configuration', async () => {
+  it.each([
+    'platform',
+    'custom embedded',
+  ])('restores the originating %s outbox after shutdown without exposing configuration', async (mode) => {
+    const customConfig = {
+      mode: 'embedded',
+      oss: {
+        llm: { provider: 'custom-llm', config: { model: 'custom-model', apiKey: 'm0-test' } },
+      },
+    };
     const first = mockActiveProvider({
       supportsAddCancellation: true,
       add: vi.fn(
@@ -1168,6 +1177,7 @@ describe('passive capture', () => {
           ),
       ),
     });
+    if (mode === 'custom embedded') vi.mocked(loadPiSettings).mockReturnValue(customConfig);
     const { pi, handlers } = createMockPi();
     mem0Extension(pi as never);
     const ctx = createMockCtx();
@@ -1181,6 +1191,7 @@ describe('passive capture', () => {
     await handlers.session_shutdown![0]!({}, ctx);
     await new Promise((resolve) => setImmediate(resolve));
     const second = mockActiveProvider();
+    if (mode === 'custom embedded') vi.mocked(loadPiSettings).mockReturnValue(customConfig);
     const resumed = createMockCtx({
       entries: [{ type: 'custom', customType: saved[0], data: saved[1] }],
     });
@@ -1196,6 +1207,11 @@ describe('passive capture', () => {
     await new Promise((resolve) => setImmediate(resolve));
     expect(first.add).toHaveBeenCalledTimes(1);
     expect(second.add).toHaveBeenCalledTimes(1);
+    if (mode === 'custom embedded') {
+      expect(mockCreateMem0Provider).toHaveBeenLastCalledWith(
+        expect.objectContaining({ config: customConfig }),
+      );
+    }
     expect(second.add.mock.calls[0]?.[0]).toEqual([
       { role: 'user', content: 'I prefer tea' },
       { role: 'assistant', content: 'Noted.' },
