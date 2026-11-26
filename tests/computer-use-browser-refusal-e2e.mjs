@@ -1,0 +1,180 @@
+import assert from 'node:assert/strict';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
+import { createAssistantMessageEventStream } from '../packages/pi-computer-use/node_modules/@earendil-works/pi-ai/dist/index.js';
+import {
+  createAgentSession,
+  DefaultResourceLoader,
+  ModelRuntime,
+  SessionManager,
+  SettingsManager,
+} from '../packages/pi-computer-use/node_modules/@earendil-works/pi-coding-agent/dist/index.js';
+import computerUse, { resolveDriverLayout } from '../packages/pi-computer-use/dist/index.js';
+
+const browserSession = 'browser-refusal-e2e';
+const stateTool = 'computer_use_get_browser_state';
+const { binaryPath } = resolveDriverLayout({ mode: 'bundled' });
+const scenarioDir = await mkdtemp(join(tmpdir(), 'pi-computer-use-refusal-'));
+process.env.PI_CODING_AGENT_DIR = scenarioDir;
+process.env.CUA_DRIVER_RS_HOME = join(scenarioDir, 'driver');
+process.env.CUA_DRIVER_BROWSER_PROFILE_ROOT = join(scenarioDir, 'profiles');
+
+const calls = new Map();
+let bindingAttempts = 0;
+function toolCall(id, name, args) {
+  return { type: 'toolCall', id, name, arguments: { ...args, session: browserSession } };
+}
+
+async function nextCall() {
+  const prepared = calls.get('prepare');
+  if (!prepared) {
+    return toolCall('prepare', 'computer_use_browser_prepare', {
+      allow_launch: true,
+      profile: { mode: 'isolated_new' },
+    });
+  }
+  const pid = prepared.result?.details?.prepared_pid;
+  assert(!prepared.isError && Number.isInteger(pid), 'Driver did not launch an isolated browser');
+
+  const windows = calls.get(`windows-${bindingAttempts}`);
+  const window = windows?.result?.details?.windows?.find(
+    (item) => item.pid === pid && Number.isInteger(item.window_id),
+  );
+  const bound = calls.get(`bind-${bindingAttempts}`);
+  const targetId = bound?.result?.details?.target_id;
+  const tabs = bound?.result?.details?.tabs ?? [];
+  const tabId = (tabs.find((tab) => tab.active) ?? tabs[0])?.tab_id;
+  if (!window || (bound && (bound.isError || !targetId || !tabId))) {
+    assert(bindingAttempts < 40 && !windows?.isError, 'Could not bind the isolated browser window');
+    if (bindingAttempts) await delay(250);
+    return toolCall(`windows-${++bindingAttempts}`, 'computer_use_list_windows', { pid });
+  }
+  if (!bound) {
+    return toolCall(`bind-${bindingAttempts}`, stateTool, { pid, window_id: window.window_id });
+  }
+  if (!calls.has('missing-tab')) return toolCall('missing-tab', stateTool, { target_id: targetId });
+  if (!calls.has('recovered')) {
+    return toolCall('recovered', stateTool, { target_id: targetId, tab_id: tabId });
+  }
+  return { type: 'text', text: 'Browser refusal scenario complete.' };
+}
+
+let session;
+let scriptError;
+try {
+  await writeFile(
+    join(scenarioDir, 'settings.json'),
+    JSON.stringify({
+      'pi-computer-use': {
+        mode: 'path',
+        binaryPath,
+        extraArgs: [],
+        toolProfile: 'full',
+        // The scripted provider only prepares an isolated browser in this temporary session.
+        confirmDangerousActions: false,
+      },
+    }),
+  );
+  const runtime = await ModelRuntime.create({
+    authPath: join(scenarioDir, 'auth.json'),
+    modelsPath: null,
+    refreshOnCreate: false,
+  });
+  runtime.registerProvider('browser-refusal-fixture', {
+    baseUrl: 'http://127.0.0.1:1',
+    apiKey: 'fixture',
+    api: 'browser-refusal-fixture',
+    models: [
+      {
+        id: 'scripted',
+        name: 'Scripted',
+        reasoning: false,
+        input: ['text'],
+        contextWindow: 32_768,
+        maxTokens: 1024,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
+    ],
+    streamSimple(model) {
+      const stream = createAssistantMessageEventStream();
+      void nextCall()
+        .catch((error) => {
+          scriptError = error;
+          return { type: 'text', text: 'Browser refusal scenario could not complete.' };
+        })
+        .then((content) => {
+          const stopReason = content.type === 'toolCall' ? 'toolUse' : 'stop';
+          stream.push({
+            type: 'done',
+            reason: stopReason,
+            message: {
+              role: 'assistant',
+              api: model.api,
+              provider: model.provider,
+              model: model.id,
+              timestamp: Date.now(),
+              stopReason,
+              content: [content],
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+            },
+          });
+          stream.end();
+        });
+      return stream;
+    },
+  });
+  const loader = new DefaultResourceLoader({
+    cwd: scenarioDir,
+    agentDir: scenarioDir,
+    noExtensions: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    noContextFiles: true,
+    extensionFactories: [computerUse],
+  });
+  await loader.reload();
+  ({ session } = await createAgentSession({
+    cwd: scenarioDir,
+    agentDir: scenarioDir,
+    resourceLoader: loader,
+    modelRuntime: runtime,
+    model: runtime.getModel('browser-refusal-fixture', 'scripted'),
+    sessionManager: SessionManager.inMemory(scenarioDir),
+    settingsManager: SettingsManager.inMemory({ retry: { enabled: false } }),
+  }));
+  await session.bindExtensions({ mode: 'rpc' });
+  session.subscribe((event) => {
+    if (event.type === 'tool_execution_end') calls.set(event.toolCallId, event);
+  });
+  await session.prompt('Run the browser missing-tab scenario.');
+  if (scriptError) throw scriptError;
+
+  const rejected = calls.get('missing-tab');
+  assert.equal(rejected?.toolName, stateTool);
+  assert.equal(rejected.isError, true, 'Pi must mark the missing-tab snapshot as failed');
+  assert.equal(rejected.result.details?.code, 'browser_tab_required');
+  const text = rejected.result.content.find((item) => item.type === 'text')?.text ?? '';
+  assert.match(text, /browser_tab_required.*tab_id.*same session/i);
+  const recovered = calls.get('recovered');
+  assert.equal(recovered?.toolName, stateTool);
+  assert.equal(recovered.isError, false, 'Snapshot with the recovered tab ID must succeed');
+  assert.equal(recovered.result.details?.mode, 'snapshot');
+  console.log('Missing-tab snapshot returned actionable guidance and recovery succeeded.');
+} finally {
+  try {
+    if (session) await session.extensionRunner.emit({ type: 'session_shutdown', reason: 'exit' });
+  } finally {
+    session?.dispose();
+    await rm(scenarioDir, { recursive: true, force: true });
+  }
+}
