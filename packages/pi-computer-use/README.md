@@ -95,7 +95,7 @@ The extension includes bounded structured results in model-visible text for thes
 | Tools | Model-visible data |
 | --- | --- |
 | `get_browser_state` | Bind IDs; snapshot action/content refs, semantic outline, snapshot continuation, frame limitations, and screenshot coordinate metadata |
-| `browser_prepare`, `browser_dialog` | Newly launched browser PID and attachment state; current dialog ID required for accept/dismiss |
+| `browser_prepare`, `browser_dialog` | Newly launched browser PID, attachment state, and isolated browser lifecycle; current dialog ID required for accept/dismiss |
 | `parse_visual_regions` | Capture identity, action-coordinate transform, region text/labels/bounds, and warnings |
 | `get_session`, `get_session_state`, `list_sessions` | Session state and records, including pagination cursor |
 | `get_config`, `get_agent_cursor_state` | Current configuration and cursor state |
@@ -104,6 +104,10 @@ The extension includes bounded structured results in model-visible text for thes
 Upstream recovery `hint` and `next_call` fields are also included in bounded model-visible text for failed or unconfirmed actions. A `screen_locked` snapshot requires waking and unlocking the Mac before retrying; do not send foreground input to the lock screen.
 
 Action results also expose the Driver's `effect`, `delivery`, `evidence`, and `escalation` fields in bounded model-visible text when present. A dispatched action or an unconfirmed effect does not prove completion or non-delivery. If an MCP response is lost, the outcome is unknown: read the target's current state before repeating clicks, typing or submissions. The extension does not automatically replay failed tool calls.
+
+Browser refusals preserve the bundled Driver's recognized error codes in both model-visible text and structured details. For a missing `tab_id`, the Driver's fixed reason is included when recognized, followed by recovery guidance. Other upstream refusal text and details can contain private data, so the extension uses local guidance and bounded metadata.
+
+Recovery guidance also covers stale window IDs and element tokens, window owner PID mismatches, ended sessions, and incomplete session cleanup. Driver action results with `effect: "refused"` are reported as tool failures. Browser preparation that requires foreground access points to the accessibility route when available.
 
 Long descriptive text and large lists are shortened with a truncation notice; opaque IDs and continuation tokens are never shortened. Narrow browser reads with `query` or `scope_ref` in `semantic_v2` when needed. If session records are omitted locally, repeat `list_sessions` with a smaller `limit` before using `next_cursor` to avoid skipping unseen records. Original structured results remain available in bounded details.
 

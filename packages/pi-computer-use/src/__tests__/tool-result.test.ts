@@ -7,7 +7,10 @@ describe('toPiToolResult', () => {
     ['browser_ref_stale', 'Omit the old continuation'],
     ['browser_binding_stale', 'Rediscover the browser target'],
     ['browser_tab_not_found', 'Rediscover the browser target'],
+    ['browser_tab_required', 'same session'],
     ['browser_input_incomplete', 'do not automatically repeat the full input'],
+    ['browser_binding_ambiguous', 'more than one browser target'],
+    ['browser_origin_outside_scope', 'outside the approved scope'],
   ])('retains fixed recovery for %s while removing the driver payload', (code, hint) => {
     const result = toPiToolResult(
       {
@@ -40,6 +43,162 @@ describe('toPiToolResult', () => {
     expect(JSON.stringify(result)).not.toContain('test-token');
     expect(JSON.stringify(result)).not.toContain('run_script');
     expect(JSON.stringify(result)).not.toContain('outcome is unknown');
+  });
+
+  it('reports an unrecognized driver refusal without exposing its code or payload', () => {
+    const result = toPiToolResult(
+      {
+        content: [{ type: 'text', text: 'refused (driver_private_code): test-token' }],
+        structuredContent: {
+          status: 'refused',
+          refusal: { code: 'driver_private_code', message: 'test-token' },
+        },
+      },
+      'page',
+    );
+    expect(result).toMatchObject({
+      isError: true,
+      details: { status: 'refused' },
+      content: [{ type: 'text', text: 'Cua Driver refused the request.' }],
+    });
+    expect(JSON.stringify(result)).not.toMatch(/driver_private_code|test-token/);
+  });
+
+  it.each([
+    {
+      code: 'window_id_not_found',
+      tool: 'get_window_state',
+      recoveryTool: 'computer_use_list_windows',
+      structuredContent: {
+        code: 'window_id_not_found',
+        pid: 123,
+        window_id: 456,
+        hint: 'private-cua-payload',
+        next_call: { tool: 'list_windows', arguments: { pid: 123 } },
+      },
+    },
+    {
+      code: 'stale_element_token',
+      tool: 'click',
+      recoveryTool: 'computer_use_get_window_state',
+      structuredContent: {
+        status: 'refused',
+        refusal: { code: 'stale_element_token', message: 'private-cua-payload' },
+        hint: 'private-cua-payload',
+        next_call: { tool: 'get_window_state', arguments: {} },
+      },
+    },
+    {
+      code: 'session_ended',
+      tool: 'list_windows',
+      recoveryTool: 'computer_use_start_session',
+      structuredContent: {
+        status: 'refused',
+        refusal: { code: 'session_ended', message: 'private-cua-payload' },
+      },
+    },
+    ...['session_cleanup_pending', 'session_cleanup_partial'].map((code) => ({
+      code,
+      tool: 'end_session',
+      recoveryTool: 'computer_use_end_session',
+      structuredContent: {
+        code,
+        session: 'private-cua-payload',
+        cleanup_complete: false,
+        cleanup_in_progress: code === 'session_cleanup_pending',
+        failed_hooks: [{ hook: 'browser', error: 'private-cua-payload' }],
+      },
+    })),
+  ])('keeps safe recovery for $code', ({ code, tool, recoveryTool, structuredContent }) => {
+    const result = toPiToolResult(
+      {
+        isError: true,
+        content: [{ type: 'text', text: 'private-cua-payload' }],
+        structuredContent,
+      },
+      tool,
+      undefined,
+      { pid: 123, window_id: 456, session: 'checkout' },
+    );
+    expect(result).toMatchObject({ isError: true, details: { code } });
+    if ('cleanup_in_progress' in structuredContent) {
+      expect(result.details).toMatchObject({
+        cleanup_complete: false,
+        cleanup_in_progress: structuredContent.cleanup_in_progress,
+      });
+    }
+    expect(result.content[0]).toMatchObject({ text: expect.stringContaining(recoveryTool) });
+    expect(JSON.stringify(result)).not.toContain('private-cua-payload');
+  });
+
+  it('recovers an ended named session from the MCP invocation error wrapper', () => {
+    const result = toPiToolResult(
+      {
+        isError: true,
+        content: [
+          {
+            type: 'text',
+            text: "session has ended; tool call 'get_window_state' was rejected. Call start_session with session 'checkout' to start it again, or use a new session label.",
+          },
+        ],
+        structuredContent: { code: 'tool_invocation_failed', exit_code: 1 },
+      },
+      'get_window_state',
+      undefined,
+      { session: 'checkout' },
+    );
+    expect(result).toMatchObject({ isError: true, details: { code: 'session_ended' } });
+    expect(result.content[0]).toMatchObject({
+      text: expect.stringContaining('computer_use_start_session'),
+    });
+  });
+
+  it.each([
+    {},
+    { include_screenshot: false, display_only: true },
+  ])('recovers macOS window owner mismatch without widening read options %j', (readOptions) => {
+    const result = toPiToolResult(
+      {
+        isError: true,
+        content: [{ type: 'text', text: 'private-cua-payload' }],
+        structuredContent: {
+          code: 'window_owner_pid_mismatch',
+          pid: 123,
+          window_id: 456,
+          owner_pid: 789,
+          owner_app_name: 'private-cua-payload',
+          suggestion: 'private-cua-payload',
+          next_call: { tool: 'run_script', arguments: { code: 'private-cua-payload' } },
+        },
+      },
+      'get_window_state',
+      undefined,
+      { pid: 123, window_id: 456, session: 'checkout', ...readOptions },
+    );
+    expect(result).toMatchObject({
+      isError: true,
+      details: {
+        code: 'window_owner_pid_mismatch',
+        owner_pid: 789,
+      },
+    });
+    expect(result.details?.next_call).toEqual(
+      Object.keys(readOptions).length
+        ? undefined
+        : {
+            tool: 'get_window_state',
+            arguments: { pid: 789, window_id: 456, session: 'checkout' },
+          },
+    );
+    expect(result.content[0]).toMatchObject({
+      text: expect.stringMatching(
+        /computer_use_get_window_state.*789|789.*computer_use_get_window_state/s,
+      ),
+    });
+    expect(result.content[0]).toMatchObject({
+      text: expect.stringContaining('same window ID, session and read options'),
+    });
+    expect(JSON.stringify(result)).not.toMatch(/private-cua-payload|run_script/);
   });
 
   it.each([

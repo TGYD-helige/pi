@@ -174,6 +174,36 @@ jobs:
             node .github/scripts/computer-use-perception-e2e.mjs
           fi
 
+  computer-use-browser-refusal-e2e:
+    name: Computer use browser refusal E2E
+    needs: detect-extension-matrix
+    if: contains(needs.detect-extension-matrix.outputs.matrix, 'pi-computer-use') && !inputs.browser_session_only
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    env:
+      PI_INTEGRATION_MODEL: ''
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ env.INTEGRATION_CHECKOUT_REPOSITORY }}
+          ref: ${{ env.INTEGRATION_CHECKOUT_REF }}
+          persist-credentials: false
+          allow-unsafe-pr-checkout: ${{ github.event_name == 'pull_request_target' }}
+      - uses: ./.github/actions/setup-pi-build
+        with:
+          build: 'false'
+      - name: Install Linux display and Driver libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb xauth libx11-6 libxi6 libxtst6 libxext6 libwayland-client0 libxkbcommon0
+      - name: Build computer-use with the verified Driver
+        run: |
+          node packages/pi-computer-use/scripts/fetch-driver.mjs linux-x64
+          pnpm --filter @amaster.ai/pi-shared build
+          pnpm --filter @amaster.ai/pi-computer-use build
+      - name: Verify a missing tab ID is recoverable
+        run: xvfb-run -a node tests/computer-use-browser-refusal-e2e.mjs
+
   # ──────────────────────────────────────────────────────────────────────
   integration-approval:
     name: Approve secret-backed Integration

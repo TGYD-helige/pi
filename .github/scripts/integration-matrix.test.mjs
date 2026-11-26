@@ -39,9 +39,9 @@ test('requires environment approval for secret-backed fork integration', async (
   assert.match(workflow, /integration-approval:\s+name: Approve secret-backed Integration/);
   assert.match(workflow, /pi-runtime-smoke:[\s\S]*?needs: integration-approval/);
   assert.match(workflow, /extension-tool-matrix:[\s\S]*?needs: \[detect-extension-matrix, integration-approval\]/);
-  assert.equal(workflow.match(/allow-unsafe-pr-checkout:/g)?.length, 6);
-  assert.equal(workflow.match(/persist-credentials: false/g)?.length, 6);
-  assert.equal(workflow.match(/ref: \$\{\{ env\.INTEGRATION_CHECKOUT_REF \}\}/g)?.length, 6);
+  assert.equal(workflow.match(/allow-unsafe-pr-checkout:/g)?.length, 7);
+  assert.equal(workflow.match(/persist-credentials: false/g)?.length, 7);
+  assert.equal(workflow.match(/ref: \$\{\{ env\.INTEGRATION_CHECKOUT_REF \}\}/g)?.length, 7);
   assert.match(workflow, /browserless-session-e2e:[\s\S]*?needs: \[detect-extension-matrix, integration-approval, extension-tool-matrix\]/);
   assert.doesNotMatch(workflow, /integration-approved/);
   assert.match(workflow, /PI_INTEGRATION_BASE_URL and PI_INTEGRATION_API_KEY are required for Stage B/);
@@ -52,7 +52,7 @@ test('runs the real Cua Driver MCP lifecycle on macOS and Windows', async () => 
   const workflow = await readFile(new URL('../workflows/integration.yml', import.meta.url), 'utf8');
   const job = workflow.slice(
     workflow.indexOf('  computer-use-platform-e2e:'),
-    workflow.indexOf('  integration-approval:'),
+    workflow.indexOf('  computer-use-browser-refusal-e2e:'),
   );
   assert.match(job, /runner: macos-15/);
   assert.match(job, /runner: windows-2025/);
@@ -63,13 +63,26 @@ test('runs the real Cua Driver MCP lifecycle on macOS and Windows', async () => 
 
 test('verifies perception installation and real inference on every supported target', async () => {
   const workflow = await readFile(new URL('../workflows/integration.yml', import.meta.url), 'utf8');
-  const job = workflow.slice(workflow.indexOf('  computer-use-platform-e2e:'), workflow.indexOf('  integration-approval:'));
+  const job = workflow.slice(workflow.indexOf('  computer-use-platform-e2e:'), workflow.indexOf('  computer-use-browser-refusal-e2e:'));
   for (const target of ['darwin-arm64', 'linux-x64', 'win32-x64']) {
     assert.ok(job.includes(`perception_target: ${target}`));
   }
   assert.match(job, /node packages\/pi-computer-use\/scripts\/fetch-perception\.mjs \$\{\{ matrix\.perception_target \}\}/);
   assert.match(job, /node \.github\/scripts\/computer-use-perception-e2e\.mjs/);
   assert.match(job, /xvfb-run -a/);
+});
+
+test('runs the browser refusal E2E independently of secret-backed integration', async () => {
+  const workflow = await readFile(new URL('../workflows/integration.yml', import.meta.url), 'utf8');
+  const job = workflow.slice(
+    workflow.indexOf('  computer-use-browser-refusal-e2e:'),
+    workflow.indexOf('  integration-approval:'),
+  );
+  assert.match(job, /needs: detect-extension-matrix\n/);
+  assert.match(job, /contains\(needs\.detect-extension-matrix\.outputs\.matrix, 'pi-computer-use'\)/);
+  assert.match(job, /PI_INTEGRATION_MODEL: ''/);
+  assert.doesNotMatch(job, /secrets\./);
+  assert.match(job, /xvfb-run -a node tests\/computer-use-browser-refusal-e2e\.mjs/);
 });
 
 test('keeps the base workflow Perception fetch command callable without a destination', () => {
@@ -201,7 +214,7 @@ test('routes browser lifecycle scripts and shared fixtures to browser integratio
 test('can isolate manual Browserless session runs while preserving the shared approval gate', async () => {
   const workflow = await readFile(new URL('../workflows/integration.yml', import.meta.url), 'utf8');
   assert.match(workflow, /workflow_dispatch:\s+inputs:\s+browser_session_only:[\s\S]*?type: boolean/);
-  for (const name of ['computer-use-platform-e2e', 'pi-runtime-smoke']) {
+  for (const name of ['computer-use-platform-e2e', 'computer-use-browser-refusal-e2e', 'pi-runtime-smoke']) {
     const job = workflow.slice(workflow.indexOf(`  ${name}:`)).split(/\n  [\w-]+:/)[0];
     assert.match(job, /!inputs\.browser_session_only/);
   }
@@ -300,7 +313,7 @@ test('routes companion packages and package-specific integration tests', () => {
     selectIntegrationMatrix(['.github/scripts/pi-memory-snapshot-e2e.mjs']).map(({ extension }) => extension),
     ['pi-memory'],
   );
-  for (const file of ['tests/computer-use-owner-exit.mjs', 'tests/computer-use-driver-e2e.mjs', '.github/scripts/computer-use-driver-e2e.mjs', '.github/scripts/computer-use-owner-exit.mjs', '.github/scripts/computer-use-perception-e2e.mjs', '.github/scripts/fixtures/computer-use-perception.png', 'packages/pi-computer-use/scripts/fetch-perception.mjs', '.github/scripts/fixtures/computer-use-perception-release.json']) {
+  for (const file of ['tests/computer-use-owner-exit.mjs', 'tests/computer-use-driver-e2e.mjs', 'tests/computer-use-browser-refusal-e2e.mjs', '.github/scripts/computer-use-driver-e2e.mjs', '.github/scripts/computer-use-owner-exit.mjs', '.github/scripts/computer-use-perception-e2e.mjs', '.github/scripts/fixtures/computer-use-perception.png', 'packages/pi-computer-use/scripts/fetch-perception.mjs', '.github/scripts/fixtures/computer-use-perception-release.json']) {
     assert.deepEqual(
       selectIntegrationMatrix([file]).map(({ extension, scenario }) => [extension, scenario]),
       expectedComputerUseScenarios,
