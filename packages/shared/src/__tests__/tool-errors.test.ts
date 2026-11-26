@@ -53,6 +53,41 @@ describe('tool errors', () => {
     await expect(withAgentToolErrors(tool, {}, 'fixture')()).rejects.toThrow(text);
   });
 
+  it('sanitizes thrown HTTP errors for both host versions and logs only the classification', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const tool = {
+      name: 'fixture',
+      async execute(): Promise<never> {
+        throw new Error('HTTP 502: Bearer fixture-secret');
+      },
+    };
+    const hint = 'The action may have completed. Inspect the current state before retrying.';
+    const message = `fixture failed (HTTP 502). ${hint}`;
+    const text = `[http_error] ${message}`;
+    try {
+      await expect(
+        withAgentToolErrors(tool, { registerMcpServer() {} }, 'fixture', hint)(),
+      ).resolves.toMatchObject({
+        isError: true,
+        content: [{ type: 'text', text }],
+        structuredContent: {
+          error: { code: 'http_error', message },
+          errorCategory: 'http_error',
+          httpStatus: 502,
+        },
+      });
+      await expect(withAgentToolErrors(tool, {}, 'fixture', hint)()).rejects.toMatchObject({
+        message: text,
+      });
+      expect(log.mock.calls).toEqual([
+        ['[fixture] fixture failed (category=http_error, HTTP 502)'],
+        ['[fixture] fixture failed (category=http_error, HTTP 502)'],
+      ]);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it('exposes a safe cancellation when the provider rejects after abort', async () => {
     const ctl = new AbortController();
     const tool = {

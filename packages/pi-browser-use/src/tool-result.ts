@@ -75,7 +75,10 @@ export function toToolContent(
         code: 'browser_element_stale',
         message: 'The element reference could not be resolved.',
         cause: { source: 'chrome-devtools-mcp', message: text },
-        recovery: 'Call browser_take_snapshot and choose the element’s current uid.',
+        recovery:
+          originalName === 'fill_form'
+            ? 'Earlier fields may already have changed. Call browser_take_snapshot and inspect the form before retrying with current uids.'
+            : 'Call browser_take_snapshot and choose the element’s current uid.',
       });
     }
     const failure = describeMcpError(

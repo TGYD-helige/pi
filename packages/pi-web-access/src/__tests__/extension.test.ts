@@ -168,8 +168,11 @@ describe('piWebToolExtension - tool registration', () => {
         {},
       );
       expect(result.isError).toBe(true);
-      expect(result.structuredContent.errorCategory).toBe('timeout');
-      expect(result.content[0].text).toContain('timed out');
+      expect(result).toMatchObject({
+        isError: true,
+        content: [{ type: 'text', text: expect.stringMatching(/^\[timeout\].*timed out/) }],
+        structuredContent: { error: { code: 'timeout' }, errorCategory: 'timeout' },
+      });
       expect(log).toHaveBeenCalledWith(expect.stringContaining('category=timeout'));
       expect(JSON.stringify([result, log.mock.calls])).not.toMatch(
         /private-token|private\.invalid/,
@@ -224,6 +227,7 @@ describe('piWebToolExtension - tool registration', () => {
   it.each([
     'tavily',
     'cloudflare',
+    'parallel',
   ])('classifies the actual %s request deadline at the tool boundary', async (provider) => {
     mockLoadSettings.mockReturnValue({
       search: { provider },

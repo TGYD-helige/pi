@@ -147,7 +147,9 @@ describe('browser session tool recovery', () => {
       });
       state.mockReturnValue('stalled');
       expect(await request('call', { name: 'click', args: { uid: 'old_uid' } })).toMatchObject({
-        error: expect.stringContaining('Page IDs and element UIDs may have changed'),
+        error: expect.stringMatching(
+          /^The browser tool call was not sent\..*call browser_list_pages, then browser_take_snapshot and inspect the actual state before continuing\.$/,
+        ),
       });
       expect(call).toHaveBeenLastCalledWith(
         'evaluate_script',
@@ -225,7 +227,9 @@ describe('browser session tool recovery', () => {
         deadline.abort(new DOMException('Recovery deadline exceeded', 'TimeoutError'));
       }
       expect(await recovering).toMatchObject({
-        error: expect.stringMatching(/stalled|recovery failed/),
+        error: expect.stringMatching(
+          /^The browser tool call was not sent\..*The previous action may have completed/,
+        ),
       });
       for (const name of ['evaluate_script', 'list_pages'])
         expect(await request('call', { name, args: {} })).toMatchObject({

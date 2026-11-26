@@ -869,6 +869,42 @@ describe('browserUseExtension', () => {
       });
     });
 
+    test('warns that earlier form fields may have changed when a later element is stale', async () => {
+      mockListAllTools.mockResolvedValueOnce([
+        { name: 'fill_form', description: 'Fill fields.', inputSchema: { type: 'object' } },
+      ]);
+      const message = 'Element uid "1_999" not found on page 1.';
+      mockCallTool.mockResolvedValueOnce({
+        content: [{ type: 'text', text: message }],
+        isError: true,
+      });
+      await startExtension();
+
+      const result = await registeredTools.get('browser_fill_form')!.execute(
+        'call',
+        {
+          elements: [
+            { uid: '1_1', value: 'first field' },
+            { uid: '1_999', value: 'missing field' },
+          ],
+        },
+        undefined,
+        undefined,
+        {},
+      );
+      expect(result).toMatchObject({
+        isError: true,
+        content: [{ text: expect.stringContaining('Earlier fields may already have changed.') }],
+        structuredContent: {
+          error: {
+            code: 'browser_element_stale',
+            cause: { source: 'chrome-devtools-mcp', message },
+            recovery: expect.stringContaining('inspect the form'),
+          },
+        },
+      });
+    });
+
     test('filters extra text in an unrecognized driver diagnostic', async () => {
       mockCallTool.mockResolvedValueOnce({
         content: [
