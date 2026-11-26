@@ -459,12 +459,12 @@ describe('computerUseExtension', () => {
 
     expect(result).toMatchObject({
       isError: true,
-      details: { code: 'browser_tab_required' },
+      details: { status: 'refused', code: 'browser_tab_required' },
       content: [
         {
           type: 'text',
           text: expect.stringMatching(
-            /browser_tab_required: .*tab_id.*same session.*pid.*window_id/,
+            /refused \(browser_tab_required\): snapshot mode requires a tab_id from a prior bind\n.*same session.*pid.*window_id/,
           ),
         },
       ],

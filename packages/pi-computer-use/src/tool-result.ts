@@ -101,7 +101,8 @@ export function toPiToolResult(
   details: Record<string, unknown> | undefined;
   isError?: boolean;
 } {
-  if (result.isError || result.structuredContent?.status === 'refused') {
+  const refused = result.structuredContent?.status === 'refused';
+  if (result.isError || refused) {
     const message = (result.content ?? [])
       .slice(0, 4)
       .filter((item) => item.type === 'text')
@@ -119,11 +120,13 @@ export function toPiToolResult(
       toolName,
       originalArgs,
     );
+    if (refused) failure.error = 'Cua Driver refused the request.';
     if (recovery) failure.error = recovery.message;
     if (safeErrorText) failure.error = safeErrorText + (recovery ? `\n${recovery.message}` : '');
     console.error(`[pi-computer-use] upstream tool failed (category=${failure.errorCategory})`);
     const metadata = {
       ...safeFailureMetadata(result.structuredContent),
+      ...(refused ? { status: 'refused' } : {}),
       ...(recovery
         ? { code: recovery.code, ...(recovery.nextCall ? { next_call: recovery.nextCall } : {}) }
         : {}),
@@ -550,18 +553,44 @@ function safeFailureMetadata(value: Record<string, unknown> = {}): Record<string
   return metadata;
 }
 
+// Cua Driver's browser refusal codes and local guidance for messages that may contain private data.
 const BROWSER_RECOVERY_HINTS: Record<string, string> = {
+  background_unavailable:
+    'The requested operation cannot run in the background. Use an available background route or ask for approval before bringing the browser to the foreground.',
+  browser_action_unavailable:
+    'The requested action is unavailable for this browser reference. Refresh the snapshot and select a reference that supports the action.',
+  browser_binding_ambiguous:
+    'The window matched more than one browser target. Recheck which native window is intended and continue only once it binds to a single target.',
   browser_ref_stale:
     'Refresh the page snapshot with computer_use_get_browser_state, keeping the same target, tab, and session. Omit the old continuation and scope_ref. Use newly returned refs before retrying the action.',
   browser_binding_stale:
     'Rediscover the browser target and tab with computer_use_get_browser_state using the intended native pid/window_id. Do not reuse the stale target or tab identifiers.',
+  browser_consent_revoked:
+    'Browser consent was revoked. Obtain authorization again before attempting to attach or act.',
+  browser_endpoint_owner_mismatch:
+    'Cua Driver could not verify that the DevTools endpoint belongs to the requested process. Rediscover the intended window before binding again.',
   browser_tab_required:
     'Use the tab_id from a prior bind for this target in the same session. If it is unavailable, call computer_use_get_browser_state with pid and window_id in that session, then use the returned target_id and tab_id.',
   browser_tab_not_found:
     'Rediscover the browser target and tab with computer_use_get_browser_state using the intended native pid/window_id. Do not reuse the stale target or tab identifiers.',
   browser_input_incomplete:
     'Some text may already have been entered. Inspect the current field value before sending more text; do not automatically repeat the full input.',
+  browser_input_trust_unavailable:
+    'The requested trusted input route is unavailable. Inspect the target and use only an input route explicitly authorized for this task.',
+  browser_origin_outside_scope:
+    'The current page is outside the approved scope. Stop browser input until the intended origin is authorized.',
+  browser_reconnect_exhausted:
+    'Cua Driver could not reconnect to the browser. Inspect the current browser state and bind again if the browser is available.',
+  browser_route_unavailable:
+    'Cua Driver could not use a browser route for this request. Check the intended browser and use computer_use_get_guide with topic=browser for setup guidance.',
+  browser_wrong_target_refused:
+    'Cua Driver could not verify the intended browser target. Rediscover it using the correct native pid and window_id before acting.',
 };
+
+const SAFE_MISSING_TAB_REASONS = [
+  'snapshot mode requires a tab_id from a prior bind',
+  'this operation requires an explicit tab_id from get_browser_state',
+];
 
 function browserFailureRecovery(
   value: unknown,
@@ -569,7 +598,13 @@ function browserFailureRecovery(
   toolName?: string,
   originalArgs?: Record<string, unknown>,
 ) {
-  if (toolName !== 'get_browser_state' && !toolName?.startsWith('browser_')) return undefined;
+  if (
+    toolName !== 'get_browser_state' &&
+    toolName !== 'page' &&
+    !toolName?.startsWith('browser_')
+  ) {
+    return undefined;
+  }
   const object = (item: unknown): Record<string, unknown> | undefined =>
     item && typeof item === 'object' && !Array.isArray(item)
       ? (item as Record<string, unknown>)
@@ -595,8 +630,14 @@ function browserFailureRecovery(
         Object.hasOwn(BROWSER_RECOVERY_HINTS, item)),
   );
   if (!code) return undefined;
-  if (Object.hasOwn(BROWSER_RECOVERY_HINTS, code))
-    return { code, message: `${code}: ${BROWSER_RECOVERY_HINTS[code]}` };
+  if (Object.hasOwn(BROWSER_RECOVERY_HINTS, code)) {
+    const hint = BROWSER_RECOVERY_HINTS[code];
+    const reason =
+      code === 'browser_tab_required'
+        ? SAFE_MISSING_TAB_REASONS.find((candidate) => candidate === error?.message)
+        : undefined;
+    return { code, message: reason ? `refused (${code}): ${reason}\n${hint}` : `${code}: ${hint}` };
+  }
   const detail = object(root?.detail) ?? object(error?.detail);
   const next = object(detail?.next_call) ?? object(root?.next_call);
   const args = object(next?.arguments);

@@ -15,6 +15,8 @@ import computerUse, { resolveDriverLayout } from '../packages/pi-computer-use/di
 
 const browserSession = 'browser-refusal-e2e';
 const stateTool = 'computer_use_get_browser_state';
+const missingTabReason =
+  'refused (browser_tab_required): snapshot mode requires a tab_id from a prior bind';
 const { binaryPath } = resolveDriverLayout({ mode: 'bundled' });
 const scenarioDir = await mkdtemp(join(tmpdir(), 'pi-computer-use-refusal-'));
 process.env.PI_CODING_AGENT_DIR = scenarioDir;
@@ -27,7 +29,7 @@ function toolCall(id, name, args) {
   return { type: 'toolCall', id, name, arguments: { ...args, session: browserSession } };
 }
 
-async function nextCall() {
+async function nextCall(messages) {
   const prepared = calls.get('prepare');
   if (!prepared) {
     return toolCall('prepare', 'computer_use_browser_prepare', {
@@ -39,15 +41,22 @@ async function nextCall() {
   assert(!prepared.isError && Number.isInteger(pid), 'Driver did not launch an isolated browser');
 
   const windows = calls.get(`windows-${bindingAttempts}`);
-  const window = windows?.result?.details?.windows?.find(
-    (item) => item.pid === pid && Number.isInteger(item.window_id),
-  );
+  const candidates =
+    windows?.result?.details?.windows?.filter(
+      (item) => item.pid === pid && Number.isInteger(item.window_id),
+    ) ?? [];
+  const window = candidates.length
+    ? candidates[(bindingAttempts - 1) % candidates.length]
+    : undefined;
   const bound = calls.get(`bind-${bindingAttempts}`);
   const targetId = bound?.result?.details?.target_id;
   const tabs = bound?.result?.details?.tabs ?? [];
   const tabId = (tabs.find((tab) => tab.active) ?? tabs[0])?.tab_id;
   if (!window || (bound && (bound.isError || !targetId || !tabId))) {
-    assert(bindingAttempts < 40 && !windows?.isError, 'Could not bind the isolated browser window');
+    assert(
+      bindingAttempts < 80 && !windows?.isError,
+      `Could not bind the isolated browser window (${candidates.length} candidates, ${bound?.result?.details?.code ?? 'no refusal code'})`,
+    );
     if (bindingAttempts) await delay(250);
     return toolCall(`windows-${++bindingAttempts}`, 'computer_use_list_windows', { pid });
   }
@@ -56,6 +65,13 @@ async function nextCall() {
   }
   if (!calls.has('missing-tab')) return toolCall('missing-tab', stateTool, { target_id: targetId });
   if (!calls.has('recovered')) {
+    const refusal = messages.find(
+      (message) => message.role === 'toolResult' && message.toolCallId === 'missing-tab',
+    );
+    assert.equal(refusal?.isError, true, 'The model must receive the refusal as an error');
+    const text = refusal.content.find((item) => item.type === 'text')?.text ?? '';
+    assert(text.startsWith(missingTabReason), 'The model must receive the original refusal reason');
+    assert.match(text, /tab_id.*same session/);
     return toolCall('recovered', stateTool, { target_id: targetId, tab_id: tabId });
   }
   return { type: 'text', text: 'Browser refusal scenario complete.' };
@@ -97,9 +113,9 @@ try {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
     ],
-    streamSimple(model) {
+    streamSimple(model, context) {
       const stream = createAssistantMessageEventStream();
-      void nextCall()
+      void nextCall(context.messages)
         .catch((error) => {
           scriptError = error;
           return { type: 'text', text: 'Browser refusal scenario could not complete.' };
@@ -162,9 +178,8 @@ try {
   const rejected = calls.get('missing-tab');
   assert.equal(rejected?.toolName, stateTool);
   assert.equal(rejected.isError, true, 'Pi must mark the missing-tab snapshot as failed');
+  assert.equal(rejected.result.details?.status, 'refused');
   assert.equal(rejected.result.details?.code, 'browser_tab_required');
-  const text = rejected.result.content.find((item) => item.type === 'text')?.text ?? '';
-  assert.match(text, /browser_tab_required.*tab_id.*same session/i);
   const recovered = calls.get('recovered');
   assert.equal(recovered?.toolName, stateTool);
   assert.equal(recovered.isError, false, 'Snapshot with the recovered tab ID must succeed');

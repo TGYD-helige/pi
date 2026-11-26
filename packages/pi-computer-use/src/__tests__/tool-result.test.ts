@@ -7,7 +7,10 @@ describe('toPiToolResult', () => {
     ['browser_ref_stale', 'Omit the old continuation'],
     ['browser_binding_stale', 'Rediscover the browser target'],
     ['browser_tab_not_found', 'Rediscover the browser target'],
+    ['browser_tab_required', 'same session'],
     ['browser_input_incomplete', 'do not automatically repeat the full input'],
+    ['browser_binding_ambiguous', 'more than one browser target'],
+    ['browser_origin_outside_scope', 'outside the approved scope'],
   ])('retains fixed recovery for %s while removing the driver payload', (code, hint) => {
     const result = toPiToolResult(
       {
@@ -40,6 +43,25 @@ describe('toPiToolResult', () => {
     expect(JSON.stringify(result)).not.toContain('test-token');
     expect(JSON.stringify(result)).not.toContain('run_script');
     expect(JSON.stringify(result)).not.toContain('outcome is unknown');
+  });
+
+  it('reports an unrecognized driver refusal without exposing its code or payload', () => {
+    const result = toPiToolResult(
+      {
+        content: [{ type: 'text', text: 'refused (driver_private_code): test-token' }],
+        structuredContent: {
+          status: 'refused',
+          refusal: { code: 'driver_private_code', message: 'test-token' },
+        },
+      },
+      'page',
+    );
+    expect(result).toMatchObject({
+      isError: true,
+      details: { status: 'refused' },
+      content: [{ type: 'text', text: 'Cua Driver refused the request.' }],
+    });
+    expect(JSON.stringify(result)).not.toMatch(/driver_private_code|test-token/);
   });
 
   it.each([
