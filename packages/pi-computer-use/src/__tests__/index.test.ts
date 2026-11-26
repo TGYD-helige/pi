@@ -471,6 +471,135 @@ describe('computerUseExtension', () => {
     });
   });
 
+  it('marks a projected browser refusal as failed without exposing private diagnostics', async () => {
+    await start();
+    mockCallTool = (name) => {
+      if (name === 'browser_dialog') return { structuredContent: { status: 'ok', present: false } };
+      if (name !== 'browser_click') return { content: [{ type: 'text', text: 'ok' }] };
+      return {
+        content: [{ type: 'text', text: 'refused (browser_ref_stale): private-driver-text' }],
+        structuredContent: {
+          effect: 'refused',
+          route: 'trusted_input',
+          escalation: { target: 'page' },
+          error: { code: 'browser_ref_stale', hint: 'private-driver-text' },
+        },
+      };
+    };
+
+    const result = await tools
+      .get('computer_use_browser_click')!
+      .execute(
+        'click',
+        { target_id: 'bt-123', tab_id: 'tab-456', ref: 'p0:1', session: 'checkout' },
+        undefined,
+        undefined,
+        mockCtx,
+      );
+
+    expect(result).toMatchObject({
+      isError: true,
+      details: { code: 'browser_ref_stale', effect: 'refused' },
+      content: expect.arrayContaining([
+        { type: 'text', text: expect.stringContaining('computer_use_get_browser_state') },
+      ]),
+    });
+    expect(JSON.stringify(result)).not.toContain('private-driver-text');
+  });
+
+  it('offers the accessibility route when browser preparation cannot run in the background', async () => {
+    await start({ confirmDangerousActions: false });
+    mockCallTool = (name) =>
+      name === 'browser_prepare'
+        ? {
+            isError: true,
+            content: [{ type: 'text', text: 'browser_prepare refused: private-driver-text' }],
+            structuredContent: {
+              status: 'refused',
+              refusal: {
+                code: 'background_unavailable',
+                message: 'private-driver-text',
+                detail: { limitation: 'private-driver-text' },
+              },
+              code: 'background_unavailable',
+              suggestion:
+                'Not blocked: use get_window_state on this window and act through the accessibility tree (set_value, click by element token). If the first read shows only browser chrome and no AXWebArea, read the window again after a moment. Use delivery_mode:"foreground" only if that fails and nobody is using the screen.',
+              escalation: { recommended: 'foreground', reason: 'private-driver-text' },
+            },
+          }
+        : { content: [{ type: 'text', text: 'ok' }] };
+
+    const result = await tools
+      .get('computer_use_browser_prepare')!
+      .execute(
+        'prepare',
+        { pid: 123, window_id: 456, strategy: { kind: 'existing_profile' }, session: 'checkout' },
+        undefined,
+        undefined,
+        mockCtx,
+      );
+
+    expect(result).toMatchObject({
+      isError: true,
+      details: { code: 'background_unavailable', escalation: { recommended: 'foreground' } },
+      content: expect.arrayContaining([
+        {
+          type: 'text',
+          text: expect.stringMatching(/get_window_state.*set_value.*click/s),
+        },
+      ]),
+    });
+    expect(JSON.stringify(result)).not.toContain('private-driver-text');
+  });
+
+  it('exposes isolated browser lifecycle to the model', async () => {
+    await start({ confirmDangerousActions: false });
+    const lifecycle = {
+      owner: 'session',
+      idle_expires_in_seconds: 300,
+      process_ends_with_session: true,
+      profile_persists_after_session: false,
+    };
+    mockCallTool = (name) =>
+      name === 'browser_prepare'
+        ? {
+            content: [{ type: 'text', text: 'browser_prepare: endpoint available' }],
+            structuredContent: {
+              status: 'ok',
+              prepared: true,
+              prepared_pid: 123,
+              lifecycle: { ...lifecycle, private: 'private-driver-text' },
+            },
+          }
+        : { content: [{ type: 'text', text: 'ok' }] };
+
+    const result = await tools
+      .get('computer_use_browser_prepare')!
+      .execute(
+        'prepare',
+        { allow_launch: true, profile: { mode: 'isolated_new' }, session: 'checkout' },
+        undefined,
+        undefined,
+        mockCtx,
+      );
+
+    expect(result).toMatchObject({
+      details: { lifecycle },
+      content: expect.arrayContaining([
+        { type: 'text', text: expect.stringContaining('lifecycle:') },
+        ...Object.entries(lifecycle).map(([key, value]) => ({
+          type: 'text',
+          text: expect.stringContaining(`"${key}":${JSON.stringify(value)}`),
+        })),
+      ]),
+    });
+    expect(result).not.toMatchObject({
+      content: expect.arrayContaining([
+        { type: 'text', text: expect.stringContaining('private-driver-text') },
+      ]),
+    });
+  });
+
   it('returns the current dialog capability without dispatching a blocked browser action', async () => {
     const calls: string[] = [];
     await start();

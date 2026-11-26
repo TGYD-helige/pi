@@ -39,6 +39,15 @@ async function nextCall(messages) {
   }
   const pid = prepared.result?.details?.prepared_pid;
   assert(!prepared.isError && Number.isInteger(pid), 'Driver did not launch an isolated browser');
+  const preparedMessage = messages.find(
+    (message) => message.role === 'toolResult' && message.toolCallId === 'prepare',
+  );
+  assert(
+    preparedMessage?.content.some(
+      (item) => item.type === 'text' && item.text.includes('idle_expires_in_seconds'),
+    ),
+    'The model must receive the isolated browser lifecycle',
+  );
 
   const windows = calls.get(`windows-${bindingAttempts}`);
   const candidates =
@@ -74,6 +83,15 @@ async function nextCall(messages) {
     assert.match(text, /tab_id.*same session/);
     return toolCall('recovered', stateTool, { target_id: targetId, tab_id: tabId });
   }
+  if (!calls.has('stale-ref')) {
+    return toolCall('stale-ref', 'computer_use_browser_click', {
+      target_id: targetId,
+      tab_id: tabId,
+      ref: 'p4294967295:0',
+    });
+  }
+  if (!calls.has('end')) return toolCall('end', 'computer_use_end_session', {});
+  if (!calls.has('ended')) return toolCall('ended', 'computer_use_list_windows', {});
   return { type: 'text', text: 'Browser refusal scenario complete.' };
 }
 
@@ -184,7 +202,21 @@ try {
   assert.equal(recovered?.toolName, stateTool);
   assert.equal(recovered.isError, false, 'Snapshot with the recovered tab ID must succeed');
   assert.equal(recovered.result.details?.mode, 'snapshot');
-  console.log('Missing-tab snapshot returned actionable guidance and recovery succeeded.');
+  const staleRef = calls.get('stale-ref');
+  assert.equal(staleRef?.isError, true, 'A browser action refused by the Driver must fail in Pi');
+  assert.equal(staleRef.result.details?.effect, 'refused');
+  assert.equal(staleRef.result.details?.code, 'browser_ref_stale');
+  assert.equal(calls.get('end')?.isError, false, 'The test must end its isolated browser session');
+  const ended = calls.get('ended');
+  assert.equal(ended?.isError, true, 'Reading after the session ends must fail');
+  assert.equal(ended.result.details?.code, 'session_ended');
+  assert(
+    ended.result.content.some(
+      (item) => item.type === 'text' && item.text.includes('computer_use_start_session'),
+    ),
+    'The ended-session refusal must explain how to restart the session',
+  );
+  console.log('Browser refusal codes, recovery, and lifecycle verified.');
 } finally {
   try {
     if (session) await session.extensionRunner.emit({ type: 'session_shutdown', reason: 'exit' });

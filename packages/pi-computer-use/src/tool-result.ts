@@ -26,6 +26,16 @@ export type PiToolContent =
   | { type: 'text'; text: string }
   | { type: 'image'; data: string; mimeType: string };
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function isPositiveId(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+}
+
 function byteLength(value: unknown): number {
   if (value === undefined) return 0;
   try {
@@ -101,7 +111,9 @@ export function toPiToolResult(
   details: Record<string, unknown> | undefined;
   isError?: boolean;
 } {
-  const refused = result.structuredContent?.status === 'refused';
+  const refused =
+    result.structuredContent?.status === 'refused' ||
+    result.structuredContent?.effect === 'refused';
   if (result.isError || refused) {
     const message = (result.content ?? [])
       .slice(0, 4)
@@ -114,7 +126,7 @@ export function toPiToolResult(
       result,
       'The execution outcome is unknown. Read the current target state before retrying any action.',
     );
-    const recovery = browserFailureRecovery(
+    const recovery = driverFailureRecovery(
       result.structuredContent,
       message,
       toolName,
@@ -128,7 +140,11 @@ export function toPiToolResult(
       ...safeFailureMetadata(result.structuredContent),
       ...(refused ? { status: 'refused' } : {}),
       ...(recovery
-        ? { code: recovery.code, ...(recovery.nextCall ? { next_call: recovery.nextCall } : {}) }
+        ? {
+            code: recovery.code,
+            ...recovery.metadata,
+            ...(recovery.nextCall ? { next_call: recovery.nextCall } : {}),
+          }
         : {}),
     };
     const extra = buildEnrichment(toolName ?? '', { structuredContent: metadata, isError: true });
@@ -349,18 +365,35 @@ function buildEnrichment(toolName: string, result: McpToolResult): string | unde
 
   if (!result.isError) {
     switch (toolName) {
-      case 'browser_prepare':
+      case 'browser_prepare': {
+        const lifecycle = asRecord(sc.lifecycle);
+        const idleSeconds = lifecycle?.idle_expires_in_seconds;
         parts.push(
           ...structuredFieldLines(
             {
               prepared_pid: sc.prepared_pid,
               attachment: sc.attachment,
               side_effects: sc.side_effects,
+              lifecycle:
+                lifecycle?.owner === 'session' &&
+                typeof idleSeconds === 'number' &&
+                Number.isSafeInteger(idleSeconds) &&
+                idleSeconds >= 0 &&
+                typeof lifecycle.process_ends_with_session === 'boolean' &&
+                typeof lifecycle.profile_persists_after_session === 'boolean'
+                  ? {
+                      owner: lifecycle.owner,
+                      idle_expires_in_seconds: idleSeconds,
+                      process_ends_with_session: lifecycle.process_ends_with_session,
+                      profile_persists_after_session: lifecycle.profile_persists_after_session,
+                    }
+                  : undefined,
             },
             existingText,
           ),
         );
         break;
+      }
       case 'browser_dialog':
         parts.push(
           ...structuredFieldLines(
@@ -513,7 +546,7 @@ function safeFailureMetadata(value: Record<string, unknown> = {}): Record<string
   const pick = (item: unknown, allowed: string[]) =>
     typeof item === 'string' && allowed.includes(item) ? item : undefined;
   const delivery = value.delivery as { mode?: unknown; delivered_count?: unknown } | undefined;
-  const escalation = value.escalation as { target?: unknown; reason?: unknown } | undefined;
+  const escalation = asRecord(value.escalation);
   const metadata: Record<string, unknown> = {
     effect: pick(value.effect, [
       'confirmed',
@@ -532,6 +565,7 @@ function safeFailureMetadata(value: Record<string, unknown> = {}): Record<string
     },
     escalation: {
       target: pick(escalation?.target, ['pixel', 'foreground', 'page', 'session']),
+      recommended: pick(escalation?.recommended, ['foreground', 'page', 'px', 'ax']),
       reason: pick(escalation?.reason, [
         'route_unavailable',
         'delivery_failed',
@@ -592,12 +626,108 @@ const SAFE_MISSING_TAB_REASONS = [
   'this operation requires an explicit tab_id from get_browser_state',
 ];
 
-function browserFailureRecovery(
+const DRIVER_RECOVERY_HINTS: Record<string, string> = {
+  window_id_not_found:
+    'The window ID is no longer available. Call computer_use_list_windows in the same session to find a current window ID before retrying.',
+  window_owner_pid_mismatch:
+    'The window belongs to a different process. Call computer_use_list_windows to confirm its owner before reading the window again.',
+  stale_element_token:
+    'The element token is stale. Call computer_use_get_window_state for the intended window in the same session, then use its fresh element_token.',
+  session_ended:
+    'The Driver session has ended. Call computer_use_start_session with the same session label to restart it. For an unnamed session, omit the label.',
+  session_cleanup_pending:
+    'Session cleanup is still in progress. Call computer_use_end_session again for the same session to confirm it finished.',
+  session_cleanup_partial:
+    'The session ended and some resources still need cleanup. Call computer_use_end_session again for the same session to retry cleanup.',
+};
+
+type DriverRecovery = {
+  code: string;
+  message: string;
+  nextCall?: { tool: string; arguments: Record<string, unknown> };
+  metadata?: Record<string, unknown>;
+};
+
+function driverFailureRecovery(
   value: unknown,
   text: string,
   toolName?: string,
   originalArgs?: Record<string, unknown>,
-) {
+): DriverRecovery | undefined {
+  let root = asRecord(value);
+  if (!root) {
+    try {
+      root = asRecord(JSON.parse(text));
+    } catch {
+      /* Raw errors need not be JSON. */
+    }
+  }
+  const error = asRecord(root?.refusal) ?? asRecord(root?.error);
+  const session = originalArgs?.session;
+  const validSession =
+    session === undefined || (typeof session === 'string' && session.length <= 1024);
+  const nativeCode = [error?.code, root?.code].find(
+    (item): item is string =>
+      typeof item === 'string' && Object.hasOwn(DRIVER_RECOVERY_HINTS, item),
+  );
+  // Some MCP proxies put the known session refusal inside a generic invocation failure.
+  const wrappedSessionEnded =
+    root?.code === 'tool_invocation_failed' &&
+    typeof session === 'string' &&
+    validSession &&
+    toolName !== undefined &&
+    text
+      .split(/\r?\n/)
+      .includes(
+        `session has ended; tool call '${toolName}' was rejected. Call start_session with session '${session}' to start it again, or use a new session label.`,
+      );
+  if (nativeCode || wrappedSessionEnded) {
+    const code = nativeCode ?? 'session_ended';
+    const message = `${code}: ${DRIVER_RECOVERY_HINTS[code]}`;
+    if (code === 'window_owner_pid_mismatch' && toolName === 'get_window_state') {
+      const ownerPid = root?.owner_pid;
+      const windowId = originalArgs?.window_id;
+      if (isPositiveId(ownerPid) && isPositiveId(windowId) && root?.window_id === windowId) {
+        const basicRead =
+          validSession &&
+          Object.keys(originalArgs ?? {}).every((key) =>
+            ['pid', 'window_id', 'session'].includes(key),
+          );
+        return {
+          code,
+          message: `${code}: Window ${windowId} belongs to PID ${ownerPid}. Repeat computer_use_get_window_state with that PID, keeping the same window ID, session and read options.`,
+          metadata: { owner_pid: ownerPid },
+          ...(basicRead
+            ? {
+                nextCall: {
+                  tool: 'get_window_state',
+                  arguments: {
+                    pid: ownerPid,
+                    window_id: windowId,
+                    ...(typeof session === 'string' ? { session } : {}),
+                  },
+                },
+              }
+            : {}),
+        };
+      }
+    }
+    if (code === 'session_cleanup_pending' || code === 'session_cleanup_partial') {
+      return {
+        code,
+        message,
+        metadata: {
+          ...(typeof root?.cleanup_complete === 'boolean'
+            ? { cleanup_complete: root.cleanup_complete }
+            : {}),
+          ...(typeof root?.cleanup_in_progress === 'boolean'
+            ? { cleanup_in_progress: root.cleanup_in_progress }
+            : {}),
+        },
+      };
+    }
+    return { code, message };
+  }
   if (
     toolName !== 'get_browser_state' &&
     toolName !== 'page' &&
@@ -605,22 +735,9 @@ function browserFailureRecovery(
   ) {
     return undefined;
   }
-  const object = (item: unknown): Record<string, unknown> | undefined =>
-    item && typeof item === 'object' && !Array.isArray(item)
-      ? (item as Record<string, unknown>)
-      : undefined;
-  let root = object(value);
-  if (!root) {
-    try {
-      root = object(JSON.parse(text));
-    } catch {
-      /* Raw errors need not be JSON. */
-    }
-  }
-  const error = object(root?.refusal) ?? object(root?.error);
   const code = [
-    root?.code,
     error?.code,
+    root?.code,
     text.match(/^(?:Error:\s*)?(browser_[a-z_]+)\b/)?.[1],
   ].find(
     (item): item is string =>
@@ -631,29 +748,27 @@ function browserFailureRecovery(
   );
   if (!code) return undefined;
   if (Object.hasOwn(BROWSER_RECOVERY_HINTS, code)) {
-    const hint = BROWSER_RECOVERY_HINTS[code];
+    const hint =
+      code === 'background_unavailable' && toolName === 'browser_prepare'
+        ? 'Read the intended window with computer_use_get_window_state and use the accessibility tree with computer_use_set_value or computer_use_click and a fresh element_token. If the page controls are unavailable, ask for approval before bringing the browser to the foreground.'
+        : BROWSER_RECOVERY_HINTS[code];
     const reason =
       code === 'browser_tab_required'
         ? SAFE_MISSING_TAB_REASONS.find((candidate) => candidate === error?.message)
         : undefined;
     return { code, message: reason ? `refused (${code}): ${reason}\n${hint}` : `${code}: ${hint}` };
   }
-  const detail = object(root?.detail) ?? object(error?.detail);
-  const next = object(detail?.next_call) ?? object(root?.next_call);
-  const args = object(next?.arguments);
+  const detail = asRecord(root?.detail) ?? asRecord(error?.detail);
+  const next = asRecord(detail?.next_call) ?? asRecord(root?.next_call);
+  const args = asRecord(next?.arguments);
   const pid = args?.pid;
   const windowId = args?.window_id;
-  const existing = object(args?.strategy)?.kind === 'existing_profile';
-  const session = originalArgs?.session;
-  const validSession =
-    session === undefined || (typeof session === 'string' && session.length <= 1024);
-  const validId = (id: unknown): id is number =>
-    typeof id === 'number' && Number.isSafeInteger(id) && id > 0;
+  const existing = asRecord(args?.strategy)?.kind === 'existing_profile';
   const nextCall =
     next?.tool === 'browser_prepare' &&
     existing &&
-    validId(pid) &&
-    validId(windowId) &&
+    isPositiveId(pid) &&
+    isPositiveId(windowId) &&
     validSession
       ? {
           tool: 'browser_prepare',
