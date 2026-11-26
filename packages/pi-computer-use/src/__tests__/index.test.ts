@@ -433,6 +433,44 @@ describe('computerUseExtension', () => {
     });
   });
 
+  it('returns the error code and recovery hint when a browser snapshot requires a tab ID', async () => {
+    await start();
+    const message = 'snapshot mode requires a tab_id from a prior bind';
+    mockCallTool = (name) =>
+      name === 'get_browser_state'
+        ? {
+            content: [{ type: 'text', text: `refused (browser_tab_required): ${message}` }],
+            structuredContent: {
+              status: 'refused',
+              refusal: { code: 'browser_tab_required', message },
+            },
+          }
+        : { content: [{ type: 'text', text: 'ok' }] };
+
+    const result = await tools
+      .get('computer_use_get_browser_state')!
+      .execute(
+        'state',
+        { target_id: 'bt-123', session: 'checkout' },
+        undefined,
+        undefined,
+        mockCtx,
+      );
+
+    expect(result).toMatchObject({
+      isError: true,
+      details: { code: 'browser_tab_required' },
+      content: [
+        {
+          type: 'text',
+          text: expect.stringMatching(
+            /browser_tab_required: .*tab_id.*same session.*pid.*window_id/,
+          ),
+        },
+      ],
+    });
+  });
+
   it('returns the current dialog capability without dispatching a blocked browser action', async () => {
     const calls: string[] = [];
     await start();

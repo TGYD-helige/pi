@@ -555,6 +555,8 @@ const BROWSER_RECOVERY_HINTS: Record<string, string> = {
     'Refresh the page snapshot with computer_use_get_browser_state, keeping the same target, tab, and session. Omit the old continuation and scope_ref. Use newly returned refs before retrying the action.',
   browser_binding_stale:
     'Rediscover the browser target and tab with computer_use_get_browser_state using the intended native pid/window_id. Do not reuse the stale target or tab identifiers.',
+  browser_tab_required:
+    'Use the tab_id from a prior bind for this target in the same session. If it is unavailable, call computer_use_get_browser_state with pid and window_id in that session, then use the returned target_id and tab_id.',
   browser_tab_not_found:
     'Rediscover the browser target and tab with computer_use_get_browser_state using the intended native pid/window_id. Do not reuse the stale target or tab identifiers.',
   browser_input_incomplete:
