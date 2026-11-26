@@ -9,9 +9,10 @@ import { pathToFileURL } from 'node:url';
 import { DevToolsClient, serveBrowserSession } from '../packages/pi-browser-use/dist/index.js';
 
 const require = createRequire(new URL('../packages/pi-browser-use/package.json', import.meta.url));
-const { puppeteer } = await import(pathToFileURL(join(
-  dirname(require.resolve('chrome-devtools-mcp/package.json')), 'build/src/third_party/index.js',
+const { loadBrowser } = await import(pathToFileURL(join(
+  dirname(require.resolve('chrome-devtools-mcp')), 'third_party', 'index.js',
 )).href);
+const { puppeteer } = await loadBrowser();
 const root = await mkdtemp(join(tmpdir(), 'pi-browser-use-timeout-'));
 let browser, session, heartbeat;
 const heartbeats = new Set();

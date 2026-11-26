@@ -26,9 +26,6 @@ const baseConfig = {
   headless: true,
   sessionMode: 'isolated',
   session: { enabled: true, key: 'qr-test', retentionMs: 15000 },
-  ...(process.env.PI_BROWSER_TEST_EXECUTABLE
-    ? { executablePath: process.env.PI_BROWSER_TEST_EXECUTABLE }
-    : {}),
 };
 const runner = createBrowserSessionRunner(
   root,
@@ -40,7 +37,10 @@ let gateway, management;
 try {
   gateway = await createSessionGateway(join(root, 'gateway-profile'));
   for (const [name, config] of [
-    ['local headless Chrome', baseConfig],
+    [
+      'local headless Chrome',
+      { ...baseConfig, executablePath: process.env.PI_BROWSER_TEST_EXECUTABLE },
+    ],
     [
       'disconnect-reaping CDP gateway',
       {

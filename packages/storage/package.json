@@ -65,7 +65,7 @@
   "dependencies": {
     "@amaster.ai/pi-task-scheduler": "workspace:*",
     "@amaster.ai/pi-shared": "workspace:*",
-    "ioredis": "^5.10.1"
+    "ioredis": "^5.11.1"
   },
   "peerDependencies": {
     "@prisma/client": "^6.19.3"
@@ -78,6 +78,6 @@
   "devDependencies": {
     "@prisma/client": "^6.19.3",
     "prisma": "^6.19.3",
-    "vitest": "^4.0.0"
+    "vitest": "^4.1.12"
   }
 }

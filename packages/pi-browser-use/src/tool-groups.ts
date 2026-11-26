@@ -55,10 +55,8 @@ export type CategoryMap = Readonly<Record<string, string>>;
 const require = createRequire(import.meta.url);
 
 async function loadUpstreamTools() {
-  const packageJsonPath = require.resolve('chrome-devtools-mcp/package.json');
-  const toolsUrl = pathToFileURL(
-    join(dirname(packageJsonPath), 'build', 'src', 'tools', 'tools.js'),
-  );
+  const entrypoint = require.resolve('chrome-devtools-mcp');
+  const toolsUrl = pathToFileURL(join(dirname(entrypoint), 'tools', 'tools.js'));
   const mod = (await import(toolsUrl.href)) as {
     createTools: (args: { slim: boolean }) => Array<{
       name: string;

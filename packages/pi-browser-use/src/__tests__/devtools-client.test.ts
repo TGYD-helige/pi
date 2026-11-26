@@ -1,3 +1,5 @@
+import { createRequire } from 'node:module';
+import { dirname, resolve } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { runInNewContext } from 'node:vm';
 import { beforeEach, describe, expect, it, test, vi } from 'vitest';
@@ -107,8 +109,11 @@ describe('DevToolsClient', () => {
         await client.connect();
 
         expect(mockTransports[0]!.opts).toMatchObject({ command: process.execPath });
-        expect(mockTransports[0]!.opts!.args?.[0]).toMatch(
-          /chrome-devtools-mcp[/\\]build[/\\]src[/\\]bin[/\\]chrome-devtools-mcp\.js$/,
+        const require = createRequire(import.meta.url);
+        const manifestPath = require.resolve('chrome-devtools-mcp/package.json');
+        const manifest = require(manifestPath) as { bin: { 'chrome-devtools-mcp': string } };
+        expect(mockTransports[0]!.opts!.args?.[0]).toBe(
+          resolve(dirname(manifestPath), manifest.bin['chrome-devtools-mcp']),
         );
         expect(mockTransports[0]!.opts!.args).not.toContain('chrome-devtools-mcp@latest');
       } finally {
