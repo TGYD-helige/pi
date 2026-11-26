@@ -22,6 +22,6 @@
     "@amaster.ai/pi-memory-mem0": "workspace:*"
   },
   "devDependencies": {
-    "tsx": "^4.20.0"
+    "tsx": "^4.23.15"
   }
 }

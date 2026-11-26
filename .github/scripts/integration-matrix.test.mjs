@@ -270,8 +270,10 @@ test('checks the exact expected macOS permission error from the tool rather than
   }
 });
 
-test('uses configured Seedream defaults without inventing unsupported size or model parameters', () => {
+test('uses configured Seedream Pro defaults without inventing unsupported size or model parameters', async () => {
   const scenario = fullMatrix.find(({ extension, provider }) => extension === 'pi-image-gen' && provider === 'seedream-lite');
+  const workflow = await readFile(new URL('../workflows/integration.yml', import.meta.url), 'utf8');
+  assert.match(workflow, /"seedream-lite" \]; then\s+IMAGE_GEN_MODEL="doubao-seedream-5-0-pro-260628"/);
   assert.match(scenario.prompt, /omit.*size.*model/i);
   assert.equal(scenario.assert_tool, 'image_generate');
   assert.equal(scenario.assert_tool_count, 1);

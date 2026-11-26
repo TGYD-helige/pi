@@ -508,15 +508,11 @@ jobs:
           fi
 
 
-          # pi-image-gen defaultModel varies by matrix `provider`: the
-          # seedream-lite entry points at the Seedream 5.0 lite model id,
-          # everything else uses qwen-image-2.0. Both fall through to the
-          # ci-gateway catch-all customProvider (no ARK/DASHSCOPE key in CI),
-          # so the id is sent verbatim as the remote model id over the
-          # OpenAI-shaped wire. Use the full versioned id (not the alias) so
-          # the gateway receives the exact remote model name.
+          # Keep the existing matrix key for base-branch pull_request_target workflows.
+          # Route this case to Ark's replacement for the retired Seedream 5.0 Lite.
+          # The catch-all gateway forwards the full versioned model id.
           if [ "${{ matrix.provider }}" = "seedream-lite" ]; then
-            IMAGE_GEN_MODEL="doubao-seedream-5-0-lite-260128"
+            IMAGE_GEN_MODEL="doubao-seedream-5-0-pro-260628"
           else
             IMAGE_GEN_MODEL="qwen-image-2.0"
           fi

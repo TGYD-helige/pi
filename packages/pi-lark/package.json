@@ -64,9 +64,9 @@
     }
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "1.6.0",
+    "@earendil-works/pi-coding-agent": "1.6.1",
     "typebox": "1.3.27",
-    "vitest": "^4.0.0"
+    "vitest": "^4.1.12"
   },
   "dependencies": {
     "@amaster.ai/pi-shared": "workspace:*"

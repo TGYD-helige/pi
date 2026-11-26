@@ -9,10 +9,11 @@ const require = createRequire(
 );
 const sdkRequire = createRequire(require.resolve('@modelcontextprotocol/sdk/client/index.js'));
 const { WebSocket, WebSocketServer } = sdkRequire('ws');
-const upstream = dirname(require.resolve('chrome-devtools-mcp/package.json'));
-const { puppeteer } = await import(
-  pathToFileURL(join(upstream, 'build/src/third_party/index.js')).href
+const upstream = dirname(require.resolve('chrome-devtools-mcp'));
+const { loadBrowser } = await import(
+  pathToFileURL(join(upstream, 'third_party', 'index.js')).href
 );
+const { puppeteer } = await loadBrowser();
 
 export async function createSessionGateway(profileDir) {
   if (process.env.PI_BROWSER_TEST_GATEWAY_MODULE) {
