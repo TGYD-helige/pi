@@ -1,13 +1,111 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  agentToolErrorResult,
   classifyError,
   createModelErrorCapture,
   describeToolError,
   modelResponseError,
   SafeToolError,
+  withAgentToolErrors,
 } from '../tool-errors.js';
 
 describe('tool errors', () => {
+  it('preserves a successful result even when its data uses an error field', async () => {
+    const data = {
+      content: [{ type: 'text', text: 'Valid result' }],
+      structuredContent: { error: 'a data field' },
+    };
+    const execute = withAgentToolErrors(
+      {
+        name: 'fixture',
+        async execute() {
+          return data;
+        },
+      },
+      {},
+      'fixture',
+    );
+    await expect(execute()).resolves.toBe(data);
+  });
+
+  it('returns the same error data to modern hosts and throws formatted text on legacy hosts', async () => {
+    const error = {
+      code: 'snapshot_required',
+      message: 'Action refused.',
+      cause: { source: 'Driver', message: 'The current page has no snapshot.' },
+      recovery: 'Run take_snapshot, then retry the action.',
+    };
+    const tool = {
+      name: 'fixture',
+      async execute() {
+        return agentToolErrorResult(error);
+      },
+    };
+    const text =
+      '[snapshot_required] Action refused.\nCause (Driver): The current page has no snapshot.\nRecovery: Run take_snapshot, then retry the action.';
+    await expect(
+      withAgentToolErrors(tool, { registerMcpServer() {} }, 'fixture')(),
+    ).resolves.toEqual({
+      isError: true,
+      content: [{ type: 'text', text }],
+      structuredContent: { error },
+    });
+    await expect(withAgentToolErrors(tool, {}, 'fixture')()).rejects.toThrow(text);
+  });
+
+  it('sanitizes thrown HTTP errors for both host versions and logs only the classification', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const tool = {
+      name: 'fixture',
+      async execute(): Promise<never> {
+        throw new Error('HTTP 502: Bearer fixture-secret');
+      },
+    };
+    const hint = 'The action may have completed. Inspect the current state before retrying.';
+    const message = `fixture failed (HTTP 502). ${hint}`;
+    const text = `[http_error] ${message}`;
+    try {
+      await expect(
+        withAgentToolErrors(tool, { registerMcpServer() {} }, 'fixture', hint)(),
+      ).resolves.toMatchObject({
+        isError: true,
+        content: [{ type: 'text', text }],
+        structuredContent: {
+          error: { code: 'http_error', message },
+          errorCategory: 'http_error',
+          httpStatus: 502,
+        },
+      });
+      await expect(withAgentToolErrors(tool, {}, 'fixture', hint)()).rejects.toMatchObject({
+        message: text,
+      });
+      expect(log.mock.calls).toEqual([
+        ['[fixture] fixture failed (category=http_error, HTTP 502)'],
+        ['[fixture] fixture failed (category=http_error, HTTP 502)'],
+      ]);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('exposes a safe cancellation when the provider rejects after abort', async () => {
+    const ctl = new AbortController();
+    const tool = {
+      name: 'fixture',
+      async execute(_id: string, _args: object, signal: AbortSignal) {
+        ctl.abort(new Error('private abort reason'));
+        expect(signal.aborted).toBe(true);
+        throw new Error('private provider response');
+      },
+    };
+    await expect(
+      withAgentToolErrors(tool, {}, 'fixture')('call', {}, ctl.signal),
+    ).rejects.toMatchObject({
+      name: 'AbortError',
+      message: '[cancelled] The tool call was cancelled.',
+    });
+  });
+
   it('preserves streamed response metadata, consumption, and cloning', async () => {
     const source = new Response('{"ok":true}', {
       status: 201,

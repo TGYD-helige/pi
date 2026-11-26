@@ -2,12 +2,13 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { open, readFile, rename } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve } from 'node:path';
-import { boundStructuredContent, classifyError } from '@amaster.ai/pi-shared';
+import { boundStructuredContent, classifyError, withAgentToolErrors } from '@amaster.ai/pi-shared';
 import { isProjectTrusted } from '@amaster.ai/pi-shared/settings';
 import { StringEnum } from '@earendil-works/pi-ai';
 import {
   type ExtensionAPI,
   type ExtensionContext,
+  type ToolDefinition,
   truncateHead,
 } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
@@ -323,6 +324,8 @@ function buildGenerateParams(caps: VideoModelCapabilities | null) {
 }
 
 export default function piVideoGenExtension(pi: ExtensionAPI): void {
+  const registerTool = (tool: ToolDefinition) =>
+    pi.registerTool({ ...tool, execute: withAgentToolErrors(tool, pi, 'pi-video-gen') });
   let settings: VideoGenSettings = {};
   let rateLimiter = new RateLimiter();
   const activeJobs = new ActiveJobs();
@@ -1067,7 +1070,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
         ? { ...caps, referenceAssetModalities: undefined }
         : caps;
 
-    pi.registerTool({
+    registerTool({
       name: 'video_generate',
       label: 'Generate Video Clip',
       description:
@@ -1099,7 +1102,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
       },
     });
 
-    pi.registerTool({
+    registerTool({
       name: 'video_compose',
       label: 'Compose Video Clips',
       description:
@@ -1130,7 +1133,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
       },
     });
 
-    pi.registerTool({
+    registerTool({
       name: 'video_render',
       label: 'Render Multi-Shot Video',
       description:
@@ -1167,7 +1170,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
       },
     });
 
-    pi.registerTool({
+    registerTool({
       name: 'video_capabilities',
       label: 'Video Model Capabilities',
       description:

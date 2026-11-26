@@ -1,4 +1,10 @@
-import { boundStructuredContent, describeToolError } from '@amaster.ai/pi-shared';
+import {
+  type AgentToolError,
+  agentToolErrorResult,
+  agentToolErrorSchema,
+  boundStructuredContent,
+  describeToolError,
+} from '@amaster.ai/pi-shared';
 import type {
   AgentToolResult,
   AgentToolUpdateCallback,
@@ -8,6 +14,11 @@ import type {
 import { Type } from 'typebox';
 import { MEMORY_GUIDANCE } from './guidance.js';
 import type { MemoryResult, MemoryStore, MemoryTarget } from './store.js';
+
+// Older pi-agent-core versions need the post-call hook to honor a resolved failure.
+export async function preserveMemoryToolFailure({ result }: { result: { isError?: boolean } }) {
+  return result.isError ? { isError: true } : undefined;
+}
 
 const targetSchema = Type.Union([Type.Literal('memory'), Type.Literal('user')], {
   description: "Which memory store: 'memory' (your notes) or 'user' (user profile).",
@@ -25,7 +36,7 @@ const memoryOutputSchema = Type.Union([
   }),
   Type.Object({
     success: Type.Optional(Type.Literal(false)),
-    error: Type.String(),
+    error: Type.Unsafe<AgentToolError>(agentToolErrorSchema),
     errorCategory: Type.Optional(Type.String()),
     httpStatus: Type.Optional(Type.Integer()),
     matches: Type.Optional(Type.Array(Type.String())),
@@ -41,11 +52,38 @@ function jsonResult(
   value: MemoryResult | { entries: string[]; usage: string },
 ): AgentToolResult<unknown> {
   const data = boundStructuredContent(value);
+  if ('success' in value && value.success === false) {
+    const code =
+      'driftBackup' in value ? 'memory_file_drift' : (value.code ?? 'memory_operation_rejected');
+    const result = agentToolErrorResult({
+      code,
+      message: value.error,
+      ...('driftBackup' in value
+        ? { recovery: value.remediation }
+        : value.matches
+          ? { recovery: 'Call memory_read, then select an oldText that matches exactly one entry.' }
+          : code === 'memory_capacity_exceeded'
+            ? {
+                recovery:
+                  'Call memory_read for the same target to inspect the current entries and usage before changing anything.',
+              }
+            : {}),
+    });
+    const structuredContent = { ...data, ...result.structuredContent };
+    return { ...result, details: data, structuredContent };
+  }
+  if (typeof data.error === 'string') {
+    const failure = agentToolErrorResult({ code: 'memory_output_limit', message: data.error });
+    return {
+      ...failure,
+      details: data,
+      structuredContent: { ...data, ...failure.structuredContent },
+    };
+  }
   return {
     content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
     details: data,
     structuredContent: data,
-    ...('error' in data ? { isError: true } : {}),
   };
 }
 
@@ -61,7 +99,7 @@ export function createMemoryTools(store: MemoryStore): ToolDefinition[] {
       'Append a new durable fact that will help future sessions: a lasting user preference, supported correction, or stable project/environment fact. ' +
       'Read the target first. If the fact is already represented, leave it unchanged; use memory_replace for a correction or extension. ' +
       'Write a declarative fact with necessary scope, not an instruction, task log or reusable procedure. ' +
-      'An exact duplicate is a successful no-op. If capacity is exceeded, inspect currentEntries and usage, then shorten or consolidate without losing supported facts. ' +
+      'An exact duplicate is a successful no-op. If capacity is exceeded, call memory_read for the same target to inspect entries and usage, then shorten or consolidate without losing supported facts. ' +
       'Keep valid entries and report a blocker if they still cannot fit; never retry the same failing add unchanged. ' +
       'After a successful write, call memory_read for this target to verify the saved state before reporting completion.',
     promptSnippet: 'Append durable facts to MEMORY.md or USER.md.',
@@ -184,11 +222,14 @@ export function createMemoryTools(store: MemoryStore): ToolDefinition[] {
         );
         console.error(`[pi-memory] ${tool.name} failed (category=${failure.errorCategory})`);
         const data = boundStructuredContent({ success: false, ...failure });
+        const result = agentToolErrorResult({
+          code: failure.errorCategory,
+          message: failure.error,
+        });
         return {
-          content: [{ type: 'text' as const, text: failure.error }],
+          ...result,
           details: data,
-          structuredContent: data,
-          isError: true,
+          structuredContent: { ...data, ...result.structuredContent },
         };
       }
     },

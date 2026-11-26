@@ -58,6 +58,7 @@ async function setupCommand(
       if (!eventHandlers[event]) eventHandlers[event] = [];
       eventHandlers[event].push(handler);
     },
+    registerMcpServer: vi.fn(),
     registerTool: (tool: unknown) => registeredTools.push(tool),
     registerCommand: (
       name: string,

@@ -315,6 +315,12 @@ export class SanitizingJsonSchemaValidator implements jsonSchemaValidator {
 }
 
 /** Owns the Cua Driver daemon and its stdio MCP proxy as one adapter. */
+export class CuaDriverRequestNotDispatched extends SafeToolError {
+  constructor(error: unknown) {
+    super('Cua Driver preflight', error, 'Check that the driver and target are available.');
+  }
+}
+
 export class CuaDriverClient {
   private client: Client | null = null;
   private daemonProcess: ChildProcess | null = null;
@@ -650,9 +656,16 @@ export class CuaDriverClient {
     args: Record<string, unknown>,
     signal?: AbortSignal,
   ): Promise<McpToolResult> {
-    await this.ensureReady(signal);
-    const client = this.client;
-    if (!client) throw new Error('Cua Driver client not connected.');
+    let client: Client;
+    try {
+      await this.ensureReady(signal);
+      signal?.throwIfAborted();
+      if (!this.client) throw new Error('Cua Driver client not connected.');
+      client = this.client;
+    } catch (error) {
+      if (signal?.aborted) throw abortError(signal);
+      throw new CuaDriverRequestNotDispatched(error);
+    }
 
     try {
       return (await client.callTool(

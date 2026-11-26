@@ -6,6 +6,7 @@ import {
   describeToolError,
   SafeToolError,
   ValidationError,
+  withAgentToolErrors,
 } from '@amaster.ai/pi-shared';
 import {
   isProjectTrusted,
@@ -40,6 +41,7 @@ import { BrowserSessionClient } from './session-client.js';
 import type { SessionAction } from './session-control.js';
 import {
   BrowserSessionError,
+  BrowserToolNotDispatched,
   SESSION_DESCRIPTION,
   scriptValue,
   sessionParameters,
@@ -182,7 +184,7 @@ export class DevToolsClient {
     if (this.sessionClient) return this.sessionClient.connect(signal);
     if (this.state === 'stalled')
       throw new BrowserSessionError(
-        'Browser tools are stalled. The action may have completed. Automatic reattachment is unavailable for this connection; inspect the original browser externally before explicitly starting another session.',
+        'Browser tools are stalled. The previous action may have completed. Automatic reattachment is unavailable for this connection; inspect the original browser externally before explicitly starting another session.',
       );
     if (this.state === 'ready') return;
     if (this.connectPromise) return this.connectPromise;
@@ -317,7 +319,7 @@ export class DevToolsClient {
 
   async ensureReady(signal?: AbortSignal): Promise<void> {
     if (this.sessionClient) return this.sessionClient.connect(signal);
-    if (this.explicitlyClosed) throw new Error('Client not connected');
+    if (this.explicitlyClosed) throw new BrowserSessionError('Client not connected.');
 
     if (this.state === 'ready') {
       const healthCheckIsFresh = Date.now() - this.lastHealthCheckAt < MCP_HEALTH_CHECK_INTERVAL_MS;
@@ -361,12 +363,19 @@ export class DevToolsClient {
     isError?: boolean;
   }> {
     if (this.sessionClient) return this.sessionClient.callTool(name, args, signal);
+    const callerSignal = signal;
     signal = AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(MCP_TIMEOUT_MS)]);
-    signal.throwIfAborted();
-    await this.ensureReady(signal);
-    signal.throwIfAborted();
-    const client = this.client;
-    if (!client) throw new Error('Client not connected');
+    let client: Client;
+    try {
+      signal.throwIfAborted();
+      await this.ensureReady(signal);
+      signal.throwIfAborted();
+      if (!this.client) throw new BrowserSessionError('Client not connected.');
+      client = this.client;
+    } catch (error) {
+      callerSignal?.throwIfAborted();
+      throw new BrowserToolNotDispatched(error);
+    }
     if (['navigate_page', 'new_page', 'wait_for'].includes(name)) {
       const timeout = args.timeout;
       if (
@@ -504,25 +513,12 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
   const registerTool = (tool: ToolDefinition) =>
     pi.registerTool({
       ...tool,
-      async execute(...args) {
-        try {
-          return await tool.execute(...args);
-        } catch (error) {
-          if (args[2]?.aborted) throw error;
-          const failure = describeToolError(
-            tool.name,
-            error,
-            'The action may have completed. Inspect the current page before retrying.',
-          );
-          console.error(`[pi-browser-use] ${tool.name} failed (category=${failure.errorCategory})`);
-          return {
-            content: [{ type: 'text' as const, text: failure.error }],
-            structuredContent: failure,
-            details: undefined,
-            isError: true,
-          };
-        }
-      },
+      execute: withAgentToolErrors(
+        tool,
+        pi,
+        'pi-browser-use',
+        'The action may have completed. Inspect the current page before retrying.',
+      ),
     });
 
   let config: BrowserUseConfig | undefined;
@@ -533,8 +529,17 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
   const TOOLS_META_TOOL = `${TOOL_PREFIX}tools`;
 
   async function ensureConnected(signal?: AbortSignal): Promise<void> {
-    if (!client) throw new Error('browser-use: session not started');
-    await client.ensureReady(signal);
+    if (!client) {
+      throw new BrowserToolNotDispatched(
+        new BrowserSessionError('The browser session is unavailable.'),
+      );
+    }
+    try {
+      await client.ensureReady(signal);
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      throw new BrowserToolNotDispatched(error);
+    }
   }
 
   function formatGroupList(): string {

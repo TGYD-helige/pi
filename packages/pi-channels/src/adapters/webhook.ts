@@ -1,4 +1,4 @@
-import { safeFetch } from '@amaster.ai/pi-shared';
+import { safeFetch, ValidationError } from '@amaster.ai/pi-shared';
 import type {
   AdapterConfig,
   ChannelAdapter,
@@ -41,12 +41,16 @@ export function createWebhookAdapter(config: AdapterConfig): ChannelAdapter {
       if (payloadMode === 'raw') {
         if (canHaveBody) {
           if (message.rawBody === undefined) {
-            throw new Error(`Webhook raw payload requires rawBody for ${normalizedMethod}`);
+            throw new ValidationError(
+              'The request was rejected before sending. Set json for a webhook raw payload or use envelope mode.',
+            );
           }
           body =
             typeof message.rawBody === 'string' ? message.rawBody : JSON.stringify(message.rawBody);
         } else if (message.rawBody !== undefined) {
-          throw new Error(`${normalizedMethod} webhook requests cannot include a body`);
+          throw new ValidationError(
+            'The request was rejected before sending. GET and HEAD webhook requests cannot include a body.',
+          );
         }
       } else if (canHaveBody) {
         body = JSON.stringify({

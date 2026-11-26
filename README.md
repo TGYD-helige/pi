@@ -129,6 +129,12 @@ Pi loads an extension package from the entry declared in its `package.json` `pi.
 
 See each package README for package-specific examples and public API notes.
 
+## Tool error migration
+
+Structured plugin failures now expose `error.code` for handling and `error.message` for display. During an upgrade, scripts that may call both versions can read the message with `typeof result.error === 'string' ? result.error : result.error?.message`. Causes and recovery guidance are present when the tool has verified, actionable information.
+
+On Pi before 0.99, tool execution throws a sanitized exception so the host records the call as failed and exposes the error text to the agent. On Pi 0.99 and newer, tool execution failures carry `isError: true` and the structured error object. Policy denials before execution expose formatted text through the Pi hook.
+
 ## DeepSeek Harness
 
 Compatibility depends on the host, DSH, Pi, and extension versions. Follow the selected host's documentation for installation and current support.

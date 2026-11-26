@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { DevToolsClient } from '../index.js';
 import { BrowserAcquisitionError, type ManagedBrowser } from '../session-backend.js';
 import * as connectionModule from '../session-connection.js';
+import { BrowserSessionError } from '../session-control.js';
 import { serveBrowserSession } from '../session-server.js';
 
 vi.mock('node:net', async (importOriginal) => {
@@ -138,9 +139,17 @@ describe('browser session tool recovery', () => {
       await request('call', { name: 'list_pages', args: {} });
       await request('retain');
       expect(nonce).toMatch(/^[a-f0-9]{48}$/);
+      vi.spyOn(DevToolsClient.prototype, 'ensureReady').mockRejectedValueOnce(
+        new BrowserSessionError('The browser connection is unavailable.'),
+      );
+      expect(await request('call', { name: 'click', args: { uid: 'old_uid' } })).toMatchObject({
+        error: 'The browser tool call was not sent. The browser connection is unavailable.',
+      });
       state.mockReturnValue('stalled');
       expect(await request('call', { name: 'click', args: { uid: 'old_uid' } })).toMatchObject({
-        error: expect.stringContaining('Page IDs and element UIDs may have changed'),
+        error: expect.stringMatching(
+          /^The browser tool call was not sent\..*call browser_list_pages, then browser_take_snapshot and inspect the actual state before continuing\.$/,
+        ),
       });
       expect(call).toHaveBeenLastCalledWith(
         'evaluate_script',
@@ -218,7 +227,9 @@ describe('browser session tool recovery', () => {
         deadline.abort(new DOMException('Recovery deadline exceeded', 'TimeoutError'));
       }
       expect(await recovering).toMatchObject({
-        error: expect.stringMatching(/stalled|recovery failed/),
+        error: expect.stringMatching(
+          /^The browser tool call was not sent\..*The previous action may have completed/,
+        ),
       });
       for (const name of ['evaluate_script', 'list_pages'])
         expect(await request('call', { name, args: {} })).toMatchObject({

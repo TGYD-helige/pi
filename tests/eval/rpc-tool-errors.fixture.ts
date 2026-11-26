@@ -61,7 +61,7 @@ export default function (pi: ExtensionAPI) {
                 type: 'text',
                 text: JSON.stringify(
                   Object.fromEntries(
-                    toolResults.map(({ toolCallId, isError }) => [toolCallId, isError]),
+                    toolResults.map(({ toolCallId, isError, content }) => [toolCallId, { isError, content }]),
                   ),
                 ),
               },
@@ -69,6 +69,10 @@ export default function (pi: ExtensionAPI) {
           : [
               { type: 'toolCall', id: 'call-resolved', name: 'resolved_failure', arguments: {} },
               { type: 'toolCall', id: 'call-thrown', name: 'thrown_failure', arguments: {} },
+              {
+                type: 'toolCall', id: 'call-notify', name: 'notify',
+                arguments: { action: 'send', adapter: 'probe', payloadMode: 'raw', method: 'POST' },
+              },
             ],
       };
       stream.push({ type: 'done', reason: stopReason, message: output });

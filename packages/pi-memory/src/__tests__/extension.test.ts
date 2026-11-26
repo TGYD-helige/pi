@@ -44,6 +44,7 @@ describe('memoryExtension', () => {
         eventHandlers[event] ??= [];
         eventHandlers[event].push(handler);
       },
+      registerMcpServer: vi.fn(),
       registerTool: vi.fn(),
       registerCommand: vi.fn(),
       appendEntry: vi.fn(),
@@ -110,6 +111,7 @@ describe('memoryExtension', () => {
           eventHandlers[event] ??= [];
           eventHandlers[event].push(handler);
         },
+        registerMcpServer: vi.fn(),
         registerTool: vi.fn(),
         registerCommand: vi.fn(),
         appendEntry: vi.fn(),

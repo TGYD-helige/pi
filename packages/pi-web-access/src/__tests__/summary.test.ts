@@ -37,6 +37,32 @@ describe('summarizeContent', () => {
     );
   });
 
+  it.each([
+    `Provider is not configured: ${config.provider}`,
+    `Virtual model ${config.provider}/${config.model} routed to route/model, which has no credentials.`,
+  ])('reports missing credentials without a second auth lookup (%s)', async (errorMessage) => {
+    const lookup = vi.fn();
+    const result = {
+      content: [],
+      stopReason: 'error',
+      errorMessage,
+    };
+    const ctx = {
+      modelRegistry: {
+        find: () => ({ id: config.model, provider: config.provider }),
+        getApiKeyAndHeaders: lookup,
+        streamSimple: () => ({ result: async () => result }),
+      },
+    };
+    await expect(
+      summarizeContent('content', 'summarize', config, ctx as never),
+    ).rejects.toMatchObject({
+      errorCategory: 'configuration_error',
+      message: expect.stringContaining('Check the credentials'),
+    });
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
   it('passes caller cancellation to the summary request', async () => {
     mockCtx.modelRegistry.find.mockReturnValue({ id: 'model' });
     mockCtx.modelRegistry.getApiKeyAndHeaders.mockResolvedValue({ ok: true });

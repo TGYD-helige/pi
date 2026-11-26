@@ -119,6 +119,7 @@ const sessionShutdownHandlers: Array<() => Promise<void>> = [];
 const activeTools: string[] = [];
 
 const mockPi = {
+  registerMcpServer: vi.fn(),
   registerTool: vi.fn((tool: RegisteredTool) => {
     registeredTools.set(tool.name, tool);
     // Mirror the runtime: newly registered tools become active by default.
@@ -310,7 +311,13 @@ describe('browserUseExtension', () => {
 
         expect(result.isError).toBe(true);
         expect(result.content[0]!.text).not.toContain('Inspect the current page');
-        expect(notify).toHaveBeenCalledWith(result.content[0]!.text, 'error');
+        expect(result.content[0]!.text).toMatch(
+          /^\[browser_tools_failed\] Browser tool discovery failed/,
+        );
+        expect(notify).toHaveBeenCalledWith(
+          expect.stringContaining('Browser tool discovery failed'),
+          'error',
+        );
         expect(log).toHaveBeenCalledWith(expect.stringContaining('tool discovery failed'));
         expect(JSON.stringify([result, notify.mock.calls, log.mock.calls])).not.toContain(
           '/opt/secret',
@@ -815,6 +822,110 @@ describe('browserUseExtension', () => {
   });
 
   describe('tool execution edge cases', () => {
+    test('reports that a click was never sent when the browser session is unavailable', async () => {
+      await startExtension();
+      const click = registeredTools.get('browser_click')!;
+      await shutdownExtension();
+
+      const result = await click.execute('call', {}, undefined, undefined, {});
+      expect(result).toMatchObject({
+        isError: true,
+        content: [{ text: expect.stringContaining('The browser tool call was not sent.') }],
+      });
+      expect(JSON.stringify(result)).not.toContain('may have completed');
+      expect(mockCallTool).not.toHaveBeenCalled();
+    });
+
+    test('shows the driver snapshot prerequisite to the agent', async () => {
+      mockCallTool.mockResolvedValueOnce({
+        content: [
+          { type: 'text', text: 'No snapshot found for page 1. Use take_snapshot to capture one.' },
+        ],
+        isError: true,
+      });
+      await startExtension();
+
+      const result = await registeredTools
+        .get('browser_click')!
+        .execute('call-1', {}, undefined, undefined, {});
+      expect(result).toMatchObject({
+        isError: true,
+        content: [
+          {
+            type: 'text',
+            text: '[browser_snapshot_required] Click was rejected before execution.\nCause (chrome-devtools-mcp): No snapshot found for page 1. Use take_snapshot to capture one.',
+          },
+        ],
+        structuredContent: {
+          error: {
+            code: 'browser_snapshot_required',
+            message: 'Click was rejected before execution.',
+            cause: {
+              source: 'chrome-devtools-mcp',
+              message: 'No snapshot found for page 1. Use take_snapshot to capture one.',
+            },
+          },
+        },
+      });
+    });
+
+    test('warns that earlier form fields may have changed when a later element is stale', async () => {
+      mockListAllTools.mockResolvedValueOnce([
+        { name: 'fill_form', description: 'Fill fields.', inputSchema: { type: 'object' } },
+      ]);
+      const message = 'Element uid "1_999" not found on page 1.';
+      mockCallTool.mockResolvedValueOnce({
+        content: [{ type: 'text', text: message }],
+        isError: true,
+      });
+      await startExtension();
+
+      const result = await registeredTools.get('browser_fill_form')!.execute(
+        'call',
+        {
+          elements: [
+            { uid: '1_1', value: 'first field' },
+            { uid: '1_999', value: 'missing field' },
+          ],
+        },
+        undefined,
+        undefined,
+        {},
+      );
+      expect(result).toMatchObject({
+        isError: true,
+        content: [{ text: expect.stringContaining('Earlier fields may already have changed.') }],
+        structuredContent: {
+          error: {
+            code: 'browser_element_stale',
+            cause: { source: 'chrome-devtools-mcp', message },
+            recovery: expect.stringContaining('inspect the form'),
+          },
+        },
+      });
+    });
+
+    test('filters extra text in an unrecognized driver diagnostic', async () => {
+      mockCallTool.mockResolvedValueOnce({
+        content: [
+          {
+            type: 'text',
+            text: 'Error: No snapshot found for page 1. Use take_snapshot to capture one. private-token',
+          },
+        ],
+        isError: true,
+      });
+      await startExtension();
+      const result = await registeredTools
+        .get('browser_click')!
+        .execute('call', {}, undefined, undefined, {});
+      expect(result).toMatchObject({
+        isError: true,
+        structuredContent: { error: { code: 'browser_click_failed' } },
+      });
+      expect(JSON.stringify(result)).not.toContain('private-token');
+    });
+
     test('passes isError through from upstream result', async () => {
       mockCallTool.mockResolvedValueOnce({
         content: [{ type: 'text', text: 'Error: element not found' }],

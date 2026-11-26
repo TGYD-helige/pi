@@ -1,4 +1,8 @@
-import { describeToolError } from '@amaster.ai/pi-shared';
+import {
+  agentToolErrorResult,
+  describeToolError,
+  withAgentToolErrors,
+} from '@amaster.ai/pi-shared';
 import { isProjectTrusted } from '@amaster.ai/pi-shared/settings';
 import type {
   ExtensionAPI,
@@ -94,20 +98,7 @@ export default function piWebToolExtension(pi: ExtensionAPI): void {
   const registerTool = <P extends TSchema>(tool: ToolDefinition<P>) =>
     pi.registerTool({
       ...tool,
-      async execute(...args) {
-        try {
-          return await tool.execute(...args);
-        } catch (error) {
-          if (args[2]?.aborted) throw error;
-          const failure = describeError(tool.name, error);
-          return {
-            isError: true,
-            content: [{ type: 'text', text: failure.error }],
-            details: undefined,
-            structuredContent: failure,
-          };
-        }
-      },
+      execute: withAgentToolErrors(tool, pi, 'pi-web-access'),
     });
 
   pi.on('session_start', async (_event: unknown, ctx: ExtensionContext) => {
@@ -264,13 +255,35 @@ export default function piWebToolExtension(pi: ExtensionAPI): void {
 
         let content = result.content;
         if (settings.fetch?.summary) {
-          content = await summarizeContent(
-            content,
-            fetchParams.prompt,
-            settings.fetch.summary,
-            fetchCtx,
-            signal,
-          );
+          try {
+            content = await summarizeContent(
+              content,
+              fetchParams.prompt,
+              settings.fetch.summary,
+              fetchCtx,
+              signal,
+            );
+          } catch (error) {
+            signal?.throwIfAborted();
+            const failure = describeError('Summary model request', error);
+            const result = agentToolErrorResult({
+              code: 'web_fetch_summary_failed',
+              message: 'The page was fetched, but summarization failed.',
+              cause: { source: 'Summary model', message: failure.error },
+              ...(failure.errorCategory === 'configuration_error'
+                ? {}
+                : { recovery: 'Use a browser to read the page.' }),
+            });
+            return {
+              ...result,
+              details: undefined,
+              structuredContent: {
+                ...result.structuredContent,
+                errorCategory: failure.errorCategory,
+                ...(failure.httpStatus ? { httpStatus: failure.httpStatus } : {}),
+              },
+            };
+          }
         }
 
         const lines: string[] = [];
@@ -335,7 +348,10 @@ export default function piWebToolExtension(pi: ExtensionAPI): void {
               cmdCtx,
               cmdCtx.signal,
             );
-            cmdCtx.ui.notify(result.content[0]!.text, 'info');
+            cmdCtx.ui.notify(
+              result.content[0]!.text,
+              'isError' in result && result.isError ? 'error' : 'info',
+            );
           } catch (error) {
             if (cmdCtx.signal?.aborted) throw error;
             cmdCtx.ui.notify(describeError('web-fetch', error).error, 'error');

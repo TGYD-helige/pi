@@ -13,6 +13,29 @@ import {
 const model = { provider: 'test', model: 'test-model' };
 
 describe('task scheduler', () => {
+  it('rejects enabling an older task with an unrepresentable interval before saving', async () => {
+    const store = new MemoryScheduledTaskStore();
+    const scheduler = new PersistentTaskScheduler({
+      store,
+      lock: new MemorySchedulerLock(),
+      runner: async () => {},
+    });
+    const task = await scheduler.create({
+      type: 'interval',
+      schedule: '10000000000000s',
+      intervalSeconds: 10_000_000_000_000,
+      enabled: false,
+      sessionId: 'fixture',
+      toolPolicyProfile: 'scheduled',
+      prompt: 'fixture',
+      model,
+    });
+    await expect(scheduler.update(task.id, { enabled: true })).rejects.toMatchObject({
+      code: 'invalid_interval_schedule',
+    });
+    expect(await scheduler.get(task.id)).toMatchObject({ enabled: false });
+  });
+
   it('releases its lock when startup cannot read stored tasks', async () => {
     const store = new MemoryScheduledTaskStore();
     const failure = new Error('storage unavailable');

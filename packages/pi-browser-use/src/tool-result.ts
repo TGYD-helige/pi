@@ -1,4 +1,8 @@
-import { boundStructuredContent, describeMcpError } from '@amaster.ai/pi-shared';
+import {
+  agentToolErrorResult,
+  boundStructuredContent,
+  describeMcpError,
+} from '@amaster.ai/pi-shared';
 import { truncateHead } from '@earendil-works/pi-coding-agent';
 import { extractTextContent, postProcessToolResult } from './tool-augment.js';
 
@@ -20,9 +24,63 @@ export function toToolContent(
     { type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }
   >;
   isError?: boolean;
-  structuredContent?: ReturnType<typeof boundStructuredContent>;
+  structuredContent?:
+    | ReturnType<typeof boundStructuredContent>
+    | ReturnType<typeof agentToolErrorResult>['structuredContent'];
 } {
   if (result.isError) {
+    // The driver puts its diagnostic on the last line of a potentially private response.
+    const tail = result.content?.find((item) => item.type === 'text')?.text?.slice(-257) ?? '';
+    const reported = result.structuredContent?.errorMessage;
+    const text =
+      typeof reported === 'string' && reported.length <= 256
+        ? reported
+        : tail
+            .slice(tail.lastIndexOf('\n') + 1)
+            .replace(/^Error: /, '')
+            .trimEnd();
+    // Forward only fixed driver messages and verified identifier shapes.
+    if (
+      /^No snapshot found for page (?:[0-9]+|\?)\. Use take_snapshot to capture one\.$/.test(text)
+    ) {
+      return agentToolErrorResult({
+        code: 'browser_snapshot_required',
+        message:
+          originalName === 'click'
+            ? 'Click was rejected before execution.'
+            : 'The current page has no snapshot.',
+        cause: { source: 'chrome-devtools-mcp', message: text },
+      });
+    }
+    if (
+      text === 'No page selected' ||
+      text === 'No page found' ||
+      text === 'The selected page has been closed. Call list_pages to see open pages.'
+    ) {
+      return agentToolErrorResult({
+        code: 'browser_page_unavailable',
+        message: 'The requested browser page is unavailable.',
+        cause: { source: 'chrome-devtools-mcp', message: text },
+        ...(text.startsWith('No page')
+          ? { recovery: 'Call browser_list_pages to find an open page.' }
+          : {}),
+      });
+    }
+    if (
+      /^(?:Element uid "[0-9_]{1,64}" not found on page [0-9]+\.|Element with uid [0-9_]{1,64} no longer exists on the page\.)$/.test(
+        text,
+      )
+    ) {
+      return agentToolErrorResult({
+        code: 'browser_element_stale',
+        message: 'The element reference could not be resolved.',
+        cause: { source: 'chrome-devtools-mcp', message: text },
+        recovery:
+          originalName === 'fill_form'
+            ? 'Earlier fields may already have changed. Call browser_take_snapshot and inspect the form before retrying with current uids.'
+            : 'Call browser_take_snapshot and choose the element’s current uid.',
+      });
+    }
     const failure = describeMcpError(
       'Browser tool',
       result,

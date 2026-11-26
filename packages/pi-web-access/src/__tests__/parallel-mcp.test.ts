@@ -35,6 +35,7 @@ function createPi() {
   const listeners = new Map<string, (...args: any[]) => any>();
   return {
     tools,
+    registerMcpServer: vi.fn(),
     registerTool(tool: any) {
       tools.set(tool.name, tool);
     },
@@ -224,11 +225,17 @@ afterEach(async () => {
     const timeoutPi = createPi();
     piWebToolExtension(timeoutPi as any);
     await timeoutPi.start();
-    await expect(
-      timeoutPi.tools
+    try {
+      const result = await timeoutPi.tools
         .get('web_search')
-        .execute('timeout', { query: 'official Python documentation' }, undefined, undefined, {}),
-    ).rejects.toThrow();
-    await timeoutFixture.close();
+        .execute('timeout', { query: 'official Python documentation' }, undefined, undefined, {});
+      expect(result).toMatchObject({
+        isError: true,
+        content: [{ type: 'text', text: expect.stringMatching(/^\[timeout\]/) }],
+        structuredContent: { error: { code: 'timeout' }, errorCategory: 'timeout' },
+      });
+    } finally {
+      await timeoutFixture.close();
+    }
   }, 5_000);
 });

@@ -34,6 +34,7 @@ function createMockPi() {
     tools,
     commands,
     listeners,
+    registerMcpServer: vi.fn(),
     registerTool(tool: { name: string; description: string }) {
       tools.push(tool);
     },
@@ -80,7 +81,10 @@ describe('piWebToolExtension - tool registration', () => {
     const tool = pi.tools.find((item) => item.name === name) as any;
     await expect(
       tool.execute('id', { query: 'Pi' }, controller.signal, undefined, {}),
-    ).rejects.toBe(controller.signal.reason);
+    ).rejects.toMatchObject({
+      name: 'AbortError',
+      message: '[cancelled] The tool call was cancelled.',
+    });
     expect(fetch).toHaveBeenCalledOnce();
   });
 
@@ -164,8 +168,11 @@ describe('piWebToolExtension - tool registration', () => {
         {},
       );
       expect(result.isError).toBe(true);
-      expect(result.structuredContent.errorCategory).toBe('timeout');
-      expect(result.content[0].text).toContain('timed out');
+      expect(result).toMatchObject({
+        isError: true,
+        content: [{ type: 'text', text: expect.stringMatching(/^\[timeout\].*timed out/) }],
+        structuredContent: { error: { code: 'timeout' }, errorCategory: 'timeout' },
+      });
       expect(log).toHaveBeenCalledWith(expect.stringContaining('category=timeout'));
       expect(JSON.stringify([result, log.mock.calls])).not.toMatch(
         /private-token|private\.invalid/,
@@ -220,6 +227,7 @@ describe('piWebToolExtension - tool registration', () => {
   it.each([
     'tavily',
     'cloudflare',
+    'parallel',
   ])('classifies the actual %s request deadline at the tool boundary', async (provider) => {
     mockLoadSettings.mockReturnValue({
       search: { provider },
@@ -409,8 +417,50 @@ describe('piWebToolExtension - tool registration', () => {
     const tool = pi.tools.find((item) => item.name === 'web_search') as any;
     await expect(
       tool.execute('id', { query: 'Pi' }, controller.signal, undefined, {}),
-    ).rejects.toBe(controller.signal.reason);
+    ).rejects.toMatchObject({
+      name: 'AbortError',
+      message: '[cancelled] The tool call was cancelled.',
+    });
   });
+  it('reports a summary-model configuration error after a successful page fetch', async () => {
+    mockLoadSettings.mockReturnValue({
+      fetch: { summary: { provider: 'fixture', model: 'missing' } },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('Title: Fixture\n\nMarkdown Content:\nPage content')),
+    );
+    const pi = createMockPi();
+    piWebToolExtension(pi as any);
+    await pi.triggerSessionStart();
+    const result = await (pi.tools.find((tool) => tool.name === 'web_fetch') as any).execute(
+      'call',
+      { url: 'https://93.184.216.34/', prompt: 'Summarize' },
+      undefined,
+      undefined,
+      { modelRegistry: { find: () => undefined } },
+    );
+    expect(result).toMatchObject({
+      isError: true,
+      content: [
+        {
+          text: expect.stringContaining(
+            '[web_fetch_summary_failed] The page was fetched, but summarization failed.',
+          ),
+        },
+      ],
+      structuredContent: {
+        error: {
+          code: 'web_fetch_summary_failed',
+          cause: {
+            source: 'Summary model',
+            message: expect.stringContaining('not found in model registry'),
+          },
+        },
+      },
+    });
+  });
+
   it('returns safe structured errors without raw provider data', async () => {
     mockLoadSettings.mockReturnValue({
       search: { provider: 'tavily' },
@@ -428,7 +478,10 @@ describe('piWebToolExtension - tool registration', () => {
       {},
     );
     expect(result.isError).toBe(true);
-    expect(result.structuredContent.error).toContain('HTTP 401');
+    expect(result.structuredContent.error).toMatchObject({
+      code: 'http_error',
+      message: expect.stringContaining('HTTP 401'),
+    });
     expect(JSON.stringify(result)).not.toContain('private-token');
   });
 

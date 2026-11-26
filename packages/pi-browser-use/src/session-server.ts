@@ -13,7 +13,7 @@ import {
   validateBrowserExpiry,
 } from './session-backend.js';
 import { createBrowserConnection, listenOnReachablePort } from './session-connection.js';
-import { BrowserSessionError, scriptValue } from './session-control.js';
+import { BrowserSessionError, BrowserToolNotDispatched, scriptValue } from './session-control.js';
 import { loadConcurrencyMap } from './tool-groups.js';
 
 const MAX_BYTES = 32 * 1024 * 1024;
@@ -404,7 +404,7 @@ export async function serveBrowserSession(
   async function recoverTools(signal: AbortSignal) {
     if (recoveryFailed || !managed || !adapter.reconnect)
       throw new BrowserSessionError(
-        'Browser tools are stalled. The action may have completed. Safe reattachment to the same live browser is unavailable; inspect it externally before explicitly starting another session. No action was replayed.',
+        'Browser tools are stalled. The previous action may have completed. Safe reattachment to the same live browser is unavailable; inspect it externally before explicitly starting another session. No action was replayed.',
       );
     recoveryFailed = true;
     if (hardDeadline !== undefined && hardDeadline <= Date.now())
@@ -465,7 +465,7 @@ export async function serveBrowserSession(
     } catch {
       console.error('[pi-browser-use] browser tool recovery failed (phase=recovery)');
       throw new BrowserSessionError(
-        'Browser tool recovery failed. The action may have completed; inspect the original browser externally. No action was replayed.',
+        'Browser tool recovery failed. The previous action may have completed; inspect the original browser externally. No action was replayed.',
       );
     } finally {
       // A late completion cannot start another attempt or publish a recovered session.
@@ -617,17 +617,22 @@ export async function serveBrowserSession(
         Array.isArray(input.args)
       )
         throw new BrowserSessionError('Invalid browser tool request.');
-      if (recoveryFailed || client.getState() === 'stalled') return recoverTools(signal);
       const callLifetime = toolLifetime;
       const executionSignal = AbortSignal.any([
         signal,
         callLifetime.signal,
         AbortSignal.timeout(50_000),
       ]);
-      await ensureBrowser(executionSignal);
-      if (marker || connection) await verify(executionSignal);
-      await client.ensureReady(executionSignal);
-      executionSignal.throwIfAborted();
+      try {
+        if (recoveryFailed || client.getState() === 'stalled') await recoverTools(signal);
+        await ensureBrowser(executionSignal);
+        if (marker || connection) await verify(executionSignal);
+        await client.ensureReady(executionSignal);
+        executionSignal.throwIfAborted();
+      } catch (error) {
+        signal.throwIfAborted();
+        throw new BrowserToolNotDispatched(error);
+      }
       const executingClient = client;
       const name = input.name;
       const args = input.args as Record<string, unknown>;
@@ -730,14 +735,14 @@ export async function serveBrowserSession(
         throw new BrowserSessionError('Browser result exceeded the session transport limit.');
       res.end(body);
     } catch (error) {
-      if (!(error instanceof BrowserSessionError))
+      if (!(error instanceof BrowserSessionError || error instanceof BrowserToolNotDispatched))
         console.error(
           `[pi-browser-use] browser session operation failed (phase=${phase}, category=${classifyError(error).errorCategory})`,
         );
       res.statusCode = 409;
       res.end(
         JSON.stringify({
-          ...(error instanceof BrowserSessionError
+          ...(error instanceof BrowserSessionError || error instanceof BrowserToolNotDispatched
             ? { error: error.message, ...classifyError(error) }
             : describeToolError(
                 'Browser session operation',

@@ -33,6 +33,7 @@ describe('piTeamworkExtension Multica provider', () => {
     const pi = {
       on: vi.fn(),
       registerCommand: vi.fn(),
+      registerMcpServer: vi.fn(),
       registerTool: vi.fn(),
       exec: vi.fn((_command, _args, options) => {
         calls.push(options);
@@ -71,6 +72,7 @@ describe('piTeamworkExtension Multica provider', () => {
     const pi = {
       on: vi.fn(),
       registerCommand: vi.fn(),
+      registerMcpServer: vi.fn(),
       registerTool: vi.fn((tool: RegisteredTool) => toolNames.push(tool.name)),
       exec: vi.fn(async () => ({ stdout: '[]', stderr: '', code: 0 })),
     };
@@ -126,6 +128,7 @@ describe('piTeamworkExtension Multica provider', () => {
     const pi = {
       on: vi.fn(),
       registerCommand: vi.fn(),
+      registerMcpServer: vi.fn(),
       registerTool: vi.fn((tool: RegisteredTool) => toolNames.push(tool.name)),
       exec: vi.fn(async () => ({ stdout: '[]', stderr: '', code: 0 })),
     };
@@ -184,6 +187,7 @@ describe('piTeamworkExtension Multica provider', () => {
     const pi = {
       on: vi.fn(),
       registerCommand: vi.fn(),
+      registerMcpServer: vi.fn(),
       registerTool: vi.fn((tool: RegisteredTool) => tools.set(tool.name, tool)),
       getActiveTools: vi.fn(() => ['issue_list']),
       setActiveTools: vi.fn(),
@@ -249,6 +253,7 @@ describe('piTeamworkExtension Multica provider', () => {
     const pi = {
       on: vi.fn(),
       registerCommand: vi.fn(),
+      registerMcpServer: vi.fn(),
       registerTool: vi.fn(),
       getActiveTools: vi.fn(() => activeTools),
       setActiveTools: vi.fn((next: string[]) => {
@@ -293,6 +298,7 @@ describe('piTeamworkExtension Multica provider', () => {
     const pi = {
       on: vi.fn(),
       registerCommand: vi.fn(),
+      registerMcpServer: vi.fn(),
       registerTool: vi.fn(),
       getActiveTools: vi.fn(() => activeTools),
       setActiveTools: vi.fn((next: string[]) => {
@@ -335,6 +341,7 @@ describe('piTeamworkExtension Multica provider', () => {
     const pi = {
       on: vi.fn(),
       registerCommand: vi.fn((name, options) => commands.set(name, options)),
+      registerMcpServer: vi.fn(),
       registerTool: vi.fn(),
       exec: vi.fn(async (_cmd: string, args: string[]) => {
         if (args[0] === 'issue' && args[1] === 'list') {
@@ -438,7 +445,7 @@ describe('MulticaAdapter', () => {
 
     it('throws on non-zero exit code', async () => {
       const adapter = new MulticaAdapter({}, failExec('command failed'));
-      await expect(adapter.listIssues()).rejects.toThrow('multica issue failed: command failed');
+      await expect(adapter.listIssues()).rejects.toThrow('Multica CLI exited with status 1.');
     });
   });
 

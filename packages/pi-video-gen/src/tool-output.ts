@@ -1,7 +1,8 @@
+import { type AgentToolError, agentToolErrorSchema } from '@amaster.ai/pi-shared';
 import { Type } from 'typebox';
 
 const errorSchema = Type.Object({
-  error: Type.String(),
+  error: Type.Unsafe<AgentToolError>(agentToolErrorSchema),
   errorCategory: Type.Optional(Type.String()),
   httpStatus: Type.Optional(Type.Integer()),
   truncated: Type.Boolean(),

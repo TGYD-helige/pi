@@ -1,3 +1,4 @@
+import { withAgentToolErrors } from '@amaster.ai/pi-shared';
 /**
  * pi-memory-mem0 — Semantic memory extension powered by Mem0.
  *
@@ -158,16 +159,15 @@ export default function mem0Extension(pi: ExtensionAPI): void {
       // rewrite the prompt for any request already sent in this session.
       activeToolEnabled = config.toolEnabled ?? memoryMode !== 'passive';
       if (activeToolEnabled) {
-        pi.registerTool(
-          createMem0MemoryTool({
-            getProvider: () => providerReady,
-            getUserId: () => userId,
-            getAgentId: () => agentId,
-            isEnabled: () => activeToolEnabled,
-            getSessionEpoch: () => sessionEpoch,
-            topK,
-          }),
-        );
+        const tool = createMem0MemoryTool({
+          getProvider: () => providerReady,
+          getUserId: () => userId,
+          getAgentId: () => agentId,
+          isEnabled: () => activeToolEnabled,
+          getSessionEpoch: () => sessionEpoch,
+          topK,
+        });
+        pi.registerTool({ ...tool, execute: withAgentToolErrors(tool, pi, 'pi-memory-mem0') });
         pi.setActiveTools([
           ...pi.getActiveTools().filter((name) => name !== MEMORY_TOOL_NAME),
           MEMORY_TOOL_NAME,

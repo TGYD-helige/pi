@@ -9,6 +9,8 @@ import { promisify } from 'node:util';
 import { parseTraceEvents } from './pi-review-trace.mjs';
 
 const run = promisify(execFile);
+// Each phase includes multiple tool calls and model turns under their own deadlines.
+const MODEL_PHASE_MS = 180_000;
 const normalizeScript = value => String(value).replace(/\s+/g, '').replace(/;$/, '');
 const text = (result) => (result?.content ?? []).filter(item => item.type === 'text').map(item => item.text).join('\n');
 
@@ -94,12 +96,17 @@ export async function runBrowserSessionModelE2E({ browser } = {}) {
       const args = ['--provider', provider, '--model', model, '--thinking', 'off', '--no-session', '--mode', 'json', '--no-approve',
         '--no-extensions', '--extension', resolve('packages/pi-browser-use/dist/index.js'), '--no-context-files', '--no-skills', '--no-prompt-templates', '--no-mcp', '--no-builtin-tools',
         '--tools', phase === 'retain' ? 'browser_list_pages,browser_new_page,browser_evaluate_script,browser_session' : 'browser_list_pages,browser_evaluate_script,browser_session', '-p', prompt];
+      const deadline = AbortSignal.timeout(MODEL_PHASE_MS);
       let output;
       try {
-        const task = run('pi', args, { env: { ...process.env, PI_TELEMETRY: '0', PI_BROWSER_USE_SESSION_BINDING: browser ? JSON.stringify({ key, browser }) : '' }, cwd: root, timeout: 90000, maxBuffer: 8 * 1024 * 1024 });
+        const task = run('pi', args, { env: { ...process.env, PI_TELEMETRY: '0', PI_BROWSER_USE_SESSION_BINDING: browser ? JSON.stringify({ key, browser }) : '' }, cwd: root, signal: deadline, maxBuffer: 8 * 1024 * 1024 });
         task.child.stdin.end();
         output = (await task).stdout;
-      } catch { throw Error(`Real Pi CLI ${phase} failed or timed out`); }
+      } catch {
+        const message = `Model ${phase}: Pi CLI ${deadline.aborted ? 'timed out' : 'failed'}`;
+        console.error(`FAIL: ${message}`);
+        throw Error(message);
+      }
       try { results.push(assertModelPhase(parseTraceEvents(output), { phase, url, script, marker })); }
       catch (error) {
         console.error(`FAIL: model ${phase}: ${error.code === 'ERR_ASSERTION' ? error.message : 'Invalid tool trace'}`);

@@ -1,6 +1,11 @@
 import { lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
-import { classifyError, describeToolError } from '@amaster.ai/pi-shared';
+import {
+  agentToolErrorResult,
+  classifyError,
+  describeToolError,
+  withAgentToolErrors,
+} from '@amaster.ai/pi-shared';
 import { isProjectTrusted } from '@amaster.ai/pi-shared/settings';
 import { StringEnum } from '@earendil-works/pi-ai';
 import type {
@@ -11,7 +16,12 @@ import type {
 import { Type } from 'typebox';
 import { type ComputerUseConfig, loadConfigFromFile, resolveConfig } from './config.js';
 import toolManifest from './generated/cua-driver-tools.js';
-import { CuaDriverClient, sanitizeSchemaFormats, waitForPromise } from './mcp-client.js';
+import {
+  CuaDriverClient,
+  CuaDriverRequestNotDispatched,
+  sanitizeSchemaFormats,
+  waitForPromise,
+} from './mcp-client.js';
 import { CORE_TOOLS, TOOL_GROUP_NAMES, TOOL_GROUPS } from './tool-groups.js';
 import { type McpToolResult, toPiToolResult } from './tool-result.js';
 import { createPiVisionCaller } from './vision.js';
@@ -125,27 +135,12 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
   const registerTool = (tool: ToolDefinition) =>
     pi.registerTool({
       ...tool,
-      async execute(...args) {
-        try {
-          return await tool.execute(...args);
-        } catch (error) {
-          if (args[2]?.aborted) throw error;
-          const failure = describeToolError(
-            tool.name,
-            error,
-            'The execution outcome is unknown. Read the current target state before retrying any action.',
-          );
-          console.error(
-            `[pi-computer-use] ${tool.name} failed (category=${failure.errorCategory})`,
-          );
-          return {
-            content: [{ type: 'text' as const, text: failure.error }],
-            structuredContent: failure,
-            details: undefined,
-            isError: true,
-          };
-        }
-      },
+      execute: withAgentToolErrors(
+        tool,
+        pi,
+        'pi-computer-use',
+        'The execution outcome is unknown. Read the current target state before retrying any action.',
+      ),
     });
 
   let config: ComputerUseConfig | undefined;
@@ -463,6 +458,7 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
             };
           }
 
+          let dispatched = false;
           try {
             await ensureConnected(signal, originalName !== 'check_permissions');
             if (
@@ -494,16 +490,31 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
                 );
               }
               if (state.present) {
-                const blocked = toPiToolResult(
-                  {
-                    ...dialog,
-                    content: [{ type: 'text', text: blockedMessage }, ...(dialog.content ?? [])],
+                const dialogId =
+                  typeof state.dialog_id === 'string' &&
+                  /^dialog-[a-z0-9_-]{1,128}$/i.test(state.dialog_id)
+                    ? state.dialog_id
+                    : undefined;
+                const kind =
+                  typeof state.kind === 'string' &&
+                  ['alert', 'confirm', 'prompt', 'beforeunload'].includes(state.kind)
+                    ? state.kind
+                    : undefined;
+                return {
+                  ...agentToolErrorResult({
+                    code: 'browser_dialog_open',
+                    message: `${originalName} was not executed because a browser ${kind ? `${kind} ` : ''}dialog is open.`,
+                    recovery: `Use computer_use_browser_dialog${dialogId ? ` with dialog_id ${dialogId}` : ''} to resolve the dialog before retrying.`,
+                  }),
+                  details: {
+                    present: true,
+                    ...(kind ? { kind } : {}),
+                    ...(dialogId ? { dialog_id: dialogId } : {}),
                   },
-                  'browser_dialog',
-                );
-                return { ...blocked, isError: true };
+                };
               }
             }
+            dispatched = true;
             const result = await client!.callTool(originalName, params, signal);
 
             if (result.isError) {
@@ -522,7 +533,7 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
             return toPiToolResult(result, originalName, undefined, params);
           } catch (connErr) {
             if (signal?.aborted) throw connErr;
-            const failure = toolFailure(originalName, connErr);
+            const failure = toolFailure(originalName, connErr, dispatched);
             ctx.ui.notify(failure.content[0]!.text, 'warning');
             return failure;
           }
@@ -807,7 +818,24 @@ function formatToolError(
   return undefined;
 }
 
-function toolFailure(operation: string, error: unknown) {
+function toolFailure(operation: string, error: unknown, dispatched = true) {
+  if (!dispatched || error instanceof CuaDriverRequestNotDispatched) {
+    const cause = describeToolError(
+      'Cua Driver preflight',
+      Object.assign(new Error(), classifyError(error)),
+      'Check that the driver and target are available.',
+    );
+    console.error(`[pi-computer-use] preflight failed (category=${cause.errorCategory})`);
+    return {
+      ...agentToolErrorResult({
+        code: 'driver_preflight_failed',
+        message: 'The requested action was not executed.',
+        cause: { source: 'Cua Driver', message: cause.error },
+      }),
+      details: undefined,
+    };
+  }
+
   const failure = describeToolError(
     operation,
     error,

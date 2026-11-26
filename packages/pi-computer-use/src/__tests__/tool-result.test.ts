@@ -59,7 +59,7 @@ describe('toPiToolResult', () => {
     expect(result).toMatchObject({
       isError: true,
       details: { status: 'refused' },
-      content: [{ type: 'text', text: 'Cua Driver refused the request.' }],
+      content: [{ type: 'text', text: '[driver_request_refused] Cua Driver refused the request.' }],
     });
     expect(JSON.stringify(result)).not.toMatch(/driver_private_code|test-token/);
   });
@@ -147,7 +147,16 @@ describe('toPiToolResult', () => {
       undefined,
       { session: 'checkout' },
     );
-    expect(result).toMatchObject({ isError: true, details: { code: 'session_ended' } });
+    expect(result).toMatchObject({
+      isError: true,
+      details: { code: 'session_ended', status: 'refused' },
+      structuredContent: {
+        error: { code: 'session_ended', message: 'Cua Driver refused the request.' },
+      },
+    });
+    expect(result.content[0]).toMatchObject({
+      text: expect.not.stringContaining('outcome is unknown'),
+    });
     expect(result.content[0]).toMatchObject({
       text: expect.stringContaining('computer_use_start_session'),
     });

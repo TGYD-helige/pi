@@ -15,6 +15,7 @@ function setup(exec: ReturnType<typeof vi.fn>) {
   piTeamworkExtension({
     on: (name: string, handler: (...args: unknown[]) => Promise<unknown>) =>
       handlers.set(name, handler),
+    registerMcpServer: vi.fn(),
     registerTool: (tool: Tool) => tools.set(tool.name, tool),
     registerCommand: vi.fn(),
     exec,
@@ -61,7 +62,10 @@ describe('piTeamworkExtension execution', () => {
       tools
         .get('issue_update')!
         .execute('call', { id: 'one', status: 'done', title: 'New' }, controller.signal),
-    ).rejects.toBe(cancellation);
+    ).rejects.toMatchObject({
+      name: 'AbortError',
+      message: '[cancelled] The tool call was cancelled.',
+    });
     expect(
       exec.mock.calls.filter(([, args]) => args[0] === 'issue').map(([, args]) => args[1]),
     ).toEqual(['status']);
@@ -105,7 +109,10 @@ describe('piTeamworkExtension execution', () => {
       .get('issue_update')!
       .execute('call', { id: 'one', title: 'New' }, controller.signal);
     controller.abort();
-    await expect(pending).rejects.toBe(controller.signal.reason);
+    await expect(pending).rejects.toMatchObject({
+      name: 'AbortError',
+      message: '[cancelled] The tool call was cancelled.',
+    });
     expect(exec).toHaveBeenCalledTimes(1);
     await handlers.get('session_shutdown')!({}, {});
   });

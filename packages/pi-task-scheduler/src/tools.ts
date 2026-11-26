@@ -1,4 +1,10 @@
-import { boundStructuredContent, describeToolError } from '@amaster.ai/pi-shared';
+import {
+  type AgentToolError,
+  agentToolErrorResult,
+  agentToolErrorSchema,
+  boundStructuredContent,
+  describeToolError,
+} from '@amaster.ai/pi-shared';
 import type {
   AgentToolResult,
   AgentToolUpdateCallback,
@@ -12,23 +18,34 @@ import {
   type ScheduledTask,
   type ScheduledTaskCreateInput,
   type ScheduledTaskType,
+  ScheduleValidationError,
   type TaskScheduler,
 } from './index.js';
 
 function textResult(text: string, value: object): AgentToolResult<unknown> {
   const data = boundStructuredContent(value);
+  if (typeof data.error === 'string')
+    return errorResult(data.error, 'scheduler_output_limit', true);
   return {
     content: [
       { type: 'text', text: truncateHead(text, { maxBytes: 16 * 1024, maxLines: 200 }).content },
     ],
     details: data,
     structuredContent: data,
-    ...('error' in data ? { isError: true } : {}),
   };
 }
 
-function errorResult(text: string): AgentToolResult<unknown> {
-  return textResult(text, { error: text });
+function errorResult(
+  text: string,
+  errorCode = 'task_not_found',
+  truncated = false,
+): AgentToolResult<unknown> {
+  const result = agentToolErrorResult({ code: errorCode, message: text });
+  return {
+    ...result,
+    details: { error: result.structuredContent.error.message, truncated },
+    structuredContent: { ...result.structuredContent, truncated },
+  };
 }
 
 const taskSchema = Type.Union([
@@ -70,7 +87,7 @@ const taskSchema = Type.Union([
   Type.Object({ id: Type.String(), truncated: Type.Literal(true) }),
 ]);
 const errorSchema = Type.Object({
-  error: Type.String(),
+  error: Type.Unsafe<AgentToolError>(agentToolErrorSchema),
   errorCategory: Type.Optional(Type.String()),
   httpStatus: Type.Optional(Type.Integer()),
   truncated: Type.Boolean(),
@@ -151,17 +168,10 @@ export function createSchedulerTools(scheduler: TaskScheduler): ToolDefinition[]
         _onUpdate: AgentToolUpdateCallback | undefined,
         ctx: ExtensionContext,
       ): Promise<AgentToolResult<unknown>> {
-        let definition: ReturnType<typeof resolveScheduledTaskDefinition>;
-        try {
-          definition = resolveScheduledTaskDefinition({
-            type: params.type as ScheduledTaskType,
-            schedule: params.schedule as string,
-          });
-        } catch {
-          return errorResult(
-            'Invalid schedule. Use a valid cron, ISO timestamp, relative delay or interval.',
-          );
-        }
+        const definition = resolveScheduledTaskDefinition({
+          type: params.type as ScheduledTaskType,
+          schedule: params.schedule as string,
+        });
         const input: ScheduledTaskCreateInput = {
           ...definition,
           prompt: params.prompt as string,
@@ -273,17 +283,11 @@ export function createSchedulerTools(scheduler: TaskScheduler): ToolDefinition[]
         if (type !== undefined || schedule !== undefined) {
           const existing = await scheduler.get(taskId, sessionScope(ctx));
           if (!existing) return errorResult(`Task not found: ${taskId}`);
-          try {
-            const definition = resolveScheduledTaskDefinition({
-              type: (type ?? existing.type) as ScheduledTaskType,
-              schedule: schedule ?? existing.schedule,
-            });
-            Object.assign(update, definition);
-          } catch {
-            return errorResult(
-              'Invalid schedule. Use a valid cron, ISO timestamp, relative delay or interval.',
-            );
-          }
+          const definition = resolveScheduledTaskDefinition({
+            type: (type ?? existing.type) as ScheduledTaskType,
+            schedule: schedule ?? existing.schedule,
+          });
+          Object.assign(update, definition);
         }
         const task = await scheduler.update(taskId, update, sessionScope(ctx));
         if (!task) {
@@ -349,6 +353,7 @@ export function createSchedulerTools(scheduler: TaskScheduler): ToolDefinition[]
         return await tool.execute(...args);
       } catch (error) {
         if (args[2]?.aborted) throw error;
+        if (error instanceof ScheduleValidationError) return errorResult(error.message, error.code);
         const failure = describeToolError(
           tool.name,
           error,
@@ -357,7 +362,16 @@ export function createSchedulerTools(scheduler: TaskScheduler): ToolDefinition[]
         console.error(
           `[pi-task-scheduler] ${tool.name} failed (category=${failure.errorCategory})`,
         );
-        return textResult(failure.error, failure);
+        const result = agentToolErrorResult({
+          code: failure.errorCategory,
+          message: failure.error,
+        });
+        const { error: _message, ...metadata } = failure;
+        return {
+          ...result,
+          details: failure,
+          structuredContent: { ...metadata, ...result.structuredContent, truncated: false },
+        };
       }
     },
   }));

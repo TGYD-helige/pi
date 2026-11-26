@@ -116,10 +116,10 @@ describe('structured codemode workflows', () => {
         const specPath = '.video-gen/fixture/timeline-input.json';
         await tools.write({path: specPath, content: JSON.stringify({output: {resolution: '640x360', fps: 25}, segments: [{id: 's1', image: image.images[0].path, durationSec: 1, motion: 'static'}]})});
         const video = await tools.video_compose({composeSpecPath: specPath});
-        if (video.error) throw new Error(video.error);
+        if (video.error) throw new Error(video.error.message);
         await tools.write({path: '.video-gen/renderfixture/render-input.json', content: JSON.stringify({shots: [{id: 'local', videoPath: video.finalVideoPath}]})});
         const rendered = await tools.video_render({renderSpecPath: '.video-gen/renderfixture/render-input.json'});
-        if (rendered.error) throw new Error(rendered.error);
+        if (rendered.error) throw new Error(rendered.error.message);
         text({memory: changed.entries[0], deletedId: removed.deletedId, issueStatus: issue.issue.status,
           taskName: updated.task.name, videoPath: video.finalVideoPath, state: video.state,
           qcStatus: video.qcStatus, qcFrame: video.qcFrames[0], qcReport: rendered.qcReportPath});

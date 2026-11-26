@@ -1,4 +1,4 @@
-import { describeMcpError } from '@amaster.ai/pi-shared';
+import { agentToolErrorResult, describeMcpError } from '@amaster.ai/pi-shared';
 import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
@@ -110,12 +110,13 @@ export function toPiToolResult(
   content: PiToolContent[];
   details: Record<string, unknown> | undefined;
   isError?: boolean;
+  structuredContent?: ReturnType<typeof agentToolErrorResult>['structuredContent'];
 } {
   const refused =
     result.structuredContent?.status === 'refused' ||
     result.structuredContent?.effect === 'refused';
   if (result.isError || refused) {
-    const message = (result.content ?? [])
+    const driverText = (result.content ?? [])
       .slice(0, 4)
       .filter((item) => item.type === 'text')
       .map((item) => item.text?.slice(0, 4096) ?? '')
@@ -128,17 +129,16 @@ export function toPiToolResult(
     );
     const recovery = driverFailureRecovery(
       result.structuredContent,
-      message,
+      driverText,
       toolName,
       originalArgs,
     );
-    if (refused) failure.error = 'Cua Driver refused the request.';
-    if (recovery) failure.error = recovery.message;
-    if (safeErrorText) failure.error = safeErrorText + (recovery ? `\n${recovery.message}` : '');
     console.error(`[pi-computer-use] upstream tool failed (category=${failure.errorCategory})`);
-    const metadata = {
+    // The proxy can flatten an explicit rejection into a generic invocation error.
+    const rejected = refused || recovery?.code === 'session_ended' || Boolean(recovery?.reason);
+    const metadata: Record<string, unknown> = {
       ...safeFailureMetadata(result.structuredContent),
-      ...(refused ? { status: 'refused' } : {}),
+      ...(rejected ? { status: 'refused' } : {}),
       ...(recovery
         ? {
             code: recovery.code,
@@ -147,11 +147,48 @@ export function toPiToolResult(
           }
         : {}),
     };
-    const extra = buildEnrichment(toolName ?? '', { structuredContent: metadata, isError: true });
+    const observation = structuredFieldLines(
+      { effect: metadata.effect, delivery: metadata.delivery, escalation: metadata.escalation },
+      '',
+    ).join(' ');
+    const reason = recovery?.reason ?? observation;
+    const guidance = [
+      recovery?.recovery,
+      recovery?.nextCall ? `Suggested call: ${JSON.stringify(recovery.nextCall)}` : undefined,
+    ]
+      .filter(Boolean)
+      .join(' ');
+    const message =
+      safeErrorText ??
+      (rejected
+        ? 'Cua Driver refused the request.'
+        : metadata.effect === 'confirmed'
+          ? 'Cua Driver reported a failure after confirming the action took effect.'
+          : metadata.effect === 'partial'
+            ? 'Cua Driver reported that the action partially took effect.'
+            : failure.error);
     return {
-      content: [{ type: 'text', text: failure.error + (extra ? `\n${extra}` : '') }],
-      details: { ...failure, ...metadata },
-      isError: true,
+      ...agentToolErrorResult({
+        code:
+          recovery?.code ??
+          (rejected
+            ? 'driver_request_refused'
+            : failure.errorCategory === 'request_failed'
+              ? 'driver_tool_failed'
+              : failure.errorCategory),
+        message,
+        ...(reason
+          ? {
+              cause: {
+                source: 'Cua Driver',
+                ...(recovery ? { code: recovery.code } : {}),
+                message: reason,
+              },
+            }
+          : {}),
+        ...(guidance ? { recovery: guidance } : {}),
+      }),
+      details: { ...failure, error: message, ...metadata },
     };
   }
   const content: PiToolContent[] = [];
@@ -643,7 +680,8 @@ const DRIVER_RECOVERY_HINTS: Record<string, string> = {
 
 type DriverRecovery = {
   code: string;
-  message: string;
+  recovery: string;
+  reason?: string;
   nextCall?: { tool: string; arguments: Record<string, unknown> };
   metadata?: Record<string, unknown>;
 };
@@ -683,7 +721,7 @@ function driverFailureRecovery(
       );
   if (nativeCode || wrappedSessionEnded) {
     const code = nativeCode ?? 'session_ended';
-    const message = `${code}: ${DRIVER_RECOVERY_HINTS[code]}`;
+    const recovery = DRIVER_RECOVERY_HINTS[code]!;
     if (code === 'window_owner_pid_mismatch' && toolName === 'get_window_state') {
       const ownerPid = root?.owner_pid;
       const windowId = originalArgs?.window_id;
@@ -695,7 +733,7 @@ function driverFailureRecovery(
           );
         return {
           code,
-          message: `${code}: Window ${windowId} belongs to PID ${ownerPid}. Repeat computer_use_get_window_state with that PID, keeping the same window ID, session and read options.`,
+          recovery: `Window ${windowId} belongs to PID ${ownerPid}. Repeat computer_use_get_window_state with that PID, keeping the same window ID, session and read options.`,
           metadata: { owner_pid: ownerPid },
           ...(basicRead
             ? {
@@ -715,7 +753,7 @@ function driverFailureRecovery(
     if (code === 'session_cleanup_pending' || code === 'session_cleanup_partial') {
       return {
         code,
-        message,
+        recovery,
         metadata: {
           ...(typeof root?.cleanup_complete === 'boolean'
             ? { cleanup_complete: root.cleanup_complete }
@@ -726,7 +764,7 @@ function driverFailureRecovery(
         },
       };
     }
-    return { code, message };
+    return { code, recovery };
   }
   if (
     toolName !== 'get_browser_state' &&
@@ -756,7 +794,7 @@ function driverFailureRecovery(
       code === 'browser_tab_required'
         ? SAFE_MISSING_TAB_REASONS.find((candidate) => candidate === error?.message)
         : undefined;
-    return { code, message: reason ? `refused (${code}): ${reason}\n${hint}` : `${code}: ${hint}` };
+    return { code, recovery: hint!, ...(reason ? { reason: `refused (${code}): ${reason}` } : {}) };
   }
   const detail = asRecord(root?.detail) ?? asRecord(error?.detail);
   const next = asRecord(detail?.next_call) ?? asRecord(root?.next_call);
@@ -783,6 +821,6 @@ function driverFailureRecovery(
   return {
     code,
     nextCall,
-    message: `${code}: Browser inspection needs setup. With the required authorization, call computer_use_browser_prepare for the intended pid/window_id, keeping the same session and strategy {"kind":"existing_profile"}, then retry inspection. Use computer_use_get_guide with topic=browser if authorization or target IDs are unavailable.`,
+    recovery: `Browser inspection needs setup. With the required authorization, call computer_use_browser_prepare for the intended pid/window_id, keeping the same session and strategy {"kind":"existing_profile"}, then retry inspection. Use computer_use_get_guide with topic=browser if authorization or target IDs are unavailable.`,
   };
 }

@@ -180,6 +180,7 @@ const mockCtx = {
   modelRegistry: { find: vi.fn(), getApiKeyAndHeaders: vi.fn() },
 };
 const mockPi = {
+  registerMcpServer: vi.fn(),
   registerTool: vi.fn((tool: RegisteredTool) => {
     tools.set(tool.name, tool);
     // Mirror the runtime: newly registered tools become active by default.
@@ -661,7 +662,10 @@ describe('computerUseExtension', () => {
         undefined,
         mockCtx,
       ),
-    ).rejects.toBe(reason);
+    ).rejects.toMatchObject({
+      name: 'AbortError',
+      message: '[cancelled] The tool call was cancelled.',
+    });
     expect(calls).not.toContain('browser_click');
   });
 
@@ -698,6 +702,31 @@ describe('computerUseExtension', () => {
     expect(JSON.stringify(result)).not.toContain('test-token');
     expect(JSON.stringify(result)).toContain('was not executed');
     expect(JSON.stringify(result)).not.toContain('execution outcome is unknown');
+  });
+
+  it('reports that the action was not dispatched when dialog inspection throws', async () => {
+    await start();
+    const calls: string[] = [];
+    mockCallTool = (name) => {
+      calls.push(name);
+      if (name === 'browser_dialog') throw new Error('private dialog transport diagnostic');
+      return { content: [{ type: 'text', text: 'ok' }] };
+    };
+    const result = await tools
+      .get('computer_use_browser_click')!
+      .execute('click', { target_id: 'bt-123', tab_id: 'tab-456' }, undefined, undefined, mockCtx);
+    expect(calls).toContain('browser_dialog');
+    expect(calls).not.toContain('browser_click');
+    expect(result).toMatchObject({
+      isError: true,
+      structuredContent: {
+        error: {
+          code: 'driver_preflight_failed',
+          message: 'The requested action was not executed.',
+        },
+      },
+    });
+    expect(JSON.stringify(result)).not.toMatch(/private dialog|outcome is unknown/);
   });
 
   it('requests macOS permissions once on the first computer-use call', async () => {
@@ -803,7 +832,7 @@ describe('computerUseExtension', () => {
     const activeCall = listApps.execute('active', {}, undefined, undefined, mockCtx);
     controller.abort(new Error('cancelled by user'));
 
-    await expect(cancelledCall).rejects.toThrow('cancelled by user');
+    await expect(cancelledCall).rejects.toThrow('[cancelled] The tool call was cancelled.');
     connection.resolve();
     const activeResult = (await activeCall) as any;
     expect(activeResult.isError).not.toBe(true);
@@ -838,7 +867,7 @@ describe('computerUseExtension', () => {
     await Promise.resolve();
     controller.abort(new Error('cancelled by user'));
 
-    await expect(cancelledCall).rejects.toThrow('cancelled by user');
+    await expect(cancelledCall).rejects.toThrow('[cancelled] The tool call was cancelled.');
     expect(reconnect.aborted).toBe(false);
     reconnect.resolve();
     const activeResult = (await activeCall) as any;
@@ -877,7 +906,7 @@ describe('computerUseExtension', () => {
     await connection.started;
     controller.abort(new Error('cancelled by user'));
 
-    await expect(call).rejects.toThrow('cancelled by user');
+    await expect(call).rejects.toThrow('[cancelled] The tool call was cancelled.');
     expect(connection.aborted).toBe(false);
     const retryCall = listApps.execute('retry', {}, undefined, undefined, mockCtx);
     connection.resolve();
@@ -905,7 +934,7 @@ describe('computerUseExtension', () => {
     await permission.started;
     controller.abort(new Error('cancelled by user'));
 
-    await expect(call).rejects.toThrow('cancelled by user');
+    await expect(call).rejects.toThrow('[cancelled] The tool call was cancelled.');
     expect(permission.aborted).toBe(false);
     const retryCall = tools
       .get('computer_use_list_apps')!
@@ -937,7 +966,7 @@ describe('computerUseExtension', () => {
     await Promise.resolve();
     controller.abort(new Error('cancelled by user'));
 
-    await expect(cancelledCall).rejects.toThrow('cancelled by user');
+    await expect(cancelledCall).rejects.toThrow('[cancelled] The tool call was cancelled.');
     expect(permission.aborted).toBe(false);
     permission.resolve({
       content: [{ type: 'text', text: 'Permissions granted.' }],
@@ -1184,7 +1213,7 @@ describe('computerUseExtension', () => {
     await reconnect.started;
     controller.abort(new Error('cancelled by user'));
 
-    await expect(cancelledCall).rejects.toThrow('cancelled by user');
+    await expect(cancelledCall).rejects.toThrow('[cancelled] The tool call was cancelled.');
     expect(reconnect.aborted).toBe(false);
     reconnect.resolve();
     const activeResult = (await activeCall) as any;
@@ -1205,7 +1234,7 @@ describe('computerUseExtension', () => {
       tools
         .get('computer_use_click')!
         .execute('id', { pid: 1, x: 2, y: 3 }, controller.signal, undefined, mockCtx),
-    ).rejects.toThrow('cancelled by user');
+    ).rejects.toThrow('[cancelled] The tool call was cancelled.');
   });
 
   it('returns platform guidance for permission errors', async () => {

@@ -29,7 +29,7 @@ import { ModelRegistry, ModelRuntime } from '@earendil-works/pi-coding-agent';
 import type { ConsolidationModelRegistry } from './consolidation.js';
 import { MEMORY_GUIDANCE } from './guidance.js';
 import type { MemoryStore } from './store.js';
-import { createMemoryTools } from './tools.js';
+import { createMemoryTools, preserveMemoryToolFailure } from './tools.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -229,6 +229,7 @@ export function createExtractionRunner(opts: ExtractionRunnerOptions): Extractio
         const merged = { ...streamOpts, ...modelErrors.fetchOptions(m.api, streamOpts?.fetch) };
         return modelErrors.run(() => streamModelRequest(registry, m, ctx, merged, auth));
       },
+      afterToolCall: preserveMemoryToolFailure,
       convertToLlm: (msgs) => msgs as never[],
     });
 

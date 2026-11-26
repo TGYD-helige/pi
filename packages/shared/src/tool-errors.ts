@@ -1,3 +1,5 @@
+import type { JsonObject, JsonValue } from '@earendil-works/pi-ai';
+
 export type ErrorCategory =
   | 'timeout'
   | 'cancelled'
@@ -274,4 +276,159 @@ function captureResponseBody(response: Response, record: (error: unknown) => voi
     return target;
   };
   return preserveMetadata(wrapped);
+}
+
+export type AgentToolError = {
+  code: string;
+  message: string;
+  cause?: { message: string; source?: string; code?: string };
+  recovery?: string;
+};
+
+export const agentToolErrorSchema = {
+  type: 'object',
+  required: ['code', 'message'],
+  properties: {
+    code: { type: 'string' },
+    message: { type: 'string' },
+    cause: {
+      type: 'object',
+      required: ['message'],
+      properties: {
+        message: { type: 'string' },
+        source: { type: 'string' },
+        code: { type: 'string' },
+      },
+    },
+    recovery: { type: 'string' },
+  },
+} as const;
+
+function errorLine(text: string, limit = 2048): string {
+  return text
+    .slice(0, limit)
+    .replace(/[\r\n]+/g, ' ')
+    .trim();
+}
+
+/** Accept only diagnostics already vetted by the plugin's error boundary. */
+export function agentToolErrorResult(error: AgentToolError) {
+  const safe: AgentToolError = {
+    code: /^[a-z0-9_]{1,128}$/i.test(error.code) ? error.code : 'tool_failed',
+    message: errorLine(error.message) || 'Tool operation failed.',
+    ...(error.cause
+      ? {
+          cause: {
+            message: errorLine(error.cause.message),
+            ...(error.cause.source ? { source: errorLine(error.cause.source, 128) } : {}),
+            ...(error.cause.code ? { code: errorLine(error.cause.code, 128) } : {}),
+          },
+        }
+      : {}),
+    ...(error.recovery ? { recovery: errorLine(error.recovery) } : {}),
+  };
+  const lines = [`[${safe.code}] ${safe.message}`];
+  if (safe.cause) {
+    const source = safe.cause.source ? ` (${safe.cause.source})` : '';
+    lines.push(`Cause${source}: ${safe.cause.message}`);
+  }
+  if (safe.recovery) lines.push(`Recovery: ${safe.recovery}`);
+  return {
+    content: [{ type: 'text' as const, text: lines.join('\n') }],
+    structuredContent: { error: safe },
+    isError: true as const,
+  };
+}
+
+type ToolResult = {
+  content: Array<{ type: string; text?: string }>;
+  details?: unknown;
+  structuredContent?: JsonValue;
+  isError?: boolean;
+};
+
+/** Apply the agent error format at registration. CLI results and UI details may have other contracts. */
+export function withAgentToolErrors<Args extends unknown[], Result extends ToolResult>(
+  tool: { name: string; execute(...args: Args): Promise<Result> },
+  host: object | undefined,
+  packageName: string,
+  recoveryHint?: string,
+) {
+  // Pi 0.99 introduced both this extension API and resolved tool-error support.
+  // Check the running host because an extension can resolve a different peer version.
+  const legacy =
+    host !== undefined &&
+    !('registerMcpServer' in host && typeof host.registerMcpServer === 'function');
+  return async (...args: Args) => {
+    let result:
+      | Result
+      | (ReturnType<typeof agentToolErrorResult> & {
+          details: undefined;
+          structuredContent: JsonObject;
+        });
+    try {
+      result = await tool.execute(...args);
+    } catch (error) {
+      if ((args[2] as AbortSignal | undefined)?.aborted) {
+        throw new DOMException('[cancelled] The tool call was cancelled.', 'AbortError');
+      }
+      const failure = describeToolError(tool.name, error, recoveryHint);
+      const status = failure.httpStatus ? `, HTTP ${failure.httpStatus}` : '';
+      console.error(
+        `[${packageName}] ${tool.name} failed (category=${failure.errorCategory}${status})`,
+      );
+      const formatted = agentToolErrorResult({
+        code:
+          failure.errorCategory === 'request_failed'
+            ? `${tool.name}_failed`
+            : failure.errorCategory,
+        message: failure.error,
+      });
+      result = {
+        ...formatted,
+        details: undefined,
+        structuredContent: {
+          ...formatted.structuredContent,
+          errorCategory: failure.errorCategory,
+          ...(failure.httpStatus ? { httpStatus: failure.httpStatus } : {}),
+          truncated: false,
+        },
+      };
+    }
+    if (!result.isError) return result;
+    const structured = result.structuredContent;
+    const data =
+      structured && typeof structured === 'object' && !Array.isArray(structured)
+        ? (structured as JsonObject)
+        : undefined;
+    const error = data?.error;
+    let formatted: ReturnType<typeof agentToolErrorResult>;
+    if (
+      error &&
+      typeof error === 'object' &&
+      'code' in error &&
+      typeof error.code === 'string' &&
+      'message' in error &&
+      typeof error.message === 'string'
+    ) {
+      formatted = agentToolErrorResult(error as AgentToolError);
+    } else {
+      const fields = data ?? (result.details as Record<string, unknown> | undefined);
+      const text = result.content.find((item) => item.type === 'text')?.text;
+      const category = fields?.errorCategory;
+      formatted = agentToolErrorResult({
+        code:
+          typeof category === 'string' && category !== 'request_failed'
+            ? category
+            : `${tool.name}_failed`,
+        message: typeof error === 'string' ? error : text || 'Tool operation failed.',
+      });
+    }
+    if (legacy) throw new Error(formatted.content[0]!.text);
+    return {
+      ...result,
+      ...formatted,
+      structuredContent: { ...data, ...formatted.structuredContent },
+    };
+  };
 }

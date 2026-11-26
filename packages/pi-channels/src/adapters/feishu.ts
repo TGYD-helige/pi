@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { ValidationError } from '@amaster.ai/pi-shared';
 import * as lark from '@larksuiteoapi/node-sdk';
 import type {
   AdapterConfig,
@@ -426,7 +427,10 @@ export function createFeishuAdapter(
   }
 
   async function sendText(message: ChannelMessage, signal?: AbortSignal): Promise<void> {
-    if (!message.text) throw new Error('Feishu adapter requires text');
+    if (!message.text)
+      throw new ValidationError(
+        'The request was rejected before sending. The Feishu adapter requires text.',
+      );
     const text = message.source ? `[${message.source}]\n${message.text}` : message.text;
 
     const replyToMessageId =

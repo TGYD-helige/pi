@@ -141,7 +141,7 @@ Hooks are best-effort observability callbacks. If a hook throws, the scheduler s
 
 ## Structured results (Pi 0.99+)
 
-Scheduler tools declare `outputSchema`. List returns `{ tasks, total, truncated }`; create/get/update/run_now return `{ task, truncated }`; delete returns `{ taskId, deleted, truncated }`. Structured task prompts are complete when the task record is not marked `truncated`, even when the readable summary shows only the first 100 characters. Oversized task records omit the prompt and preserve the task ID for updates/deletion. Get includes stored task metadata and run-history identifiers/status/timestamps, excluding raw execution error messages. Missing tasks, invalid schedules, and backend failures return `{ error, truncated }` with `isError: true`. The existing session scope applies equally to scripts.
+Scheduler tools declare `outputSchema`. List returns `{ tasks, total, truncated }`; create/get/update/run_now return `{ task, truncated }`; delete returns `{ taskId, deleted, truncated }`. Structured task prompts are complete when the task record is not marked `truncated`, even when the readable summary shows only the first 100 characters. Oversized task records omit the prompt and preserve the task ID for updates/deletion. Get includes stored task metadata and run-history identifiers/status/timestamps, excluding raw execution error messages. Missing tasks, invalid schedules, and backend failures return `{ error: { code, message }, truncated }` with `isError: true`. The existing session scope applies equally to scripts. See the [tool error migration guide](../../README.md#tool-error-migration) for existing scripts and older Pi versions.
 
 ```javascript
 const result = await tools.scheduler_list({});

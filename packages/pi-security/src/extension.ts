@@ -5,6 +5,7 @@ import type {
   ToolCallRequest,
   ToolSource,
 } from '@amaster.ai/pi-shared';
+import { agentToolErrorResult } from '@amaster.ai/pi-shared';
 import { isProjectTrusted, loadPiSettingsAsync } from '@amaster.ai/pi-shared/settings';
 import type {
   ExtensionAPI,
@@ -163,7 +164,11 @@ export async function authorizePiToolCall(
 ): Promise<ToolCallEventResult | undefined> {
   const decision = await authorizeCurrentCall(ctx, state, toolCallFromPiEvent(event));
   if (decision?.kind === 'deny' || decision?.kind === 'ask') {
-    return { block: true, reason: decision.reason };
+    const result = agentToolErrorResult({
+      code: 'tool_call_blocked',
+      message: `The tool did not execute. ${decision.reason}`,
+    });
+    return { block: true, reason: result.content[0]!.text };
   }
   return undefined;
 }

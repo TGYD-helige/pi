@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { describeToolError } from '@amaster.ai/pi-shared';
+import { describeToolError, withAgentToolErrors } from '@amaster.ai/pi-shared';
 import { isProjectTrusted, loadPiSettings, resolveHome } from '@amaster.ai/pi-shared/settings';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import {
@@ -146,7 +146,7 @@ export default function memoryExtension(
       ctx.ui.setStatus(STATUS_KEY, systemPromptSnapshot ? 'memory: loaded' : 'memory: empty');
 
       for (const tool of createMemoryTools(store)) {
-        pi.registerTool(tool);
+        pi.registerTool({ ...tool, execute: withAgentToolErrors(tool, pi, 'pi-memory') });
       }
 
       if (config.extractionModel && store) {

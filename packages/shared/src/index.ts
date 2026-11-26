@@ -504,6 +504,9 @@ export {
   trustedHostsFromUrls,
 } from './network.js';
 export {
+  type AgentToolError,
+  agentToolErrorResult,
+  agentToolErrorSchema,
   classifyError,
   createModelErrorCapture,
   describeMcpError,
@@ -513,5 +516,6 @@ export {
   modelResponseError,
   SafeToolError,
   ValidationError,
+  withAgentToolErrors,
 } from './tool-errors.js';
 export { boundStructuredContent } from './tool-output.js';

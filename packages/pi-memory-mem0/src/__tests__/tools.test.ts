@@ -290,7 +290,7 @@ describe('mem0_memory tool', () => {
         { action: 'add', content: 'prefers tea' },
       );
       expect(result.isError).toBe(true);
-      expect(result.content[0]!.text).toBe('Mem0 memory write failed.');
+      expect(result.content[0]!.text).toBe('[mem0_write_rejected] Mem0 memory write failed.');
     });
 
     it('rejects empty content', async () => {

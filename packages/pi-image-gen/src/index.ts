@@ -1,9 +1,10 @@
-import { classifyError } from '@amaster.ai/pi-shared';
+import { classifyError, withAgentToolErrors } from '@amaster.ai/pi-shared';
 import { isProjectTrusted } from '@amaster.ai/pi-shared/settings';
 import { StringEnum } from '@earendil-works/pi-ai';
 import {
   type ExtensionAPI,
   type ExtensionContext,
+  type ToolDefinition,
   truncateHead,
 } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
@@ -61,6 +62,8 @@ export interface ImageToolCapabilities {
 }
 
 export default function piImageGenExtension(pi: ExtensionAPI): void {
+  const registerTool = (tool: ToolDefinition) =>
+    pi.registerTool({ ...tool, execute: withAgentToolErrors(tool, pi, 'pi-image-gen') });
   let settings: ImageGenSettings = {};
   let sessionCwd = process.cwd();
 
@@ -87,7 +90,7 @@ export default function piImageGenExtension(pi: ExtensionAPI): void {
   // otherwise have to reason about.
   const registerImageTool = (): void => {
     const caps = resolveImageToolCapabilities(settings);
-    pi.registerTool({
+    registerTool({
       name: 'image_generate',
       outputSchema: imageOutputSchema,
       label: 'ImageGen',

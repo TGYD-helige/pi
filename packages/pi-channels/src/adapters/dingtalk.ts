@@ -1,3 +1,4 @@
+import { ValidationError } from '@amaster.ai/pi-shared';
 import type { DWClient, DWClientDownStream } from 'dingtalk-stream';
 import type {
   AdapterConfig,
@@ -93,7 +94,10 @@ function normalizeConfig(config: AdapterConfig): NormalizedDingTalkConfig {
 }
 
 function textFromMessage(message: ChannelMessage): string {
-  if (!message.text) throw new Error('DingTalk adapter requires text');
+  if (!message.text)
+    throw new ValidationError(
+      'The request was rejected before sending. The DingTalk adapter requires text.',
+    );
   return message.source ? `[${message.source}]\n${message.text}` : message.text;
 }
 
@@ -280,7 +284,10 @@ export function createDingTalkAdapter(
     signal: AbortSignal,
   ): Promise<void> {
     const conversationId = recipient.trim();
-    if (!conversationId) throw new Error('DingTalk adapter requires recipient');
+    if (!conversationId)
+      throw new ValidationError(
+        'The request was rejected before sending. The DingTalk adapter requires a recipient.',
+      );
     const token = await getAccessToken(signal);
     const response = await fetch(
       `${normalizeApiBaseUrl(cfg.openApiBaseUrl)}/v1.0/robot/groupMessages/send`,

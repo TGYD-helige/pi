@@ -1,10 +1,11 @@
+import { type AgentToolError, agentToolErrorSchema } from '@amaster.ai/pi-shared';
 import { truncateHead } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
 import type { FetchResponse, SearchResponse } from './providers/index.js';
 
 const MAX_BYTES = 16 * 1024;
 const errorSchema = Type.Object({
-  error: Type.String(),
+  error: Type.Unsafe<AgentToolError>(agentToolErrorSchema),
   errorCategory: Type.Union([
     Type.Literal('timeout'),
     Type.Literal('http_error'),
