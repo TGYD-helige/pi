@@ -4,9 +4,16 @@ import { BUILT_IN_VIDEO_MODELS, findBuiltInModel } from '../providers/models.js'
 describe('model registry', () => {
   it('resolves the current video releases with provider-specific defaults', () => {
     for (const [alias, id, provider, resolution, maxDuration] of [
+      ['magi-2', 'magi-2', 'sand', '1080p', 30],
+      ['seedance-2.5-flash', 'doubao-seedance-2-5-flash-261115', 'ark', '720p', 30],
       ['seedance-2.5', 'doubao-seedance-2-5-260628', 'ark', '720p', 30],
       ['minimax-h3-highspeed', 'MiniMax-H3-Highspeed', 'minimax', '768P', 15],
       ['minimax-h3-lite', 'MiniMax-H3-Lite', 'minimax', '768P', 15],
+      ['minimax-h3-max-turbo', 'MiniMax-H3-Max-Turbo', 'minimax', '768P', 15],
+      ['minimax-h3-mg', 'MiniMax-H3-MG', 'minimax', '768P', 15],
+      ['minimax-h3-nc', 'MiniMax-H3-NC', 'minimax', '768P', 15],
+      ['kling-4.0', 'kling-4.0', 'kling', '1080p', 30],
+      ['kling-4.0-flash', 'kling-4.0-flash', 'kling', '720p', 20],
       ['minimax-h3-max', 'MiniMax-H3-Max', 'minimax', '768P', 15],
       ['veo-3.1-fast', 'google/veo-3.1-fast', 'openrouter', '720p', 8],
       ['veo-3.1-lite', 'google/veo-3.1-lite', 'openrouter', '720p', 8],
@@ -31,9 +38,10 @@ describe('model registry', () => {
   it('contains only smoke-testable models (no placeholders)', () => {
     expect(BUILT_IN_VIDEO_MODELS.length).toBeGreaterThanOrEqual(9);
     for (const m of BUILT_IN_VIDEO_MODELS) {
-      expect(['ark', 'dashscope', 'kling', 'openrouter', 'minimax']).toContain(m.provider);
+      expect(['ark', 'dashscope', 'kling', 'openrouter', 'minimax', 'sand']).toContain(m.provider);
       expect(
-        m.id.startsWith('doubao-seedance-') ||
+        m.id === 'magi-2' ||
+          m.id.startsWith('doubao-seedance-') ||
           m.id.startsWith('wan3.0-') ||
           m.id.startsWith('happyhorse-') ||
           m.id.startsWith('kling-') ||
@@ -50,9 +58,9 @@ describe('model registry', () => {
     const h3 = findBuiltInModel('minimax-h3')!;
     expect(h3.id).toBe('MiniMax-H3');
     expect(h3.provider).toBe('minimax');
-    expect(h3.capabilities.resolutions).toEqual(['768P', '2K']);
+    expect(h3.capabilities.resolutions).toEqual(['480P', '768P', '2K']);
     expect(h3.capabilities.aspectRatios).not.toContain('adaptive');
-    expect(h3.capabilities.nativeAudio).toBe(false);
+    expect(h3.capabilities.nativeAudio).toBe(true);
     expect(h3.capabilities.supportsFirstLastFrame).toBe(true);
     expect(h3.capabilities.durations).toEqual([4, 15]);
     expect(findBuiltInModel('MiniMax-H3')?.id).toBe('MiniMax-H3');

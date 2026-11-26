@@ -11,14 +11,21 @@
  */
 
 /** Wire format, NOT vendor — the same model via official or proxy endpoints differs only in baseUrl. */
-export type VideoApiStyle = 'ark' | 'kling' | 'dashscope' | 'openrouter' | 'newapi' | 'minimax';
+export type VideoApiStyle =
+  | 'ark'
+  | 'kling'
+  | 'dashscope'
+  | 'openrouter'
+  | 'newapi'
+  | 'minimax'
+  | 'sand';
 
 export type ReferenceAssetModality = 'image' | 'video' | 'audio';
 
 /** A provider-managed trusted asset selected in the caller's current account/project. */
 export type ReferenceAsset = {
   modality: ReferenceAssetModality;
-  /** Canonical id only (`asset-...`); public inputs may also use `asset://asset-...`. */
+  /** Canonical provider asset ID; public inputs may include the `asset://` prefix. */
   assetId: string;
 };
 

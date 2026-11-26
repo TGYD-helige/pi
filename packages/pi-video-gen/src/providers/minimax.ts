@@ -152,6 +152,7 @@ export const minimaxAdapter: VideoProviderAdapter = {
     };
     if (params.resolution) body.resolution = params.resolution;
     if (params.durationSec != null) body.duration = params.durationSec;
+    if (params.generateAudio != null) body.generate_audio = params.generateAudio;
     // A first frame forces ratio=adaptive server-side — sending one is ignored;
     // t2v requires a concrete ratio, reference-only takes it optionally.
     if (params.aspectRatio && !params.firstFramePath) body.ratio = params.aspectRatio;

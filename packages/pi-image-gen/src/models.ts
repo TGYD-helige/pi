@@ -129,7 +129,7 @@ export const BUILT_IN_MODELS: BuiltInModelEntry[] = [
   //   Nano Banana 2        → gemini-3.1-flash-image
   //   Nano Banana 2 Lite   → gemini-3.1-flash-lite-image
   //   Nano Banana          → gemini-2.5-flash-image (shutdown date:
-  //     2026-10-02; retained for compatible gateways)
+  //     2027-03-15; retained for compatible gateways)
   // Input formats PNG/JPEG/WEBP/HEIC/HEIF; inline requests cap at 100MB total
   // (raised from 20MB in 2026-01).
   {
@@ -287,8 +287,27 @@ export const BUILT_IN_MODELS: BuiltInModelEntry[] = [
   // older -260128 id no longer appears) and treat doubao-seedream-5-0-260128
   // and doubao-seedream-5-0-lite-260128 as the SAME model — hence the merged
   // entry below. The retired ids stay as aliases so existing configs resolve.
-  // User-supplied API ID; leave capabilities unset until provider limits are published.
+  // Keep the original gateway ID usable alongside the official Ark model ID.
   { id: 'seedream-5.5', provider: 'ark' },
+  {
+    id: 'doubao-seedream-5-5-261028',
+    provider: 'ark',
+    capabilities: {
+      sizeRange: {
+        separator: 'x',
+        tiers: ['1K', '1.5K', '2K'],
+        minArea: 921_600,
+        maxArea: 4_624_220,
+        minRatio: 1 / 16,
+        maxRatio: 16,
+      },
+      nMax: 1,
+      maxReferenceImages: 10,
+      inputFormats: SEEDREAM_INPUT_FORMATS,
+      inputMaxBytes: 30 * MB,
+      inputDimAdvice: SEEDREAM_DIM_ADVICE,
+    },
+  },
   {
     id: 'doubao-seedream-5-0-pro-260628',
     aliases: ['seedream-5-pro', 'doubao-seedream-5-0-pro-260128'],

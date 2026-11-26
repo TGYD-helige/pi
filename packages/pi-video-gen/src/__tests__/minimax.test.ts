@@ -34,12 +34,20 @@ describe('minimaxAdapter.submit (v2)', () => {
     'MiniMax-H3-Highspeed',
     'MiniMax-H3-Lite',
     'MiniMax-H3-Max',
+    'MiniMax-H3-Max-Turbo',
+    'MiniMax-H3-NC',
   ])('sends %s with its lower-resolution profile', async (model) => {
     let body: Record<string, unknown> = {};
     const handle = await minimaxAdapter.submit(
       provider,
       model,
-      { prompt: 'waves', durationSec: 5, resolution: '480P', aspectRatio: '16:9' },
+      {
+        prompt: 'waves',
+        durationSec: 5,
+        resolution: '480P',
+        aspectRatio: '16:9',
+        generateAudio: false,
+      },
       mockFetch((_url, init) => {
         body = JSON.parse(String(init?.body));
         return jsonResponse(200, { task_id: 'variant-1' });
@@ -49,6 +57,7 @@ describe('minimaxAdapter.submit (v2)', () => {
     expect(body.model).toBe(model);
     expect(body.resolution).toBe('480P');
     expect(body.duration).toBe(5);
+    expect(body.generate_audio).toBe(false);
   });
 
   it('retains timeout classification while preserving paid-submit uncertainty', async () => {

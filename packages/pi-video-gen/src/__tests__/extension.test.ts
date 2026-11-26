@@ -948,13 +948,20 @@ describe('pi-video-gen extension', () => {
     expect(result.content[0]!.text).toMatch(/newapi.*does not support trusted asset/i);
   });
 
-  it('video_generate maps firstFrame→firstFramePath and applies model defaults', async () => {
-    // ark key via global settings
+  it.each([
+    'ark',
+    'sand',
+  ])('video_generate applies %s model defaults and input roles', async (provider) => {
     mkdirSync(join(home, '.pi', 'agent'), { recursive: true });
     const { writeFileSync } = await import('node:fs');
     writeFileSync(
       join(home, '.pi', 'agent', 'settings.json'),
-      JSON.stringify({ 'pi-video-gen': { providers: { ark: { apiKey: 'k' } } } }),
+      JSON.stringify({
+        'pi-video-gen': {
+          defaultModel: provider === 'sand' ? 'magi-2' : 'seedance-2.0',
+          providers: { [provider]: { apiKey: 'k' } },
+        },
+      }),
     );
     await startSession(cwd);
 
@@ -988,21 +995,35 @@ describe('pi-video-gen extension', () => {
       const result = await tools.get('video_generate')!.execute(
         'c1',
         {
-          prompt: { visuals: 'static wide shot', action: 'waves rolling' },
-          firstFrame: framePath,
+          ...VALID_GENERATE_PARAMS,
+          ...(provider === 'sand'
+            ? { referenceAssets: [{ modality: 'video', assetId: 'asset://123' }] }
+            : { firstFrame: framePath }),
         },
         undefined,
         undefined,
         fakeCtx(cwd),
       );
-      expect(result.isError).toBeUndefined();
+      expect(result.isError, result.content[0]?.text).toBeUndefined();
       const submit = seen[0]!.body!;
       const content = submit.content as { type: string; role?: string }[];
-      expect(content[1]?.role).toBe('first_frame'); // firstFrame was NOT dropped
+      if (provider === 'sand') {
+        expect(seen[0]?.url).toBe(
+          'https://api.sand.ai/compatible/ark/api/v3/contents/generations/tasks',
+        );
+        expect(content[1]).toEqual({
+          type: 'video_url',
+          role: 'reference_video',
+          video_url: { url: 'asset://123' },
+        });
+        expect(submit).not.toHaveProperty('watermark');
+      } else {
+        expect(content[1]?.role).toBe('first_frame');
+      }
       expect(submit.resolution).toBe('1080p'); // model default applied
       expect(submit.ratio).toBe('16:9');
       expect(submit.duration).toBe(5);
-      expect(submit.generate_audio).toBe(true); // seedance nativeAudio
+      expect(submit.generate_audio).toBe(true);
     } finally {
       vi.unstubAllGlobals();
     }

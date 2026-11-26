@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 import { loadPiSettings } from '@amaster.ai/pi-shared/settings';
 import { providerLabel, VideoGenError } from './errors.js';
-import { ARK_DEFAULT_BASE_URL } from './providers/ark.js';
+import { ARK_DEFAULT_BASE_URL, SAND_DEFAULT_BASE_URL } from './providers/ark.js';
 import { DASHSCOPE_DEFAULT_BASE_URL } from './providers/dashscope.js';
 import { KLING_DEFAULT_BASE_URL } from './providers/kling.js';
 import { MINIMAX_DEFAULT_BASE_URL } from './providers/minimax.js';
@@ -39,6 +39,7 @@ const PROJECT_ALLOWED_KEYS = new Set(['outputDir', 'defaultModel', 'rateLimit', 
 // a missing baseUrl is a configuration error (see requireBaseUrl).
 const PROVIDER_DEFAULT_BASE_URLS: Partial<Record<VideoApiStyle, string>> = {
   ark: ARK_DEFAULT_BASE_URL,
+  sand: SAND_DEFAULT_BASE_URL,
   kling: KLING_DEFAULT_BASE_URL,
   dashscope: DASHSCOPE_DEFAULT_BASE_URL,
   openrouter: OPENROUTER_DEFAULT_BASE_URL,
@@ -190,7 +191,7 @@ function validateCapabilities(value: unknown, path: string): void {
   }
 }
 
-const WIRE_FORMATS = ['ark', 'kling', 'dashscope', 'openrouter', 'newapi', 'minimax'];
+const WIRE_FORMATS = ['ark', 'kling', 'dashscope', 'openrouter', 'newapi', 'minimax', 'sand'];
 
 function validateCustomProviders(value: unknown): void {
   if (value === undefined) return;
@@ -450,12 +451,16 @@ function resolveCustomModel(settings: VideoGenSettings, wanted: string): Resolve
 /**
  * Resolve a model id/alias (defaulting to settings.defaultModel, then
  * DEFAULT_VIDEO_MODEL_ID). Built-in registry wins over custom provider
- * models on conflict.
+ * models on conflict. An unconfigured built-in Sand route preserves an existing MAGI-2 relay.
  */
 export function resolveModel(settings: VideoGenSettings, modelId?: string): ResolvedModel | null {
   const wanted = modelId ?? settings.defaultModel ?? DEFAULT_VIDEO_MODEL_ID;
   const entry = findBuiltInModel(wanted);
   if (entry) {
+    if (entry.provider === 'sand' && !settings.providers?.sand?.apiKey) {
+      const custom = resolveCustomModel(settings, wanted);
+      if (custom) return custom;
+    }
     return {
       entry,
       remoteId: entry.remoteId ?? entry.id,

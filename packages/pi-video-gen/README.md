@@ -6,10 +6,11 @@ Pi extension for video creation. `video_generate` calls a video model directly f
 
 | Wire format | Models | Status |
 |---|---|---|
-| `ark` (Volcengine Ark) | Seedance 2.5 / 2.0 standard / fast / mini | ✅ built-in |
+| `ark` (Volcengine Ark) | Seedance 2.5 / 2.5 Flash / 2.0 standard / fast / mini | ✅ built-in |
+| `sand` (Sand AI) | MAGI-2 (Ark-compatible API) | ✅ built-in |
 | `dashscope` (Alibaba) | HappyHorse 1.1 / 1.0 (t2v/i2v/r2v auto-routed); Wan 3.0 / Prime | ✅ built-in |
-| `kling` (Kuaishou) | Kling 3.0 Turbo / 3.0 Omni (API 2.0) | ✅ built-in |
-| `minimax` | MiniMax-H3 / H3-Highspeed / H3-Lite / H3-Max (v2 API) | ✅ built-in |
+| `kling` (Kuaishou) | Kling 4.0 / 4.0 Flash / 3.0 Turbo / 3.0 Omni | ✅ built-in |
+| `minimax` | MiniMax H3 / Highspeed / Lite / Max / Max Turbo / MG / NC (v2 API) | ✅ built-in |
 | `openrouter` | google/veo-3.1 / fast / lite; google/gemini-omni-1.1-flash / 1.2-flash (+ custom models) | ✅ built-in |
 | `newapi` | self-hosted NewAPI relay (Kling / Jimeng / Vidu / Gemini channels) | ✅ via `customProviders` — `baseUrl` **required** |
 | custom | your own endpoints | ✅ via `customProviders` |
@@ -20,9 +21,13 @@ Registry entries are written against provider documentation (each adapter's head
 
 | Alias | Remote model ID | Output supported by this extension |
 |---|---|---|
-| `seedance-2.5` | `doubao-seedance-2-5-260628` | 4–30s; 480p/720p/1080p; image/video/audio trusted assets, up to 30/10/10 respectively |
+| `seedance-2.5` | `doubao-seedance-2-5-260628` | 4–30s; 480p/720p/1080p/4k; image/video/audio trusted assets, up to 30/10/10 respectively |
+| `seedance-2.5-flash` | `doubao-seedance-2-5-flash-261115` | 4–30s; 480p/720p; up to 10/5/5 image/video/audio references |
+| `magi-2` | `magi-2` | 4–30s; 1080p; audio; first/last frames or up to 10/5/5 image/video/audio references |
+| `kling-4.0`, `kling-4.0-flash` | `kling-4.0`, `kling-4.0-flash` | Standard: 3–30s, 720p/1080p/4k, first/last frames. Flash: 3–20s, 720p, first frame |
 | `minimax-h3-highspeed`, `minimax-h3-lite` | `MiniMax-H3-Highspeed`, `MiniMax-H3-Lite` | 4–15s; 480P/768P |
-| `minimax-h3-max` | `MiniMax-H3-Max` | 5–15s; 480P/768P |
+| `minimax-h3-max`, `minimax-h3-max-turbo` | `MiniMax-H3-Max`, `MiniMax-H3-Max-Turbo` | 5–15s; 480P/768P |
+| `minimax-h3-mg`, `minimax-h3-nc` | `MiniMax-H3-MG`, `MiniMax-H3-NC` | 4–15s; MG: 768P/2K, NC: 480P/768P |
 | `veo-3.1`, `veo-3.1-fast` | `google/veo-3.1`, `google/veo-3.1-fast` | Exactly 4/6/8s; 720p/1080p/4K; 16:9 or 9:16 |
 | `veo-3.1-lite` | `google/veo-3.1-lite` | Exactly 4/6/8s; 720p/1080p; 16:9 or 9:16 |
 | `gemini-omni-1.1-flash`, `gemini-omni-1.2-flash` | `google/gemini-omni-1.1-flash`, `google/gemini-omni-1.2-flash` | 3–10s / 3–15s; 360p/720p/1080p/4K; 16:9 or 9:16 |
@@ -31,6 +36,8 @@ Registry entries are written against provider documentation (each adapter's head
 Seedance 2.0 standard additionally exposes 4k, and HappyHorse 1.1 exposes 480P. OpenRouter reference-image inputs retain the extension's conservative two-image limit; provider-specific combinations of duration, resolution, audio and reference mode may impose further constraints.
 
 **Seedance 2.5** ([official guide](https://docs.volcengine.com/docs/ark/seedance-2-5?lang=zh)): first/last-frame generation automatically sends `ratio=adaptive` to preserve the input frame shape. The existing tool supports explicit clip durations and reference generation; video editing/extension requiring `duration=-1` is not exposed. 1080p output uses 10-bit H.265/HEVC; check player and assembly compatibility.
+
+**MAGI-2** ([Sand AI Ark API](https://platform.sand.ai/docs/ark-generations/)): set `pi-video-gen.defaultModel` to `magi-2` and `pi-video-gen.providers.sand.apiKey` to `"${SAND_API_KEY}"` in global or agent-dir settings. Sand must enable the model for your organization. For provider-managed references, pass the numeric IDs from the same Sand organization. Frame interpolation and general references use separate requests.
 
 **Wan 3.0** ([official API](https://help.aliyun.com/en/model-studio/wan3-video-generation-api-reference)): configure `providers.dashscope.baseUrl` with the workspace endpoint documented for your account/region, such as `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com`. Frames and reference images cannot be mixed; a last frame requires a first frame. The adapter keeps the model ID unchanged and maps the native-audio decision to `parameters.audio`. Video/audio/file/link reference inputs and smart duration are not exposed by the existing tool.
 
@@ -101,11 +108,11 @@ Models with discrete clip durations expose `capabilities.durationValues` alongsi
 }
 ```
 
-**MiniMax notes** (v2 API, [create](https://platform.minimax.io/docs/api-reference/video-generation-v2-create) / [query](https://platform.minimax.io/docs/api-reference/video-generation-v2-query)): MiniMax-H3 speaks a multimodal task API — prompt + frames ride in one `content` array with `first_frame` / `last_frame` / `reference_image` roles (first/last frames and reference images are mutually exclusive; a last frame requires a first frame). H3 resolution is `768P` or `2K`, duration 4–15s; Highspeed/Lite use `480P` or `768P`, 4–15s; Max uses `480P` or `768P`, 5–15s. All use ratio `16:9|4:3|1:1|3:4|9:16|21:9` — required and non-adaptive for text-to-video, ignored (forced adaptive) once a first frame is present. There is no audio toggle, no idempotency key and no documented cancel endpoint, so ambiguous submits are parked for manual resolution rather than auto-retried. Auth is a plain Bearer key (`providers.minimax.apiKey`, env `MINIMAX_API_KEY`), and keys are region-locked: the default endpoint is international `api.minimax.io` — mainland-China keys need `providers.minimax.baseUrl` set to `https://api.minimaxi.com` (and vice versa a 401 means wrong region). Result URLs are time-limited; clips are downloaded immediately, and tasks stay queryable for 7 days.
+**MiniMax notes** (v2 API, [create](https://platform.minimax.io/docs/api-reference/video-generation-v2-create) / [query](https://platform.minimax.io/docs/api-reference/video-generation-v2-query)): MiniMax-H3 speaks a multimodal task API — prompt + frames ride in one `content` array with `first_frame` / `last_frame` / `reference_image` roles (first/last frames and reference images are mutually exclusive; a last frame requires a first frame). H3 resolution is `480P`, `768P` or `2K`, duration 4–15s. See the model table for variant-specific limits. All use ratio `16:9|4:3|1:1|3:4|9:16|21:9` — required and non-adaptive for text-to-video, ignored (forced adaptive) once a first frame is present. The extension sends `generate_audio` for native audio. The API has no documented idempotency key or cancel endpoint, so ambiguous submits are parked for manual resolution rather than auto-retried. Auth is a plain Bearer key (`providers.minimax.apiKey`, env `MINIMAX_API_KEY`), and keys are region-locked: the default endpoint is international `api.minimax.io` — mainland-China keys need `providers.minimax.baseUrl` set to `https://api.minimaxi.com` (and vice versa a 401 means wrong region). Result URLs are time-limited; clips are downloaded immediately, and tasks stay queryable for 7 days.
 
-**Kling notes** (verified against kling.ai/document-api via browser, 2026-07): current Kling API 2.0 uses a plain API key (`providers.kling.apiKey`, env `KLING_API_KEY`) — the JWT ak/sk scheme is legacy. The model lives in the URL path (`kling-3.0-turbo` / `kling-3.0`); default base is `api-singapore.klingai.com` (regional endpoints via `baseUrl`). Kling 3.0 Omni supports last-frame, native audio and 4k; Turbo is first-frame-only and silent. Submits carry `external_task_id` (our request fingerprint), so ambiguous failures are looked up first; an inconclusive lookup is parked for manual resolution rather than blindly resubmitted.
+**Kling notes** (verified against kling.ai/document-api via browser, 2026-07): current Kling API 2.0 uses a plain API key (`providers.kling.apiKey`, env `KLING_API_KEY`) — the JWT ak/sk scheme is legacy. The model lives in the URL path (`kling-3.0-turbo` / `kling-3.0`); default base is `api-singapore.klingai.com` (regional endpoints via `baseUrl`). Kling 3.0 Omni supports last-frame, native audio and 4k; Turbo is first-frame-only and silent. Kling 4.0 and Flash use the documented text and frame routes. The separate Kling Omni reference and HDR options are outside the current tool contract. Submits carry `external_task_id` (our request fingerprint), so ambiguous failures are looked up first; an inconclusive lookup is parked for manual resolution rather than blindly resubmitted.
 
-**HappyHorse notes**: no native audio and no last-frame interpolation (`nativeAudio: false`, `supportsFirstLastFrame: false` in the capability table, so the tools hide/reject those options). One call takes either a first frame (i2v) OR reference images (r2v, prompt them as `[Image 1]`, `[Image 2]`, …), not both. The default endpoint is the classic `dashscope.aliyuncs.com` (no workspace id needed); if you use a new Bailian workspace, set `providers.dashscope.baseUrl` to `https://{workspaceId}.cn-beijing.maas.aliyuncs.com`. Video/task URLs expire after 24h — clips are downloaded immediately.
+**HappyHorse notes**: output can contain sound. Pi exposes no audio toggle or last-frame interpolation for these models. One call takes either a first frame (i2v) OR reference images (r2v, prompt them as `[Image 1]`, `[Image 2]`, …), not both. The default endpoint is the classic `dashscope.aliyuncs.com` (no workspace id needed); if you use a new Bailian workspace, set `providers.dashscope.baseUrl` to `https://{workspaceId}.cn-beijing.maas.aliyuncs.com`. Video/task URLs expire after 24h — clips are downloaded immediately.
 
 **Trust boundary**: `providers.*`, `customProviders.*` and `ffmpegPath` are honored ONLY from global / agent-dir settings — project-level `.pi/settings.json` can set `outputDir`, `defaultModel`, `rateLimit`, `concurrency` only (and only when the project is trusted). A malicious repo cannot redirect your API key or swap binaries.
 

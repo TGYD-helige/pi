@@ -619,18 +619,21 @@ class OSSProvider implements Mem0Provider {
     const config: Record<string, unknown> = {};
 
     const defaultEmbedder = { provider: 'openai', config: { model: 'text-embedding-3-small' } };
-    const defaultLlm = { provider: 'openai', config: { model: 'gpt-4.1-nano' } };
-
+    const llm = this.ossConfig?.llm;
     let embedderProvider = this.ossConfig?.embedder?.provider || defaultEmbedder.provider;
     const embedderCfg: Record<string, unknown> = {
       ...defaultEmbedder.config,
       ...(this.ossConfig?.embedder?.config ?? {}),
     };
 
-    let llmProvider = this.ossConfig?.llm?.provider || defaultLlm.provider;
+    let llmProvider = llm?.provider || (llm ? 'openai' : 'deepseek');
     const llmCfg: Record<string, unknown> = {
-      ...defaultLlm.config,
-      ...(this.ossConfig?.llm?.config ?? {}),
+      ...(llmProvider === 'deepseek'
+        ? { model: 'deepseek-flash', extraBody: { thinking: { type: 'disabled' } } }
+        : llmProvider === 'openai'
+          ? { model: 'gpt-6-luna' }
+          : {}),
+      ...llm?.config,
     };
 
     // Resolve provider info (apiKey + baseUrl + api) from pi model registry
@@ -648,7 +651,10 @@ class OSSProvider implements Mem0Provider {
         if (info) {
           if (info.apiKey) llmCfg.apiKey = info.apiKey;
           if (info.baseUrl) llmCfg.baseURL = info.baseUrl;
-          llmProvider = mapApiToMem0Provider(info.api, llmProvider);
+          // Keep the DeepSeek SDK's endpoint and DEEPSEEK_API_KEY fallback.
+          if (llmProvider !== 'deepseek') {
+            llmProvider = mapApiToMem0Provider(info.api, llmProvider);
+          }
         }
       }
     } else if (this.resolveKey) {
@@ -663,6 +669,10 @@ class OSSProvider implements Mem0Provider {
       }
     }
 
+    if (llmProvider === 'deepseek' && !llmCfg.apiKey) {
+      // An explicit empty key prevents Mem0's config merge from substituting OPENAI_API_KEY.
+      llmCfg.apiKey = llmCfg.api_key ?? process.env.DEEPSEEK_API_KEY ?? '';
+    }
     config.embedder = { provider: embedderProvider, config: embedderCfg };
     config.llm = { provider: llmProvider, config: llmCfg };
 

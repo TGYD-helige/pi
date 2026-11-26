@@ -242,8 +242,33 @@ describe('createMem0Provider additional scenarios', () => {
     };
     expect(embedder.provider).toBe('openai');
     expect(embedder.config.model).toBe('text-embedding-3-small');
-    expect(llm.provider).toBe('openai');
-    expect(llm.config.model).toBe('gpt-4.1-nano');
+    expect(llm.provider).toBe('deepseek');
+    expect(llm.config).toMatchObject({
+      model: 'deepseek-flash',
+      extraBody: { thinking: { type: 'disabled' } },
+    });
+  });
+
+  it('does not pass an OpenAI key to DeepSeek when the registry has no DeepSeek key', async () => {
+    vi.stubEnv('OPENAI_API_KEY', 'openai-only-key');
+    vi.stubEnv('DEEPSEEK_API_KEY', undefined);
+    try {
+      const { createMem0Provider: create } = await import('../provider.js');
+      const provider = await create({
+        config: { mode: 'embedded' },
+        resolveProvider: async (name) =>
+          name === 'deepseek'
+            ? { api: 'openai-completions', baseUrl: 'https://api.deepseek.com' }
+            : { apiKey: 'openai-only-key' },
+      });
+      await provider.getAll({ userId: 'test-user' });
+      expect(__capturedMem0Config).toMatchObject({
+        embedder: { config: { apiKey: 'openai-only-key' } },
+        llm: { provider: 'deepseek', config: { apiKey: '' } },
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('passes custom extraction instructions to mem0 OSS', async () => {

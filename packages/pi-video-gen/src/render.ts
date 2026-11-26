@@ -496,6 +496,7 @@ export async function runRender(opts: {
       modelId: resolved!.entry.id,
       capabilities: caps!,
       referenceAssets: shot.referenceAssets ?? [],
+      hasFirstFrame: Boolean(shot.firstFramePath),
       localImageReferences: (shot.firstFramePath ? 1 : 0) + (shot.lastFramePath ? 1 : 0),
     });
     if (referenceError) {

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { classifyError } from '@amaster.ai/pi-shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { resolveModel } from '../config.js';
 import {
   AmbiguousSubmitError,
   httpStatusError,
@@ -55,8 +56,39 @@ function jsonResponse(status: number, body: unknown): Response {
 }
 
 describe('arkAdapter.submit', () => {
+  it('routes MAGI-2 to Sand and submits without a watermark field', async () => {
+    const resolved = resolveModel({ providers: { sand: { apiKey: 'sand-key' } } }, 'magi-2');
+    expect(resolved?.provider.baseUrl).toBe('https://api.sand.ai/compatible/ark/api/v3');
+    const request = mockFetch((url, init) => {
+      expect(url).toBe('https://api.sand.ai/compatible/ark/api/v3/contents/generations/tasks');
+      expect(init?.headers).toMatchObject({ authorization: 'Bearer sand-key' });
+      expect(JSON.parse(String(init?.body))).toEqual({
+        model: 'magi-2',
+        content: [{ type: 'text', text: 'waves' }],
+        resolution: '1080p',
+        ratio: '16:9',
+        duration: 5,
+      });
+      return jsonResponse(200, { id: '42' });
+    });
+    const handle = await arkAdapter.submit(
+      resolved!.provider,
+      resolved!.remoteId,
+      { prompt: 'waves', resolution: '1080p', aspectRatio: '16:9', durationSec: 5 },
+      request,
+    );
+    expect(handle.taskId).toBe('42');
+    for (const status of ['cancelled', 'expired']) {
+      const inspect = mockFetch(() => jsonResponse(200, { status }));
+      await expect(arkAdapter.inspect(resolved!.provider, handle, inspect)).resolves.toMatchObject({
+        phase: 'failed',
+      });
+    }
+  });
+
   it.each([
     'doubao-seedance-2-5-260628',
+    'seedance-2.5-flash',
     'SeEdAnCe-2.5',
   ])('uses adaptive ratio for %s frame conditioning while preserving text-only ratios', async (model) => {
     for (const firstFramePath of [undefined, join(suiteDir, 'frame.png')]) {

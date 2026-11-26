@@ -67,6 +67,7 @@ import {
   normalizeReferenceAssets,
   referenceAssetPreflightError,
   requestFingerprint,
+  supportsReferenceAssets,
 } from './providers/request.js';
 import { CancelledError, pollTask, RateLimiter } from './providers/task.js';
 import { parseRenderSpec, runRender } from './render.js';
@@ -89,6 +90,7 @@ import type {
 /** Registered provider wire adapters. */
 const ADAPTERS: Partial<Record<VideoApiStyle, VideoProviderAdapter>> = {
   ark: arkAdapter,
+  sand: arkAdapter,
   dashscope: dashscopeAdapter,
   kling: klingAdapter,
   minimax: minimaxAdapter,
@@ -98,6 +100,7 @@ const ADAPTERS: Partial<Record<VideoApiStyle, VideoProviderAdapter>> = {
 
 const ENV_VAR_BY_STYLE: Record<VideoApiStyle, string> = {
   ark: 'ARK_API_KEY',
+  sand: 'SAND_API_KEY',
   dashscope: 'DASHSCOPE_API_KEY',
   kling: 'KLING_API_KEY',
   minimax: 'MINIMAX_API_KEY',
@@ -278,7 +281,7 @@ function buildGenerateParams(caps: VideoModelCapabilities | null) {
                 modality: StringEnum(caps.referenceAssetModalities),
                 assetId: Type.String({
                   description:
-                    'Asset ID from the current provider account/project. Accepts asset-... or asset://asset-....',
+                    'Asset ID from the current provider account/project. Use an asset-... ID for Volcengine or a numeric ID for Sand, with an optional asset:// prefix.',
                 }),
               }),
               {
@@ -483,6 +486,8 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
       modelId: resolved.entry.id,
       capabilities: caps,
       referenceAssets,
+      hasFirstFrame: Boolean(firstFrame),
+      hasGeneralImageReferences: Boolean(toolParams.referenceImages?.length),
       localImageReferences:
         (firstFrame ? 1 : 0) + (lastFrame ? 1 : 0) + (toolParams.referenceImages?.length ?? 0),
     });
@@ -1041,7 +1046,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
         `Provider: ${resolved.provider.style} (key ${resolved.provider.apiKey ? 'ready' : 'MISSING'})`,
         `Durations: ${c.durationValues?.join(', ') ?? `${c.durations[0]}-${c.durations[1]}`}s; Resolutions: ${c.resolutions.join('/')}; Aspect ratios: ${c.aspectRatios.join(', ')}`,
         `Native audio: ${c.nativeAudio ? 'yes' : 'no'}; First+last frame: ${c.supportsFirstLastFrame ? 'yes' : 'no'}; Max reference images: ${c.maxReferenceImages}`,
-        `Trusted asset references: ${resolved.provider.style === 'ark' ? c.referenceAssetModalities?.join(', ') || 'none' : 'none'}; Max videos: ${c.maxReferenceVideos ?? 0}; Max audios: ${c.maxReferenceAudios ?? 0}`,
+        `Trusted asset references: ${supportsReferenceAssets(resolved.provider.style) ? c.referenceAssetModalities?.join(', ') || 'none' : 'none'}; Max videos: ${c.maxReferenceVideos ?? 0}; Max audios: ${c.maxReferenceAudios ?? 0}`,
       );
     }
     lines.push('Registered models:');
@@ -1057,7 +1062,7 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
     const active = resolveModel(settings);
     const caps = active?.entry.capabilities ?? null;
     const schemaCaps =
-      caps && active?.provider.style !== 'ark'
+      caps && !supportsReferenceAssets(active?.provider.style)
         ? { ...caps, referenceAssetModalities: undefined }
         : caps;
 
@@ -1181,7 +1186,9 @@ export default function piVideoGenExtension(pi: ExtensionAPI): void {
                 keyReady: Boolean(active.provider.apiKey),
                 capabilities: {
                   ...active.entry.capabilities,
-                  ...(active.provider.style !== 'ark' ? { referenceAssetModalities: [] } : {}),
+                  ...(!supportsReferenceAssets(active.provider.style)
+                    ? { referenceAssetModalities: [] }
+                    : {}),
                 },
               }
             : {}),
