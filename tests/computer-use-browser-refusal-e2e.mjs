@@ -38,7 +38,10 @@ async function nextCall(messages) {
     });
   }
   const pid = prepared.result?.details?.prepared_pid;
-  assert(!prepared.isError && Number.isInteger(pid), 'Driver did not launch an isolated browser');
+  assert(
+    !prepared.isError && Number.isInteger(pid),
+    `Driver did not launch an isolated browser (${prepared.result?.details?.code ?? 'no refusal code'})`,
+  );
   const preparedMessage = messages.find(
     (message) => message.role === 'toolResult' && message.toolCallId === 'prepare',
   );
@@ -88,6 +91,8 @@ async function nextCall(messages) {
       target_id: targetId,
       tab_id: tabId,
       ref: 'p4294967295:0',
+      // The Linux trusted-input route can refuse before validating the page ref.
+      input_route: 'dom_event',
     });
   }
   if (!calls.has('end')) return toolCall('end', 'computer_use_end_session', {});

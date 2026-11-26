@@ -43,6 +43,14 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Restore trusted Chrome permissions for the browser refusal E2E
+      if: github.job == 'computer-use-browser-refusal-e2e' && runner.os == 'Linux'
+      shell: bash
+      run: |
+        # The hosted runner makes /opt writable, which Cua Driver rejects.
+        sudo chmod go-w /opt /opt/google
+        sudo chmod -R go-w /opt/google/chrome
+
     - name: Set up per-job pi config dir
       if: inputs.set-pi-agent-dir == 'true'
       shell: bash

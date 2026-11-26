@@ -83,6 +83,9 @@ test('runs the browser refusal E2E independently of secret-backed integration', 
   assert.match(job, /PI_INTEGRATION_MODEL: ''/);
   assert.doesNotMatch(job, /secrets\./);
   assert.match(job, /xvfb-run -a node tests\/computer-use-browser-refusal-e2e\.mjs/);
+  const setup = await readFile(new URL('../actions/setup-pi-build/action.yml', import.meta.url), 'utf8');
+  assert.match(setup, /if: github\.job == 'computer-use-browser-refusal-e2e' && runner\.os == 'Linux'/);
+  assert.match(setup, /sudo chmod go-w \/opt \/opt\/google[\s\S]*?sudo chmod -R go-w \/opt\/google\/chrome[\s\S]*?pnpm install --frozen-lockfile/);
 });
 
 test('keeps the base workflow Perception fetch command callable without a destination', () => {
