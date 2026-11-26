@@ -180,6 +180,7 @@ export const arkAdapter: VideoProviderAdapter = {
     try {
       res = await fetchImpl(`${provider.baseUrl}/contents/generations/tasks`, {
         method: 'POST',
+        ...(style === 'sand' ? { redirect: 'error' } : {}),
         headers: bearerHeaders(provider.apiKey),
         body: JSON.stringify(body),
         signal: signal ?? null,
@@ -237,6 +238,7 @@ export const arkAdapter: VideoProviderAdapter = {
       res = await fetchImpl(
         `${provider.baseUrl}/contents/generations/tasks/${encodeURIComponent(handle.taskId)}`,
         {
+          ...(style === 'sand' ? { redirect: 'error' } : {}),
           headers: { authorization: `Bearer ${provider.apiKey}` },
           signal: signal ?? null,
         },

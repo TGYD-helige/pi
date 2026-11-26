@@ -62,6 +62,7 @@ describe('arkAdapter.submit', () => {
     const request = mockFetch((url, init) => {
       expect(url).toBe('https://api.sand.ai/compatible/ark/api/v3/contents/generations/tasks');
       expect(init?.headers).toMatchObject({ authorization: 'Bearer sand-key' });
+      expect(init?.redirect).toBe('error');
       expect(JSON.parse(String(init?.body))).toEqual({
         model: 'magi-2',
         content: [{ type: 'text', text: 'waves' }],
@@ -79,7 +80,10 @@ describe('arkAdapter.submit', () => {
     );
     expect(handle.taskId).toBe('42');
     for (const status of ['cancelled', 'expired']) {
-      const inspect = mockFetch(() => jsonResponse(200, { status }));
+      const inspect = mockFetch((_url, init) => {
+        expect(init?.redirect).toBe('error');
+        return jsonResponse(200, { status });
+      });
       await expect(arkAdapter.inspect(resolved!.provider, handle, inspect)).resolves.toMatchObject({
         phase: 'failed',
       });

@@ -59,6 +59,12 @@ function requireBaseUrl(
       `config: ${style} requires baseUrl`,
     );
   }
+  if (style === 'sand' && URL.parse(baseUrl)?.protocol !== 'https:') {
+    throw new VideoGenError(
+      `"${settingsPath}" must use HTTPS for Sand AI.`,
+      'config: Sand AI requires HTTPS',
+    );
+  }
   return baseUrl;
 }
 
@@ -373,7 +379,9 @@ function resolveCustomModel(settings: VideoGenSettings, wanted: string): Resolve
         model.id.toLowerCase() === needle ||
         (model.alias != null && model.alias.toLowerCase() === needle);
       if (!matches) continue;
-      const builtIn = findBuiltInModel(model.id);
+      const registered = findBuiltInModel(model.id);
+      // A legacy relay may expose an unrelated MAGI-2 request contract.
+      const builtIn = registered?.provider === 'sand' && cp.api !== 'sand' ? undefined : registered;
       const capabilities = {
         ...(builtIn?.capabilities ?? CONSERVATIVE_CUSTOM_CAPABILITIES),
         ...(model.capabilities ?? {}),

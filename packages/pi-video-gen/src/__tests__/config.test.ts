@@ -402,6 +402,39 @@ describe('resolveModel', () => {
     expect(resolved?.entry.defaultResolution).toBe('720p');
   });
 
+  it('requires HTTPS for built-in and custom Sand endpoints', () => {
+    const baseUrl = 'http://sand-relay.example/v3';
+    expect(() => resolveModel({ providers: { sand: { baseUrl } } }, 'magi-2')).toThrow(/HTTPS/);
+    expect(() =>
+      resolveModel(
+        {
+          customProviders: { proxy: { api: 'sand', baseUrl, models: ['magi-2'] } },
+        },
+        'magi-2',
+      ),
+    ).toThrow(/HTTPS/);
+    expect(resolveModel({}, 'magi-2')?.provider.baseUrl).toBe(
+      'https://api.sand.ai/compatible/ark/api/v3',
+    );
+  });
+
+  it('keeps legacy MAGI-2 relay defaults when the relay uses an existing wire format', () => {
+    const result = resolveModel(
+      {
+        customProviders: {
+          relay: { api: 'ark', baseUrl: 'https://relay.example/v3', models: ['magi-2'] },
+        },
+      },
+      'magi-2',
+    );
+    expect(result?.provider.style).toBe('ark');
+    expect(result?.entry).toMatchObject({
+      defaultResolution: '720p',
+      defaultDurationSec: 4,
+      capabilities: { nativeAudio: false, resolutions: ['720p'] },
+    });
+  });
+
   it('custom models inherit built-in capabilities when the id names a known model', () => {
     const resolved = resolveModel(
       {
