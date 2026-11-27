@@ -175,7 +175,7 @@ jobs:
           fi
 
   computer-use-browser-refusal-e2e:
-    name: Computer use browser refusal E2E
+    name: Computer use browser refusal and session isolation E2E
     needs: detect-extension-matrix
     if: contains(needs.detect-extension-matrix.outputs.matrix, 'pi-computer-use') && !inputs.browser_session_only
     runs-on: ubuntu-22.04
@@ -201,7 +201,7 @@ jobs:
           node packages/pi-computer-use/scripts/fetch-driver.mjs linux-x64
           pnpm --filter @amaster.ai/pi-shared build
           pnpm --filter @amaster.ai/pi-computer-use build
-      - name: Verify a missing tab ID is recoverable
+      - name: Verify browser refusal recovery and survival across implicit session expiry
         run: xvfb-run -a node tests/computer-use-browser-refusal-e2e.mjs
 
   # ──────────────────────────────────────────────────────────────────────

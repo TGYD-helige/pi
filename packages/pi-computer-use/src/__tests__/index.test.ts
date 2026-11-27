@@ -1,6 +1,6 @@
 const { piVersion } = vi.hoisted(() => ({ piVersion: { value: '1.2.0' } }));
 
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { mkdtemp, realpath, rename, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -60,6 +60,7 @@ let mockCallTool: (
   name: string,
   args: Record<string, unknown>,
   signal?: AbortSignal,
+  transport?: typeof lastTransport,
 ) => UpstreamResult | Promise<UpstreamResult> = () => ({
   content: [{ type: 'text', text: 'Action executed.' }],
 });
@@ -71,7 +72,9 @@ let closeCount = 0;
 
 vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
   Client: class MockClient {
-    async connect(_transport: unknown, options?: { signal?: AbortSignal }) {
+    private transport: typeof lastTransport;
+    async connect(transport: typeof lastTransport, options?: { signal?: AbortSignal }) {
+      this.transport = transport;
       return mockConnect(options?.signal);
     }
     async close() {
@@ -90,6 +93,7 @@ vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
         request.name,
         request.arguments ?? {},
         options?.signal as AbortSignal | undefined,
+        this.transport,
       );
     }
   },
@@ -289,6 +293,13 @@ describe('computerUseExtension', () => {
     expect(installer).toContain('README.md#optional-local-perception');
   });
 
+  it('describes how to record actions from the named proxy', async () => {
+    await start();
+    expect(tools.get('computer_use_start_recording')?.description).toContain(
+      'To record a named session, pass its label here and reuse it for the recorded actions and stop_recording.',
+    );
+  });
+
   it('passes the optional extension catalog and store to the macOS daemon and proxy', async () => {
     vi.stubEnv('CUA_DRIVER_PERCEPTION_CATALOG', '/reviewed/catalog.json');
     vi.stubEnv('CUA_DRIVER_RS_HOME', '/isolated/driver-home');
@@ -349,7 +360,7 @@ describe('computerUseExtension', () => {
       args: Record<string, unknown>;
       signal: AbortSignal | undefined;
     }> = [];
-    const signal = new AbortController().signal;
+    const controller = new AbortController();
     await start({ confirmDangerousActions: false });
     mockCallTool = (tool, args, signal) => {
       calls.push({ name: tool, args, signal });
@@ -364,7 +375,7 @@ describe('computerUseExtension', () => {
         target_id: 'bt-123',
         tab_id: 'tab-456',
       },
-      signal,
+      controller.signal,
       undefined,
       mockCtx,
     );
@@ -378,8 +389,10 @@ describe('computerUseExtension', () => {
         tab_id: 'tab-456',
         action: 'inspect',
       },
-      signal,
+      signal: expect.any(AbortSignal),
     });
+    controller.abort();
+    expect(browserCalls.every((call) => call.signal?.aborted)).toBe(true);
   });
 
   it('sanitizes actual driver refusals and keeps the original recovery session', async () => {
@@ -1080,7 +1093,9 @@ describe('computerUseExtension', () => {
     expect(texts).toContain('window state');
     expect(texts.join('\n')).toContain('snapshot_id=snapshot-1');
     expect(result.details.snapshot_id).toBe('snapshot-1');
-    expect(lastRequestOptions?.signal).toBe(controller.signal);
+    expect(lastRequestOptions?.signal).toBeInstanceOf(AbortSignal);
+    controller.abort();
+    expect((lastRequestOptions?.signal as AbortSignal).aborted).toBe(true);
   });
 
   it.each([
@@ -1092,7 +1107,56 @@ describe('computerUseExtension', () => {
     await tools
       .get(`computer_use_${name}`)!
       .execute('id', {}, controller.signal, undefined, mockCtx);
-    expect(lastRequestOptions).toMatchObject({ signal: controller.signal, timeout });
+    expect(lastRequestOptions).toMatchObject({ signal: expect.any(AbortSignal), timeout });
+    controller.abort();
+    expect((lastRequestOptions?.signal as AbortSignal).aborted).toBe(true);
+  });
+
+  it('times out a named call before dispatch without aborting the shared proxy startup', async () => {
+    await start();
+    await tools
+      .get('computer_use_list_windows')!
+      .execute('warmup', {}, undefined, undefined, mockCtx);
+
+    const deadline = new AbortController();
+    const timeout = AbortSignal.timeout;
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) =>
+      ms === 65_000 ? deadline.signal : timeout(ms),
+    );
+    const connection = abortableDeferred<void>();
+    mockConnect = connection.wait;
+    const dispatch = vi.fn<typeof mockCallTool>(() => ({
+      content: [{ type: 'text', text: 'Action executed.' }],
+    }));
+    mockCallTool = dispatch;
+
+    const args = { session: 'browser' };
+    const first = tools
+      .get('computer_use_run_steps')!
+      .execute('first', args, undefined, undefined, mockCtx);
+    await connection.started;
+    const second = tools
+      .get('computer_use_list_windows')!
+      .execute('second', args, undefined, undefined, mockCtx);
+    deadline.abort(new DOMException('deadline elapsed', 'TimeoutError'));
+    try {
+      expect(await first).toMatchObject({
+        isError: true,
+        structuredContent: { error: { code: 'driver_preflight_failed' } },
+      });
+      expect(connection.aborted).toBe(false);
+      expect(dispatch).not.toHaveBeenCalled();
+    } finally {
+      connection.resolve();
+      await second;
+    }
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(dispatch).toHaveBeenCalledWith(
+      'list_windows',
+      args,
+      expect.any(AbortSignal),
+      lastTransport,
+    );
   });
 
   it('reports an unknown outcome without encouraging replay when an action response is lost', async () => {
@@ -1124,7 +1188,10 @@ describe('computerUseExtension', () => {
     expect(notify).toHaveBeenCalledWith(expect.not.stringContaining('cannot connect'), 'warning');
   });
 
-  it('reconnects after the MCP transport closes', async () => {
+  it.each([
+    false,
+    true,
+  ])('reconnects after the MCP transport closes (daemon stopped: %s)', async (stopped) => {
     let connects = 0;
     mockConnect = async () => {
       connects++;
@@ -1133,13 +1200,149 @@ describe('computerUseExtension', () => {
     await tools
       .get('computer_use_click')!
       .execute('id', { pid: 1, x: 2, y: 3 }, undefined, undefined, mockCtx);
+    const originalArgs = lastTransportOptions?.args;
     lastTransport?.onclose?.();
+    if (stopped) {
+      vi.mocked(execFile).mockImplementationOnce((...args) => {
+        const callback = args.at(-1);
+        if (typeof callback === 'function') {
+          callback(
+            Object.assign(new Error('daemon status failed'), {
+              stderr: 'Cua Driver daemon is not running\n',
+            }),
+            '',
+            '',
+          );
+        }
+        return {} as ReturnType<typeof execFile>;
+      });
+    }
 
     await tools
       .get('computer_use_click')!
       .execute('id', { pid: 1, x: 2, y: 3 }, undefined, undefined, mockCtx);
 
     expect(connects).toBe(2);
+    if (stopped) expect(lastTransportOptions?.args).not.toEqual(originalArgs);
+    else expect(lastTransportOptions?.args).toEqual(originalArgs);
+  });
+
+  it('keeps the named proxy connected when the untagged proxy closes', async () => {
+    const calls = vi.fn<typeof mockCallTool>(() => ({
+      content: [{ type: 'text', text: 'Action executed.' }],
+    }));
+    mockCallTool = calls;
+    await start();
+
+    const listWindows = tools.get('computer_use_list_windows')!;
+    const list = (args: Record<string, unknown>) =>
+      listWindows.execute('list', args, undefined, undefined, mockCtx);
+
+    await list({});
+    const implicit = lastTransport;
+    const implicitArgs = lastTransportOptions?.args;
+    await Promise.all([list({ session: 'browser' }), list({ session: 'other' })]);
+    const named = lastTransport;
+
+    expect(named).not.toBe(implicit);
+    expect(lastTransportOptions?.args).toEqual(implicitArgs);
+    expect(calls.mock.calls.filter(([name]) => name === 'list_windows')).toEqual([
+      ['list_windows', {}, expect.any(AbortSignal), implicit],
+      ['list_windows', { session: 'browser' }, expect.any(AbortSignal), named],
+      ['list_windows', { session: 'other' }, expect.any(AbortSignal), named],
+    ]);
+
+    implicit?.onclose?.();
+    await list({ session: 'browser' });
+    expect(calls).toHaveBeenLastCalledWith(
+      'list_windows',
+      { session: 'browser' },
+      expect.any(AbortSignal),
+      named,
+    );
+    expect(lastTransportOptions?.args).toEqual(implicitArgs);
+    expect(closeCount).toBe(1);
+    const driverCalls = vi.mocked(execFile).mock.calls.length;
+    await list({ session: '' });
+    expect(lastTransport).not.toBe(named);
+    expect(lastTransportOptions?.args).toEqual(implicitArgs);
+    expect(vi.mocked(execFile).mock.calls).toHaveLength(driverCalls);
+  });
+
+  it('lists sessions from both proxies with one page limit and keeps listing after implicit end', async () => {
+    await start();
+    const execute = (name: string, args: Record<string, unknown> = {}) =>
+      tools.get(`computer_use_${name}`)!.execute(name, args, undefined, undefined, mockCtx);
+    await execute('list_windows');
+    const implicit = lastTransport;
+    let ended = false;
+    const listings = vi.fn<typeof mockCallTool>((name, args, _signal, transport) => {
+      if (name !== 'list_sessions') return { content: [] };
+      if (transport === implicit && ended) {
+        return {
+          isError: true,
+          structuredContent: { code: 'tool_invocation_failed' },
+          content: [
+            {
+              type: 'text',
+              text: "session has ended; tool call 'list_sessions' was rejected. Call start_session without a session label to start a new unnamed session.",
+            },
+          ],
+        };
+      }
+      const sessions = (transport === implicit ? [null] : ['first', 'second', 'third']).map(
+        (session) => ({ session, state: 'active' }),
+      );
+      const start = args.cursor === 'o:1' ? 1 : args.cursor === 'o:2' ? 2 : 0;
+      const end = start + Number(args.limit ?? 50);
+      return {
+        structuredContent: {
+          sessions: sessions.slice(start, end),
+          next_cursor: end < sessions.length ? `o:${end}` : null,
+        },
+      };
+    });
+    mockCallTool = listings;
+    const list = async (args: Record<string, unknown> = {}) =>
+      (
+        (await execute('list_sessions', args)) as {
+          details: { sessions: { session: string | null }[]; next_cursor: string | null };
+        }
+      ).details;
+
+    expect((await list()).sessions).toEqual([{ session: null, state: 'active' }]);
+    expect(lastTransport).toBe(implicit);
+    await execute('list_windows', { session: 'first' });
+
+    const first = await list({ limit: 2 });
+    expect(first.sessions.map(({ session }) => session)).toEqual([null, 'first']);
+    expect(first.next_cursor).toEqual(expect.any(String));
+    const next = await list({ limit: 2, cursor: first.next_cursor });
+    expect(next.sessions.map(({ session }) => session)).toEqual(['second', 'third']);
+    expect(next.next_cursor).toBeNull();
+    const boundary = await list({ limit: 1 });
+    expect(boundary.sessions.map(({ session }) => session)).toEqual([null]);
+    expect((await list({ limit: 1, cursor: boundary.next_cursor })).sessions[0]?.session).toBe(
+      'first',
+    );
+
+    ended = true;
+    expect((await list()).sessions.map(({ session }) => session)).toEqual([
+      'first',
+      'second',
+      'third',
+    ]);
+    implicit?.onclose?.();
+    const reconnect = vi.fn(async () => {
+      throw new Error('implicit proxy unavailable');
+    });
+    mockConnect = reconnect;
+    expect((await list()).sessions.map(({ session }) => session)).toEqual([
+      'first',
+      'second',
+      'third',
+    ]);
+    expect(reconnect).not.toHaveBeenCalled();
   });
 
   it.each([

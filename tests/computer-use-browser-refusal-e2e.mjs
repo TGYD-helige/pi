@@ -15,6 +15,7 @@ import computerUse, { resolveDriverLayout } from '../packages/pi-computer-use/di
 
 const browserSession = 'browser-refusal-e2e';
 const stateTool = 'computer_use_get_browser_state';
+const sessionIdleSeconds = 60;
 const missingTabReason =
   'refused (browser_tab_required): snapshot mode requires a tab_id from a prior bind';
 const { binaryPath } = resolveDriverLayout({ mode: 'bundled' });
@@ -22,14 +23,34 @@ const scenarioDir = await mkdtemp(join(tmpdir(), 'pi-computer-use-refusal-'));
 process.env.PI_CODING_AGENT_DIR = scenarioDir;
 process.env.CUA_DRIVER_RS_HOME = join(scenarioDir, 'driver');
 process.env.CUA_DRIVER_BROWSER_PROFILE_ROOT = join(scenarioDir, 'profiles');
+process.env.CUA_DRIVER_RS_SESSION_IDLE_TTL_SECS = String(sessionIdleSeconds);
 
 const calls = new Map();
 let bindingAttempts = 0;
+let phase = 'refusal';
+let implicitStarted;
+function untaggedCall(id, name, args = {}) {
+  return { type: 'toolCall', id, name, arguments: args };
+}
+
 function toolCall(id, name, args) {
-  return { type: 'toolCall', id, name, arguments: { ...args, session: browserSession } };
+  return untaggedCall(id, name, { ...args, session: browserSession });
+}
+
+function isRunning(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error.code === 'ESRCH') return false;
+    throw error;
+  }
 }
 
 async function nextCall(messages) {
+  if (!calls.has('implicit'))
+    return untaggedCall('implicit', 'computer_use_list_windows');
+  assert.equal(calls.get('implicit').isError, false, 'Untagged discovery must create an implicit session');
   const prepared = calls.get('prepare');
   if (!prepared) {
     return toolCall('prepare', 'computer_use_browser_prepare', {
@@ -51,6 +72,18 @@ async function nextCall(messages) {
     ),
     'The model must receive the isolated browser lifecycle',
   );
+
+  if (!calls.has('sessions-before'))
+    return untaggedCall('sessions-before', 'computer_use_list_sessions');
+  if (!calls.has('windows-1')) {
+    const listing = calls.get('sessions-before');
+    assert.equal(listing.isError, false, 'Both sessions must be listable before expiry');
+    const { sessions } = listing.result.details;
+    assert.equal(sessions.length, 2, 'The two proxies must expose exactly two active sessions');
+    assert(sessions.some((row) => row.session === browserSession && row.state === 'active'));
+    const implicit = sessions.find((row) => row.implicit && row.session === null);
+    assert.equal(implicit?.state, 'active');
+  }
 
   const windows = calls.get(`windows-${bindingAttempts}`);
   const candidates =
@@ -97,7 +130,52 @@ async function nextCall(messages) {
       input_route: 'dom_event',
     });
   }
-  if (!calls.has('end')) return toolCall('end', 'computer_use_end_session', {});
+  if (phase === 'refusal') return { type: 'text', text: 'Browser refusal checks complete.' };
+  if (!calls.has('keepalive'))
+    return toolCall('keepalive', 'computer_use_list_windows', { pid });
+  if (phase === 'keepalive') return { type: 'text', text: 'Named session refreshed.' };
+  if (!calls.has('sessions-after'))
+    return untaggedCall('sessions-after', 'computer_use_list_sessions');
+  if (!calls.has('after-expiry')) {
+    const sessionsAfter = calls.get('sessions-after');
+    assert.equal(sessionsAfter.isError, false, 'The named session must still be listable');
+    assert.deepEqual(
+      sessionsAfter.result.details?.sessions.map(({ session, state }) => [session, state]),
+      [[browserSession, 'active']],
+      'The implicit session must be gone while the named session stays active',
+    );
+    return toolCall('after-expiry', 'computer_use_list_windows', { pid });
+  }
+  if (!calls.has('rebind')) {
+    const afterExpiry = calls.get('after-expiry');
+    assert.equal(afterExpiry.isError, false, 'Named discovery must succeed after implicit expiry');
+    assert(isRunning(pid), 'Implicit idle expiry reaped the named browser');
+    const liveWindows = afterExpiry.result.details?.windows?.filter(
+      (item) => item.pid === pid && Number.isInteger(item.window_id),
+    ) ?? [];
+    const liveWindow = liveWindows.find((item) => item.window_id === window.window_id) ?? liveWindows[0];
+    assert(liveWindow, 'The original named browser must still have a window');
+    return toolCall('rebind', stateTool, { pid, window_id: liveWindow.window_id });
+  }
+  const rebound = calls.get('rebind');
+  const reboundState = rebound.result.details;
+  const reboundTab = (reboundState?.tabs?.find((tab) => tab.active) ?? reboundState?.tabs?.[0])?.tab_id;
+  assert(!rebound.isError && reboundState?.target_id && reboundTab, 'Could not bind the surviving browser');
+  if (!calls.has('snapshot-after-expiry'))
+    return toolCall('snapshot-after-expiry', stateTool, {
+      target_id: reboundState.target_id,
+      tab_id: reboundTab,
+    });
+  if (!calls.has('restart-implicit'))
+    return untaggedCall('restart-implicit', 'computer_use_start_session');
+  assert.equal(calls.get('restart-implicit').isError, false, 'The implicit session must restart');
+  if (!calls.has('end-implicit'))
+    return untaggedCall('end-implicit', 'computer_use_end_session');
+  if (!calls.has('end')) {
+    assert.equal(calls.get('end-implicit').isError, false, 'Explicit implicit-session end must succeed');
+    assert(isRunning(pid), 'Explicit implicit-session end reaped the named browser');
+    return toolCall('end', 'computer_use_end_session', {});
+  }
   if (!calls.has('ended')) return toolCall('ended', 'computer_use_list_windows', {});
   return { type: 'text', text: 'Browser refusal scenario complete.' };
 }
@@ -195,7 +273,9 @@ try {
   }));
   await session.bindExtensions({ mode: 'rpc' });
   session.subscribe((event) => {
-    if (event.type === 'tool_execution_end') calls.set(event.toolCallId, event);
+    if (event.type !== 'tool_execution_end') return;
+    if (event.toolCallId === 'implicit') implicitStarted = performance.now();
+    calls.set(event.toolCallId, event);
   });
   await session.prompt('Run the browser missing-tab scenario.');
   if (scriptError) throw scriptError;
@@ -215,7 +295,29 @@ try {
   assert.equal(staleRef?.isError, true, 'A browser action refused by the Driver must fail in Pi');
   assert.equal(staleRef.result.details?.effect, 'refused');
   assert.equal(staleRef.result.details?.code, 'browser_ref_stale');
+
+  // list_sessions reports the default TTL. Time the fixture's configured TTL from discovery.
+  const implicitExpiry = implicitStarted + sessionIdleSeconds * 1000;
+  await delay(Math.max(0, implicitExpiry - performance.now() - 10_000));
+  phase = 'keepalive';
+  await session.prompt('Refresh the named browser session.');
+  if (scriptError) throw scriptError;
+  assert.equal(calls.get('keepalive')?.isError, false, 'The named lease must be refreshed');
+  // Refresh only the named lease and wait past the Driver's 30-second sweep interval.
+  await delay(Math.max(0, implicitExpiry - performance.now() + 35_000));
+  phase = 'expiry';
+  await session.prompt('Verify the browser survived implicit expiry and end its named session.');
+  if (scriptError) throw scriptError;
+
+  const afterExpiry = calls.get('snapshot-after-expiry');
+  assert.equal(afterExpiry?.toolName, stateTool);
+  assert.equal(afterExpiry.isError, false,
+    `The surviving browser must remain readable (${afterExpiry.result.details?.code ?? 'no refusal code'})`);
+  assert.equal(afterExpiry.result.details?.mode, 'snapshot');
   assert.equal(calls.get('end')?.isError, false, 'The test must end its isolated browser session');
+  const pid = calls.get('prepare').result.details.prepared_pid;
+  for (let attempt = 0; attempt < 40 && isRunning(pid); attempt++) await delay(100);
+  assert.equal(isRunning(pid), false, 'Ending the named session must reap its browser');
   const ended = calls.get('ended');
   assert.equal(ended?.isError, true, 'Reading after the session ends must fail');
   assert.equal(ended.result.details?.code, 'session_ended');
@@ -225,7 +327,7 @@ try {
     ),
     'The ended-session refusal must explain how to restart the session',
   );
-  console.log('Browser refusal codes, recovery, and lifecycle verified.');
+  console.log('Browser refusal recovery and named browser survival across implicit expiry and explicit end verified.');
 } finally {
   try {
     if (session) await session.extensionRunner.emit({ type: 'session_shutdown', reason: 'exit' });

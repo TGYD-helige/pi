@@ -23,6 +23,7 @@ import type { McpToolResult } from './tool-result.js';
 
 const MCP_TIMEOUT_MS = 60_000;
 const DAEMON_START_TIMEOUT_MS = 10_000;
+const NAMED_SESSION_CURSOR_PREFIX = 'named:';
 const PERMANENT_STATUS_ERROR_CODES = new Set(['EACCES', 'ENOENT', 'EPERM']);
 const DAEMON_LEASE_SCRIPT = `
 if IFS= read -r _; then exit 0; fi
@@ -55,6 +56,10 @@ function extensionEnvironment(): Record<string, string> {
 
 function requestOptions(signal?: AbortSignal, timeout = MCP_TIMEOUT_MS) {
   return signal ? { signal, timeout } : { timeout };
+}
+
+function toolTimeout(name: string): number {
+  return name === 'run_script' ? 125_000 : name === 'run_steps' ? 65_000 : MCP_TIMEOUT_MS;
 }
 
 function abortError(signal?: AbortSignal): Error {
@@ -314,55 +319,113 @@ export class SanitizingJsonSchemaValidator implements jsonSchemaValidator {
   }
 }
 
-/** Owns the Cua Driver daemon and its stdio MCP proxy as one adapter. */
 export class CuaDriverRequestNotDispatched extends SafeToolError {
   constructor(error: unknown) {
     super('Cua Driver preflight', error, 'Check that the driver and target are available.');
   }
 }
 
+interface McpProxy {
+  client?: Client;
+  connecting?: Promise<Client>;
+  closing?: Promise<void>;
+  state: ConnectionState;
+  hasConnected?: boolean;
+}
+
+interface DaemonEndpoint {
+  layout: DriverLayout;
+  socket: string;
+}
+
+function sessionPage(result: McpToolResult) {
+  const sessions: unknown = result.structuredContent?.sessions;
+  const cursor = result.structuredContent?.next_cursor;
+  if (result.isError || !Array.isArray(sessions)) return undefined;
+  return {
+    sessions: sessions as unknown[],
+    cursor: typeof cursor === 'string' ? cursor : undefined,
+  };
+}
+
+function mergedSessionPage(sessions: unknown[], cursor?: string): McpToolResult {
+  return {
+    content: [{ type: 'text', text: `${sessions.length} visible session(s).` }],
+    structuredContent: { sessions, next_cursor: cursor ?? null },
+  };
+}
+
+function implicitSessionEnded(result: McpToolResult): boolean {
+  return (
+    result.isError === true &&
+    (result.structuredContent?.code === 'session_ended' ||
+      (result.structuredContent?.code === 'tool_invocation_failed' &&
+        (result.content ?? [])
+          .slice(0, 4)
+          .some(
+            ({ type, text }) =>
+              type === 'text' &&
+              text
+                ?.slice(0, 1024)
+                .split(/\r?\n/)
+                .includes(
+                  "session has ended; tool call 'list_sessions' was rejected. Call start_session without a session label to start a new unnamed session.",
+                ),
+          )))
+  );
+}
+
+// Temporary workaround for https://github.com/trycua/cua/pull/6506.
+// Remove the proxy split once Pi bundles a driver with the browser ownership fix.
 export class CuaDriverClient {
-  private client: Client | null = null;
+  private readonly implicit: McpProxy = { state: 'disconnected' };
+  private readonly named: McpProxy = { state: 'disconnected' };
+  private daemonConnection: Promise<DaemonEndpoint> | undefined;
+  private daemonNeedsCheck = false;
   private daemonProcess: ChildProcess | null = null;
   private daemonLease: ChildProcess | null = null;
-  private daemonSocket: string | null = null;
-  private activeLayout: DriverLayout | null = null;
-  private state: ConnectionState = 'disconnected';
-  private connectPromise: Promise<void> | null = null;
+  private daemon: DaemonEndpoint | undefined;
   private readonly lifecycleController = new AbortController();
-  private generation = 0;
-  private hasConnected = false;
-  private explicitlyClosed = false;
 
   constructor(private readonly config: ComputerUseConfig) {}
 
   getState(): ConnectionState {
-    return this.state;
+    return this.implicit.state;
   }
 
   async connect(signal?: AbortSignal): Promise<void> {
-    if (this.explicitlyClosed) throw new Error('Cua Driver client is closed.');
-    if (this.state === 'ready') return;
-    if (!this.connectPromise) {
-      const connection = this.openConnection(this.lifecycleController.signal);
-      this.connectPromise = connection;
-      const clearConnection = () => {
-        if (this.connectPromise === connection) this.connectPromise = null;
-      };
-      void connection.then(clearConnection, clearConnection);
-    }
-    await waitForPromise(this.connectPromise, signal);
+    await this.connectProxy(this.implicit, signal);
   }
 
-  private async openConnection(signal?: AbortSignal): Promise<void> {
-    this.state = this.hasConnected ? 'reconnecting' : 'connecting';
-    const generation = ++this.generation;
-    let client: Client | null = null;
+  private proxyFor(session: unknown): McpProxy {
+    return typeof session === 'string' && session.length > 0 ? this.named : this.implicit;
+  }
+
+  private async connectProxy(proxy: McpProxy, signal?: AbortSignal): Promise<Client> {
+    this.lifecycleController.signal.throwIfAborted();
+    signal?.throwIfAborted();
+    if (proxy.state === 'ready' && proxy.client) return proxy.client;
+    if (!proxy.connecting) {
+      const connecting = this.openConnection(proxy);
+      proxy.connecting = connecting;
+      const clearConnection = () => {
+        if (proxy.connecting === connecting) delete proxy.connecting;
+      };
+      void connecting.then(clearConnection, clearConnection);
+    }
+    return waitForPromise(proxy.connecting, signal);
+  }
+
+  private async openConnection(proxy: McpProxy): Promise<Client> {
+    proxy.state = proxy.hasConnected ? 'reconnecting' : 'connecting';
+    const lifecycle = this.lifecycleController.signal;
+    const signal = AbortSignal.any([lifecycle, AbortSignal.timeout(MCP_TIMEOUT_MS)]);
+    let client: Client | undefined;
     try {
-      const layout = resolveDriverLayout(this.config);
-      this.ensureExecutable(layout.binaryPath);
-      this.activeLayout = layout;
-      const socket = await this.ensureDaemon(layout, signal);
+      if (proxy.closing) await waitForPromise(proxy.closing, signal);
+      signal.throwIfAborted();
+      const { layout, socket } = await waitForPromise(this.connectDaemon(lifecycle), signal);
+      signal.throwIfAborted();
       const mcpArgs = [
         'mcp',
         ...(layout.embedded ? ['--embedded'] : []),
@@ -381,41 +444,94 @@ export class CuaDriverClient {
         env,
         stderr: 'pipe',
       });
-      client = new Client(
+      const connectedClient = new Client(
         { name: 'pi-computer-use', version: '0.2.0' },
         { capabilities: {}, jsonSchemaValidator: new SanitizingJsonSchemaValidator() },
       );
-      this.client = client;
+      client = connectedClient;
+      proxy.client = connectedClient;
 
       transport.onerror = (error: Error) => {
-        if (generation !== this.generation) return;
+        if (proxy.client !== connectedClient) return;
         console.error(
           `[pi-computer-use] cua-driver transport error (category=${classifyError(error).errorCategory})`,
         );
-        void this.disconnectUnhealthyClient(generation);
+        void this.disconnectProxy(proxy, connectedClient);
       };
-      transport.onclose = () => void this.disconnectUnhealthyClient(generation);
+      transport.onclose = () => void this.disconnectProxy(proxy, connectedClient);
 
-      await client.connect(transport, requestOptions(signal));
-      if (generation !== this.generation) return;
-      this.state = 'ready';
-      this.hasConnected = true;
+      await waitForPromise(connectedClient.connect(transport, requestOptions(signal)), signal);
+      signal.throwIfAborted();
+      if (proxy.client !== connectedClient) throw new Error('Cua Driver MCP proxy disconnected.');
+      proxy.state = 'ready';
+      proxy.hasConnected = true;
+      return connectedClient;
     } catch (error) {
-      if (generation === this.generation) {
-        ++this.generation;
-        this.client = null;
-        this.state = 'failed';
-      }
-      try {
-        await client?.close();
-      } catch {
-        // A failed transport may already be closed.
-      }
-      await this.stopDaemon();
-      if (signal?.aborted) throw abortError(signal);
+      if (client) await this.disconnectProxy(proxy, client);
+      proxy.state = 'failed';
+      if (signal.aborted) throw abortError(signal);
       const failure = new SafeToolError('Cua Driver connection', error);
       console.error(`[pi-computer-use] connection failed (category=${failure.errorCategory})`);
       throw failure;
+    }
+  }
+
+  private connectDaemon(signal: AbortSignal): Promise<DaemonEndpoint> {
+    if (!this.daemonConnection || this.daemonNeedsCheck) {
+      const previous = this.daemonConnection;
+      this.daemonNeedsCheck = false;
+      const connection = this.openDaemon(previous, signal);
+      this.daemonConnection = connection;
+      void connection.catch(() => {
+        if (this.daemonConnection === connection) this.daemonConnection = undefined;
+      });
+    }
+    return this.daemonConnection;
+  }
+
+  private async openDaemon(previous: Promise<DaemonEndpoint> | undefined, signal: AbortSignal) {
+    const existing = await previous;
+    signal.throwIfAborted();
+    if (existing) {
+      if (this.implicit.client || this.named.client) return existing;
+      try {
+        await execFileAsync(existing.layout.binaryPath, ['status', '--socket', existing.socket], {
+          env: this.daemonEnvironment(existing.layout.embedded),
+          signal,
+          timeout: 3_000,
+          maxBuffer: 4_096,
+          windowsHide: true,
+        });
+        return existing;
+      } catch (error) {
+        signal.throwIfAborted();
+        // A broken proxy or inconclusive status probe is insufficient reason to stop a shared daemon.
+        if (
+          !(error instanceof Error) ||
+          !('stderr' in error) ||
+          typeof error.stderr !== 'string' ||
+          error.stderr.trim() !== 'Cua Driver daemon is not running'
+        ) {
+          return existing;
+        }
+        if (this.implicit.client || this.named.client) return existing;
+        if (this.daemon !== existing) throw new Error('Cua Driver daemon changed during recovery.');
+        await this.stopDaemon();
+      }
+    }
+
+    signal.throwIfAborted();
+    const layout = resolveDriverLayout(this.config);
+    this.ensureExecutable(layout.binaryPath);
+    const endpoint = { layout, socket: this.createSocketPath() };
+    this.daemon = endpoint;
+    try {
+      await this.startDaemon(endpoint, signal);
+      if (this.daemon !== endpoint) throw new Error('Cua Driver daemon stopped during startup.');
+      return endpoint;
+    } catch (error) {
+      if (this.daemon === endpoint) await this.stopDaemon();
+      throw error;
     }
   }
 
@@ -434,11 +550,10 @@ export class CuaDriverClient {
     };
   }
 
-  private async ensureDaemon(layout: DriverLayout, signal?: AbortSignal): Promise<string> {
-    if (this.daemonSocket) return this.daemonSocket;
-    const socket = this.createSocketPath();
-    this.daemonSocket = socket;
-
+  private async startDaemon(
+    { layout, socket }: DaemonEndpoint,
+    signal: AbortSignal,
+  ): Promise<void> {
     if (process.platform !== 'win32') {
       // This anonymous pipe is the lease: owner death closes it even after SIGKILL.
       const lease = spawn(
@@ -467,6 +582,7 @@ export class CuaDriverClient {
       lease.once('error', () => {
         if (this.daemonLease !== lease) return;
         console.error('[pi-computer-use] failed to start daemon lease');
+        this.daemonConnection = undefined;
         void this.stopDaemon();
       });
     }
@@ -492,7 +608,7 @@ export class CuaDriverClient {
       );
       await this.waitForLauncher(launcher, signal);
       await this.waitForSocket(socket, signal);
-      return socket;
+      return;
     }
 
     const args = [
@@ -511,7 +627,6 @@ export class CuaDriverClient {
     if (process.platform === 'win32') {
       await waitForDaemonStatus(layout.binaryPath, socket, signal);
     }
-    return socket;
   }
 
   private waitForLauncher(child: ChildProcess, signal?: AbortSignal): Promise<void> {
@@ -576,7 +691,7 @@ export class CuaDriverClient {
       daemon.stderr?.on('data', onData);
       daemon.once('error', finish);
       daemon.once('exit', (code) => {
-        if (this.state !== 'closing') {
+        if (!this.lifecycleController.signal.aborted) {
           const detail = process.env.DEBUG?.includes('pi-computer-use') ? `: ${stderr.trim()}` : '';
           finish(new Error(`Cua Driver daemon exited with code ${code ?? -1}${detail}.`));
         }
@@ -604,40 +719,28 @@ export class CuaDriverClient {
     }
   }
 
-  private markDisconnected(generation: number): void {
-    if (generation !== this.generation || this.state === 'closing') return;
-    ++this.generation;
-    this.client = null;
-    this.state = 'disconnected';
-  }
-
-  private async disconnectUnhealthyClient(generation: number): Promise<void> {
-    if (generation !== this.generation || this.state === 'closing') return;
-    const failedClient = this.client;
-    this.markDisconnected(generation);
-    // Clear owned-daemon state before awaiting the MCP close so an immediate retry
-    // cannot attach to a socket that is in the process of being torn down.
-    const stopPromise = this.stopDaemon();
-    try {
-      await failedClient?.close();
-    } catch {
-      console.error('[pi-computer-use] failed to close unhealthy MCP client');
-    } finally {
-      await stopPromise;
-    }
+  private disconnectProxy(proxy: McpProxy, client: Client): Promise<void> | undefined {
+    if (proxy.client !== client) return proxy.closing;
+    delete proxy.client;
+    proxy.state = 'disconnected';
+    this.daemonNeedsCheck = true;
+    const closing = client.close().catch(() => {
+      console.error('[pi-computer-use] failed to close MCP proxy');
+    });
+    proxy.closing = closing;
+    void closing.then(() => {
+      if (proxy.closing === closing) delete proxy.closing;
+    });
+    return closing;
   }
 
   async ensureReady(signal?: AbortSignal): Promise<void> {
-    if (this.explicitlyClosed) throw new Error('Cua Driver client is closed.');
-    if (this.state === 'ready' && this.client) return;
     await this.connect(signal);
   }
 
   async listAllTools(signal?: AbortSignal): Promise<Tool[]> {
-    await this.ensureReady(signal);
-    const client = this.client;
-    if (!client) throw new Error('Cua Driver client not connected.');
-
+    const client = await this.connectProxy(this.implicit, signal);
+    signal?.throwIfAborted();
     const allTools: Tool[] = [];
     let cursor: string | undefined;
     do {
@@ -656,30 +759,138 @@ export class CuaDriverClient {
     args: Record<string, unknown>,
     signal?: AbortSignal,
   ): Promise<McpToolResult> {
-    let client: Client;
+    // Keep the shared proxy startup independent of individual tool deadlines.
+    const deadline = AbortSignal.timeout(toolTimeout(name));
+    const requestSignal = signal ? AbortSignal.any([signal, deadline]) : deadline;
     try {
-      await this.ensureReady(signal);
-      signal?.throwIfAborted();
-      if (!this.client) throw new Error('Cua Driver client not connected.');
-      client = this.client;
+      return name === 'list_sessions'
+        ? await this.listSessions(args, requestSignal)
+        : await this.callProxy(this.proxyFor(args.session), name, args, requestSignal);
     } catch (error) {
       if (signal?.aborted) throw abortError(signal);
+      throw error;
+    }
+  }
+
+  private async listSessions(
+    args: Record<string, unknown>,
+    requestSignal: AbortSignal,
+  ): Promise<McpToolResult> {
+    const { session: _session, ...listArgs } = args;
+    const { cursor, ...rest } = listArgs;
+    const named = this.named.state === 'ready' ? this.named.client : undefined;
+    if (!named) return this.callProxy(this.implicit, 'list_sessions', listArgs, requestSignal);
+
+    // The driver's list tool does not activate the transport's implicit session.
+    if (typeof cursor === 'string' && cursor.startsWith(NAMED_SESSION_CURSOR_PREFIX)) {
+      const driverCursor = cursor.slice(NAMED_SESSION_CURSOR_PREFIX.length);
+      const result = await this.requestTool(
+        this.named,
+        named,
+        'list_sessions',
+        {
+          ...rest,
+          ...(driverCursor ? { cursor: driverCursor } : {}),
+        },
+        requestSignal,
+      );
+      const page = sessionPage(result);
+      return page
+        ? mergedSessionPage(page.sessions, page.cursor && NAMED_SESSION_CURSOR_PREFIX + page.cursor)
+        : result;
+    }
+
+    const implicit = this.implicit.state === 'ready' ? this.implicit.client : undefined;
+    let implicitResult: McpToolResult | undefined;
+    if (implicit || cursor != null) {
+      try {
+        implicitResult = await this.callProxy(
+          this.implicit,
+          'list_sessions',
+          listArgs,
+          requestSignal,
+        );
+      } catch (error) {
+        if (cursor != null || this.implicit.client === implicit || requestSignal.aborted)
+          throw error;
+      }
+    }
+    const implicitPage = implicitResult && sessionPage(implicitResult);
+    if (
+      implicitResult &&
+      (this.named.client !== named ||
+        implicitPage?.cursor ||
+        (!implicitPage && !(cursor == null && implicitSessionEnded(implicitResult))))
+    ) {
+      return implicitResult;
+    }
+
+    const implicitSessions = implicitPage?.sessions ?? [];
+    const limit = typeof rest.limit === 'number' ? rest.limit : 50;
+    const remaining = Math.max(0, limit - implicitSessions.length);
+    const namedResult = await this.requestTool(
+      this.named,
+      named,
+      'list_sessions',
+      {
+        ...rest,
+        // Check for a next page without consuming its first session if this page is full.
+        ...(implicitPage ? { limit: remaining || 1 } : {}),
+      },
+      requestSignal,
+    );
+    const namedPage = sessionPage(namedResult);
+    if (!namedPage) return namedResult;
+    if (remaining === 0) {
+      return mergedSessionPage(
+        implicitSessions,
+        namedPage.sessions.length ? NAMED_SESSION_CURSOR_PREFIX : undefined,
+      );
+    }
+    return mergedSessionPage(
+      [...implicitSessions, ...namedPage.sessions],
+      namedPage.cursor && NAMED_SESSION_CURSOR_PREFIX + namedPage.cursor,
+    );
+  }
+
+  private async callProxy(
+    proxy: McpProxy,
+    name: string,
+    args: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<McpToolResult> {
+    let client: Client;
+    try {
+      client = await this.connectProxy(proxy, signal);
+      signal.throwIfAborted();
+    } catch (error) {
       throw new CuaDriverRequestNotDispatched(error);
     }
 
+    return this.requestTool(proxy, client, name, args, signal);
+  }
+
+  private async requestTool(
+    proxy: McpProxy,
+    client: Client,
+    name: string,
+    args: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<McpToolResult> {
+    signal.throwIfAborted();
+    if (proxy.client !== client) {
+      throw new CuaDriverRequestNotDispatched(new Error('Cua Driver MCP proxy disconnected.'));
+    }
     try {
       return (await client.callTool(
         { name, arguments: args },
         undefined,
         // Leave transport time for the driver's bounded automation result to arrive.
-        requestOptions(
-          signal,
-          name === 'run_script' ? 125_000 : name === 'run_steps' ? 65_000 : MCP_TIMEOUT_MS,
-        ),
+        requestOptions(signal, toolTimeout(name)),
       )) as McpToolResult;
     } catch (error) {
-      if (signal?.aborted) throw abortError(signal);
-      await this.disconnectUnhealthyClient(this.generation);
+      if (signal.aborted) throw abortError(signal);
+      await this.disconnectProxy(proxy, client);
       throw new SafeToolError(
         'Cua Driver request',
         error,
@@ -689,19 +900,18 @@ export class CuaDriverClient {
   }
 
   private async stopDaemon(): Promise<void> {
-    const socket = this.daemonSocket;
-    const layout = this.activeLayout;
+    const endpoint = this.daemon;
     const daemonProcess = this.daemonProcess;
     const daemonLease = this.daemonLease;
-    this.daemonSocket = null;
-    this.activeLayout = null;
+    this.daemon = undefined;
     this.daemonProcess = null;
     this.daemonLease = null;
 
     if (daemonLease?.stdin?.writable) daemonLease.stdin.end('cancel\n');
     else daemonLease?.kill();
 
-    if (socket && layout) {
+    if (endpoint) {
+      const { layout, socket } = endpoint;
       try {
         await execFileAsync(layout.binaryPath, ['stop', '--socket', socket], {
           env: this.daemonEnvironment(layout.embedded),
@@ -715,20 +925,18 @@ export class CuaDriverClient {
   }
 
   async close(): Promise<void> {
-    if (this.explicitlyClosed) return;
-    this.explicitlyClosed = true;
-    this.state = 'closing';
-    const connection = this.connectPromise;
+    if (this.lifecycleController.signal.aborted) return;
     this.lifecycleController.abort(new Error('Cua Driver client is closing.'));
-    if (connection) await Promise.allSettled([connection]);
-    const client = this.client;
-    ++this.generation;
-    this.client = null;
-    try {
-      await client?.close();
-    } finally {
-      await this.stopDaemon();
-      this.state = 'disconnected';
-    }
+    const proxies = [this.implicit, this.named];
+    for (const proxy of proxies) proxy.state = 'closing';
+    await Promise.allSettled([...proxies.map((proxy) => proxy.connecting), this.daemonConnection]);
+    await Promise.all(
+      proxies.map((proxy) =>
+        proxy.client ? this.disconnectProxy(proxy, proxy.client) : proxy.closing,
+      ),
+    );
+    await this.stopDaemon();
+    this.daemonConnection = undefined;
+    for (const proxy of proxies) proxy.state = 'disconnected';
   }
 }
