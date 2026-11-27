@@ -62,6 +62,10 @@ function toolTimeout(name: string): number {
   return name === 'run_script' ? 125_000 : name === 'run_steps' ? 65_000 : MCP_TIMEOUT_MS;
 }
 
+export function isNamedSessionCursor(cursor: unknown): cursor is string {
+  return typeof cursor === 'string' && cursor.startsWith(NAMED_SESSION_CURSOR_PREFIX);
+}
+
 function abortError(signal?: AbortSignal): Error {
   if (signal?.reason instanceof Error) return signal.reason;
   return new Error('Cua Driver operation aborted.');
@@ -69,10 +73,10 @@ function abortError(signal?: AbortSignal): Error {
 
 export async function waitForPromise<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) return promise;
-  if (signal.aborted) throw abortError(signal);
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => reject(abortError(signal));
-    signal.addEventListener('abort', onAbort, { once: true });
+    if (signal.aborted) onAbort();
+    else signal.addEventListener('abort', onAbort, { once: true });
     void promise.then(
       (value) => {
         signal.removeEventListener('abort', onAbort);
@@ -329,8 +333,14 @@ interface McpProxy {
   client?: Client;
   connecting?: Promise<Client>;
   closing?: Promise<void>;
+  inFlight?: Promise<void>;
   state: ConnectionState;
   hasConnected?: boolean;
+}
+
+interface RequestDeadline {
+  signal: AbortSignal;
+  expiresAt: number;
 }
 
 interface DaemonEndpoint {
@@ -739,19 +749,25 @@ export class CuaDriverClient {
   }
 
   async listAllTools(signal?: AbortSignal): Promise<Tool[]> {
-    const client = await this.connectProxy(this.implicit, signal);
-    signal?.throwIfAborted();
+    const deadline = this.requestDeadline(MCP_TIMEOUT_MS, signal);
+    const client = await this.connectProxy(this.implicit, deadline.signal);
     const allTools: Tool[] = [];
     let cursor: string | undefined;
     do {
-      const result = await client.listTools(
-        cursor ? { cursor } : undefined,
-        requestOptions(signal),
+      const result = await this.requestProxy(this.implicit, client, deadline, () =>
+        client.listTools(cursor ? { cursor } : undefined, requestOptions(deadline.signal)),
       );
       allTools.push(...result.tools);
       cursor = result.nextCursor;
     } while (cursor);
     return allTools;
+  }
+
+  private requestDeadline(timeout: number, signal?: AbortSignal): RequestDeadline {
+    const expiresAt = performance.now() + timeout;
+    const signals = [this.lifecycleController.signal, AbortSignal.timeout(timeout)];
+    if (signal) signals.push(signal);
+    return { expiresAt, signal: AbortSignal.any(signals) };
   }
 
   async callTool(
@@ -760,12 +776,11 @@ export class CuaDriverClient {
     signal?: AbortSignal,
   ): Promise<McpToolResult> {
     // Keep the shared proxy startup independent of individual tool deadlines.
-    const deadline = AbortSignal.timeout(toolTimeout(name));
-    const requestSignal = signal ? AbortSignal.any([signal, deadline]) : deadline;
+    const deadline = this.requestDeadline(toolTimeout(name), signal);
     try {
       return name === 'list_sessions'
-        ? await this.listSessions(args, requestSignal)
-        : await this.callProxy(this.proxyFor(args.session), name, args, requestSignal);
+        ? await this.listSessions(args, deadline)
+        : await this.callProxy(this.proxyFor(args.session), name, args, deadline);
     } catch (error) {
       if (signal?.aborted) throw abortError(signal);
       throw error;
@@ -774,15 +789,21 @@ export class CuaDriverClient {
 
   private async listSessions(
     args: Record<string, unknown>,
-    requestSignal: AbortSignal,
+    deadline: RequestDeadline,
   ): Promise<McpToolResult> {
     const { session: _session, ...listArgs } = args;
     const { cursor, ...rest } = listArgs;
     const named = this.named.state === 'ready' ? this.named.client : undefined;
-    if (!named) return this.callProxy(this.implicit, 'list_sessions', listArgs, requestSignal);
 
     // The driver's list tool does not activate the transport's implicit session.
-    if (typeof cursor === 'string' && cursor.startsWith(NAMED_SESSION_CURSOR_PREFIX)) {
+    if (isNamedSessionCursor(cursor)) {
+      if (!named) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: 'The named session listing cursor expired.' }],
+          structuredContent: { code: 'invalid_cursor', status: 'refused' },
+        };
+      }
       const driverCursor = cursor.slice(NAMED_SESSION_CURSOR_PREFIX.length);
       const result = await this.requestTool(
         this.named,
@@ -792,26 +813,22 @@ export class CuaDriverClient {
           ...rest,
           ...(driverCursor ? { cursor: driverCursor } : {}),
         },
-        requestSignal,
+        deadline,
       );
       const page = sessionPage(result);
       return page
         ? mergedSessionPage(page.sessions, page.cursor && NAMED_SESSION_CURSOR_PREFIX + page.cursor)
         : result;
     }
+    if (!named) return this.callProxy(this.implicit, 'list_sessions', listArgs, deadline);
 
     const implicit = this.implicit.state === 'ready' ? this.implicit.client : undefined;
     let implicitResult: McpToolResult | undefined;
     if (implicit || cursor != null) {
       try {
-        implicitResult = await this.callProxy(
-          this.implicit,
-          'list_sessions',
-          listArgs,
-          requestSignal,
-        );
+        implicitResult = await this.callProxy(this.implicit, 'list_sessions', listArgs, deadline);
       } catch (error) {
-        if (cursor != null || this.implicit.client === implicit || requestSignal.aborted)
+        if (cursor != null || this.implicit.client === implicit || deadline.signal.aborted)
           throw error;
       }
     }
@@ -837,7 +854,7 @@ export class CuaDriverClient {
         // Check for a next page without consuming its first session if this page is full.
         ...(implicitPage ? { limit: remaining || 1 } : {}),
       },
-      requestSignal,
+      deadline,
     );
     const namedPage = sessionPage(namedResult);
     if (!namedPage) return namedResult;
@@ -857,40 +874,76 @@ export class CuaDriverClient {
     proxy: McpProxy,
     name: string,
     args: Record<string, unknown>,
-    signal: AbortSignal,
+    deadline: RequestDeadline,
   ): Promise<McpToolResult> {
     let client: Client;
     try {
-      client = await this.connectProxy(proxy, signal);
-      signal.throwIfAborted();
+      client = await this.connectProxy(proxy, deadline.signal);
+      deadline.signal.throwIfAborted();
     } catch (error) {
       throw new CuaDriverRequestNotDispatched(error);
     }
 
-    return this.requestTool(proxy, client, name, args, signal);
+    return this.requestTool(proxy, client, name, args, deadline);
   }
 
-  private async requestTool(
+  private requestTool(
     proxy: McpProxy,
     client: Client,
     name: string,
     args: Record<string, unknown>,
-    signal: AbortSignal,
+    deadline: RequestDeadline,
   ): Promise<McpToolResult> {
-    signal.throwIfAborted();
-    if (proxy.client !== client) {
-      throw new CuaDriverRequestNotDispatched(new Error('Cua Driver MCP proxy disconnected.'));
-    }
+    return this.requestProxy(
+      proxy,
+      client,
+      deadline,
+      () =>
+        client.callTool(
+          { name, arguments: args },
+          undefined,
+          requestOptions(deadline.signal, toolTimeout(name)),
+        ) as Promise<McpToolResult>,
+    );
+  }
+
+  private async requestProxy<T>(
+    proxy: McpProxy,
+    client: Client,
+    deadline: RequestDeadline,
+    send: () => Promise<T>,
+  ): Promise<T> {
+    const { signal, expiresAt } = deadline;
     try {
-      return (await client.callTool(
-        { name, arguments: args },
-        undefined,
-        // Leave transport time for the driver's bounded automation result to arrive.
-        requestOptions(signal, toolTimeout(name)),
-      )) as McpToolResult;
+      // The driver serves stdio requests serially and ignores cancellation notifications.
+      while (proxy.inFlight) await waitForPromise(proxy.inFlight, signal);
+      signal.throwIfAborted();
+      if (performance.now() >= expiresAt) {
+        throw new DOMException('Cua Driver request deadline elapsed.', 'TimeoutError');
+      }
+      if (proxy.client !== client) throw new Error('Cua Driver MCP proxy disconnected.');
     } catch (error) {
-      if (signal.aborted) throw abortError(signal);
-      await this.disconnectProxy(proxy, client);
+      throw new CuaDriverRequestNotDispatched(error);
+    }
+
+    const request = this.dispatchRequest(proxy, client, signal, send);
+    const release = () => {
+      delete proxy.inFlight;
+    };
+    proxy.inFlight = request.then(release, release);
+    return request;
+  }
+
+  private async dispatchRequest<T>(
+    proxy: McpProxy,
+    client: Client,
+    signal: AbortSignal,
+    send: () => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await waitForPromise(send(), signal);
+    } catch (error) {
+      void this.disconnectProxy(proxy, client);
       throw new SafeToolError(
         'Cua Driver request',
         error,

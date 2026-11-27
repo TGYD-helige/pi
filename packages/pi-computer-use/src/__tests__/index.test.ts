@@ -56,6 +56,7 @@ function abortableDeferred<T>() {
 
 let mockConfigContent: string | null = null;
 let mockConnect: (signal?: AbortSignal) => Promise<void> = async () => {};
+let mockClose: () => Promise<void> = async () => {};
 let mockCallTool: (
   name: string,
   args: Record<string, unknown>,
@@ -79,6 +80,7 @@ vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
     }
     async close() {
       closeCount++;
+      await mockClose();
     }
     async listTools() {
       return { tools: mockLiveTools, nextCursor: undefined };
@@ -231,6 +233,7 @@ describe('computerUseExtension', () => {
   beforeEach(() => {
     piVersion.value = '1.2.0';
     mockConnect = async () => {};
+    mockClose = async () => {};
     mockCallTool = (name) =>
       name === 'check_permissions'
         ? {
@@ -1189,6 +1192,102 @@ describe('computerUseExtension', () => {
   });
 
   it.each([
+    'timer',
+    'clock',
+    'shutdown',
+  ])('does not send a waiting action after %s', async (reason) => {
+    await start({ confirmAppLaunch: false });
+    const deadline = new AbortController();
+    const timeout = AbortSignal.timeout;
+    const running = abortableDeferred<UpstreamResult>();
+    const dispatch = vi.fn<typeof mockCallTool>((name, _args, signal) =>
+      name === 'run_script' ? running.wait(signal) : { content: [] },
+    );
+    await tools
+      .get('computer_use_list_windows')!
+      .execute('warmup', {}, undefined, undefined, mockCtx);
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) =>
+      ms === 60_000 ? deadline.signal : timeout(ms),
+    );
+    let now = performance.now();
+    vi.spyOn(performance, 'now').mockImplementation(() => now);
+    mockCallTool = dispatch;
+    const execute = (name: string, args: Record<string, unknown>) =>
+      tools.get(`computer_use_${name}`)!.execute(name, args, undefined, undefined, mockCtx);
+    const script = execute('run_script', {});
+    await running.started;
+    const click = execute('click', { pid: 1, x: 2, y: 3 });
+    let shutdown: Promise<unknown> | undefined;
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      if (reason === 'clock') {
+        now += 60_001;
+        running.resolve({ content: [] });
+      } else if (reason === 'shutdown') {
+        shutdown = Promise.all(
+          (handlers.session_shutdown ?? []).map((handler) => handler({}, mockCtx)),
+        );
+      } else {
+        deadline.abort(new DOMException('deadline elapsed', 'TimeoutError'));
+      }
+      expect(await click).toMatchObject({
+        isError: true,
+        structuredContent: { error: { code: 'driver_preflight_failed' } },
+      });
+      expect(dispatch.mock.calls.map(([name]) => name)).toEqual(['run_script']);
+      expect(closeCount).toBe(reason === 'shutdown' ? 1 : 0);
+    } finally {
+      running.resolve({ content: [] });
+      await script;
+      await shutdown;
+    }
+  });
+
+  it('closes only the proxy whose in-flight action timed out', async () => {
+    await start({ confirmAppLaunch: false });
+    const execute = (name: string, args: Record<string, unknown>) =>
+      tools.get(`computer_use_${name}`)!.execute(name, args, undefined, undefined, mockCtx);
+    await execute('list_windows', {});
+    const implicit = lastTransport;
+    const args = { session: 'browser' };
+    await execute('list_windows', args);
+    const named = lastTransport;
+    const deadline = new AbortController();
+    const timeout = AbortSignal.timeout;
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) =>
+      ms === 125_000 ? deadline.signal : timeout(ms),
+    );
+    const running = abortableDeferred<UpstreamResult>();
+    const dispatch = vi.fn<typeof mockCallTool>((name, _args, signal) =>
+      name === 'run_script' ? running.wait(signal) : { content: [] },
+    );
+    mockCallTool = dispatch;
+    const script = execute('run_script', args);
+    await running.started;
+    const closing = abortableDeferred<void>();
+    mockClose = closing.wait;
+    try {
+      deadline.abort(new DOMException('deadline elapsed', 'TimeoutError'));
+      await closing.started;
+      const result = await script;
+      expect(result).toMatchObject({ isError: true });
+      expect(JSON.stringify(result)).toMatch(/execution outcome is unknown/i);
+      expect(closeCount).toBe(1);
+      await execute('list_windows', {});
+      expect(dispatch).toHaveBeenLastCalledWith(
+        'list_windows',
+        {},
+        expect.any(AbortSignal),
+        implicit,
+      );
+    } finally {
+      closing.resolve();
+    }
+    await execute('list_windows', args);
+    expect(lastTransport).not.toBe(named);
+  });
+
+  it.each([
     false,
     true,
   ])('reconnects after the MCP transport closes (daemon stopped: %s)', async (stopped) => {
@@ -1343,6 +1442,37 @@ describe('computerUseExtension', () => {
       'third',
     ]);
     expect(reconnect).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    false,
+    true,
+  ])('rejects an unavailable named cursor without using either proxy (warm: %s)', async (warm) => {
+    const dispatch = vi.fn<typeof mockCallTool>(() => ({ content: [] }));
+    mockCallTool = dispatch;
+    const connect = vi.fn(async () => {});
+    mockConnect = connect;
+    await start();
+    if (warm) {
+      await tools
+        .get('computer_use_list_windows')!
+        .execute('warmup', {}, undefined, undefined, mockCtx);
+      lastTransport?.onclose?.();
+    }
+    connect.mockClear();
+    dispatch.mockClear();
+
+    const result = await tools
+      .get('computer_use_list_sessions')!
+      .execute('resume', { cursor: 'named:o:1' }, undefined, undefined, mockCtx);
+    expect(result).toMatchObject({
+      isError: true,
+      structuredContent: {
+        error: { code: 'invalid_cursor', recovery: expect.stringContaining('without cursor') },
+      },
+    });
+    expect(connect).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it.each([

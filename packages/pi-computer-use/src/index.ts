@@ -19,6 +19,7 @@ import toolManifest from './generated/cua-driver-tools.js';
 import {
   CuaDriverClient,
   CuaDriverRequestNotDispatched,
+  isNamedSessionCursor,
   sanitizeSchemaFormats,
   waitForPromise,
 } from './mcp-client.js';
@@ -477,7 +478,9 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
           let dispatched = false;
           try {
             await ensureConnected(signal, {
-              requestMacPermissions: originalName !== 'check_permissions',
+              requestMacPermissions:
+                originalName !== 'check_permissions' &&
+                !(originalName === 'list_sessions' && isNamedSessionCursor(params.cursor)),
               deferConnection: true,
             });
             if (

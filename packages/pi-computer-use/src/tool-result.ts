@@ -664,6 +664,7 @@ const SAFE_MISSING_TAB_REASONS = [
 ];
 
 const DRIVER_RECOVERY_HINTS: Record<string, string> = {
+  invalid_cursor: 'Call computer_use_list_sessions without cursor to restart the listing.',
   window_id_not_found:
     'The window ID is no longer available. Call computer_use_list_windows in the same session to find a current window ID before retrying.',
   window_owner_pid_mismatch:
