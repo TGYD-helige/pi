@@ -104,8 +104,9 @@ jobs:
           "$bin" --version | grep -F "$driver_version"
           "$bin" list-tools | grep -F 'get_window_state:'
           archive="$(npm pack "$dir" --pack-destination "$RUNNER_TEMP")"
-          tar -xOf "$RUNNER_TEMP/$archive" package/bin/tools.json | cmp - "$dir/bin/tools.json"
-          tar -xOf "$RUNNER_TEMP/$archive" package/bin/.version | cmp - "$dir/bin/.version"
+          # Read from stdin so GNU tar does not interpret Windows drive letters as remote hosts.
+          tar -xzOf - package/bin/tools.json < "$RUNNER_TEMP/$archive" | cmp - "$dir/bin/tools.json"
+          tar -xzOf - package/bin/.version < "$RUNNER_TEMP/$archive" | cmp - "$dir/bin/.version"
       - uses: actions/upload-artifact@v7
         with:
           name: cua-driver-${{ matrix.target }}
