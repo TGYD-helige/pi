@@ -26,15 +26,18 @@ const MCP_TIMEOUT_MS = 60_000;
 const DAEMON_START_TIMEOUT_MS = 10_000;
 const NAMED_SESSION_CURSOR_PREFIX = 'named:';
 const PERMANENT_STATUS_ERROR_CODES = new Set(['EACCES', 'ENOENT', 'EPERM']);
+const DAEMON_NOT_RUNNING = 'Cua Driver daemon is not running';
 const DAEMON_LEASE_SCRIPT = `
 if IFS= read -r _; then exit 0; fi
 attempt=0
 while [ "$attempt" -lt 100 ]; do
   if [ -S "$2" ]; then
     "$1" stop --socket "$2" >/dev/null 2>&1
-    status=$("$1" status --socket "$2" 2>&1)
-    if [ -S "$2" ] && [ "$status" = "Cua Driver daemon is not running" ]; then
-      /bin/rm -f -- "$2"
+    status=$("$1" status --socket "$2" 2>&1 >/dev/null)
+    if [ -S "$2" ]; then
+      case "$status" in
+        "${DAEMON_NOT_RUNNING}"|"${DAEMON_NOT_RUNNING}\n"*) /bin/rm -f -- "$2" ;;
+      esac
     fi
     exit 0
   fi
@@ -549,7 +552,7 @@ export class CuaDriverClient {
           !(error instanceof Error) ||
           !('stderr' in error) ||
           typeof error.stderr !== 'string' ||
-          error.stderr.trim() !== 'Cua Driver daemon is not running'
+          error.stderr.split('\n', 1)[0]?.trim() !== DAEMON_NOT_RUNNING
         ) {
           return existing;
         }

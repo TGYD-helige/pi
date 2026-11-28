@@ -2,11 +2,11 @@
 
 ![pi-computer-use preview](https://raw.githubusercontent.com/TGYD-helige/pi/master/packages/pi-computer-use/preview.png)
 
-Cross-platform computer-use tools for Pi desktop automation. The extension exposes a native MCP tool surface with a `computer_use_` prefix. The bundled runtime comes from the official [Cua Driver Rust 0.37.0 release](https://github.com/trycua/cua/releases/tag/cua-driver-rs-v0.37.0).
+Cross-platform computer-use tools for Pi desktop automation. The extension exposes a native MCP tool surface with a `computer_use_` prefix. The bundled runtime comes from the official [Cua Driver Rust 0.65.0 release](https://github.com/trycua/cua/releases/tag/cua-driver-rs-v0.65.0).
 
 ## What it provides
 
-- One Rust 0.37.0 driver line across macOS, Linux, and Windows
+- One Rust 0.65.0 driver line across macOS, Linux, and Windows
 - Platform-specific, version-pinned upstream tools, including sessions, element tokens, accessibility + screenshot state, native input, browser tools, diagnostics, recording, and permission policy support
 - Deferred tool activation: only the core toolset is active by default; extra groups are activated on demand via `computer_use_tools` or `/computer-use-tools`
 - Full MCP text, image, and `structuredContent` forwarding
@@ -16,7 +16,7 @@ Cross-platform computer-use tools for Pi desktop automation. The extension expos
 - Bounded text and structured results before they enter Pi's context
 - Optional secondary vision analysis through a configured Pi model
 
-`get_window_state` is the primary perception tool. Cua Driver 0.37.0 defaults to a compact Markdown accessibility tree. Request `tree_format:"both"` for structured elements with `element_token`, and `include_screenshot:true` when a screenshot is needed. The standalone `screenshot` tool no longer exists.
+`get_window_state` is the primary perception tool. Cua Driver defaults to a compact Markdown accessibility tree. Request `tree_format:"both"` for structured elements with `element_token`, and `include_screenshot:true` when a screenshot is needed. The standalone `screenshot` tool no longer exists.
 
 The `cursor` group exposes six motion styles through `set_agent_cursor_motion`: `signature_arc`, `spring_settle`, `magnetic`, `comet_swoop`, `adaptive`, and `classic`. Set initial motion with `start_session.cursor_motion`, or save defaults through `set_config` using `cursor.motion.*` keys. The `diagnostics` group includes `parse_visual_regions` for registered captures and `install_extension` for optional Driver-managed extensions; preview the plan first, then request installation with `confirm:true`. With the default `confirmDangerousActions:true`, Pi also requires interactive user approval before installation.
 
@@ -55,7 +55,7 @@ Project settings are loaded only after project trust is accepted. `${ENV_VAR}` i
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `mode` | `"bundled" \| "path"` | `"bundled"` | Use the packaged 0.37.0 driver or a compatible custom binary |
+| `mode` | `"bundled" \| "path"` | `"bundled"` | Use the packaged 0.65.0 driver or a compatible custom binary |
 | `binaryPath` | `string` | — | Custom driver path when `mode` is `"path"` |
 | `extraArgs` | `string[]` | — | Additional arguments appended to `cua-driver mcp` |
 | `confirmAppLaunch` | `boolean` | `true` | Ask once per app target before `launch_app` |

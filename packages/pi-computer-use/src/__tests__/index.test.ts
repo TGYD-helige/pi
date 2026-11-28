@@ -1474,9 +1474,19 @@ describe('computerUseExtension', () => {
   });
 
   it.each([
-    false,
-    true,
-  ])('reconnects after the MCP transport closes (daemon stopped: %s)', async (stopped) => {
+    { status: 'running', stderr: null, stopped: false },
+    { status: 'starting', stderr: 'Cua Driver daemon is starting\n', stopped: false },
+    { status: 'stopped', stderr: 'Cua Driver daemon is not running\n', stopped: true },
+    {
+      status: 'stale socket',
+      stderr:
+        'Cua Driver daemon is not running\n  stale socket file: /tmp/driver.sock (the next launch clears it)\n',
+      stopped: true,
+    },
+  ])('reconnects after the MCP transport closes (daemon status: $status)', async ({
+    stderr,
+    stopped,
+  }) => {
     let connects = 0;
     mockConnect = async () => {
       connects++;
@@ -1487,13 +1497,13 @@ describe('computerUseExtension', () => {
       .execute('id', { pid: 1, x: 2, y: 3 }, undefined, undefined, mockCtx);
     const originalArgs = lastTransportOptions?.args;
     lastTransport?.onclose?.();
-    if (stopped) {
+    if (stderr) {
       vi.mocked(execFile).mockImplementationOnce((...args) => {
         const callback = args.at(-1);
         if (typeof callback === 'function') {
           callback(
             Object.assign(new Error('daemon status failed'), {
-              stderr: 'Cua Driver daemon is not running\n',
+              stderr,
             }),
             '',
             '',
