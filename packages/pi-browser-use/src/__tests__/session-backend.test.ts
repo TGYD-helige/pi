@@ -3,6 +3,24 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHttpBrowserAdapter, readBrowserSessionBinding } from '../session-backend.js';
 
 describe('browser session HTTP adapter', () => {
+  it.each([
+    undefined,
+    123,
+    'invalid://[private',
+  ] as const)('rejects an invalid retry release URL safely', (url) => {
+    expect(() =>
+      createHttpBrowserAdapter(
+        JSON.parse(
+          JSON.stringify({
+            retryRelease: true,
+            create: { url: 'https://example.test/create' },
+            release: { url, body: { id: '{sessionId}' } },
+            fields: { id: 'id', wsEndpoint: 'cdpUrl' },
+          }),
+        ),
+      ),
+    ).toThrow('Browser management URL is invalid.');
+  });
   it('requires a substituted instance ID in the retry release request', () => {
     const config = {
       create: { url: 'https://example.test/create' },

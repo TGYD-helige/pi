@@ -58,7 +58,7 @@ vi.mock('@modelcontextprotocol/sdk/client/stdio.js', () => ({
   },
 }));
 
-const { DevToolsClient } = await import('../index.js');
+const { BrowserSessionClient, DevToolsClient } = await import('../index.js');
 
 describe('DevToolsClient', () => {
   it('backs off after repeated local Chrome launch failures and permits later use', async () => {
@@ -201,6 +201,14 @@ describe('DevToolsClient', () => {
       );
     });
 
+    it.each(['EMFILE', 'ENFILE'])('reports exhausted file descriptors for %s', async (code) => {
+      mockClientConnect.mockRejectedValueOnce(Object.assign(new Error('startup failed'), { code }));
+      const client = new DevToolsClient({ headless: true });
+      await expect(client.connect()).rejects.toThrow(
+        `MCP subprocess exhausted file descriptors (${code}).`,
+      );
+    });
+
     it('does not expose arbitrary MCP subprocess stderr in connection errors', async () => {
       mockClientConnect.mockImplementationOnce(async () => {
         mockTransports[0]!.stderr!.write(
@@ -219,6 +227,24 @@ describe('DevToolsClient', () => {
   });
 
   describe('listAllTools()', () => {
+    it('does not probe status or start discovery for a disconnected cancelled session client', async () => {
+      const status = vi.spyOn(BrowserSessionClient.prototype, 'control');
+      const client = new DevToolsClient({
+        session: { enabled: true, key: 'passive', retentionMs: 1000 },
+      });
+      const controller = new AbortController();
+      const reason = new Error('discovery cancelled');
+      controller.abort(reason);
+      try {
+        expect(await client.ping()).toBe(false);
+        expect(status).not.toHaveBeenCalled();
+        await expect(client.listAllTools(controller.signal)).rejects.toBe(reason);
+        expect(mockTransports).toHaveLength(0);
+      } finally {
+        status.mockRestore();
+        await client.close();
+      }
+    });
     test('paginates through all tool pages', async () => {
       const client = new DevToolsClient();
       await client.connect();

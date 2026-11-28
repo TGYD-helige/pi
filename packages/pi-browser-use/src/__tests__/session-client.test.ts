@@ -52,6 +52,115 @@ describe('BrowserSessionClient', () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
+  it('sanitizes the status request timeout and preserves caller cancellation', async () => {
+    const config = {
+      session: { enabled: true as const, key: 'observer-timeout', retentionMs: 1000 },
+    };
+    const directory = join(
+      root,
+      'browser-sessions',
+      createHash('sha256').update(config.session.key).digest('hex'),
+    );
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await writeSessionRecord(join(directory, 'session.json'), {
+      port: 43210,
+      token: 'a'.repeat(64),
+      configHash: createHash('sha256').update(JSON.stringify(config)).digest('hex'),
+    });
+    const timer = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValueOnce(timer.signal);
+    const entered = deferred();
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementationOnce(async (_url, init) => {
+      entered.resolve();
+      return new Promise<Response>((_resolve, reject) =>
+        init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true }),
+      );
+    });
+    try {
+      const client = new BrowserSessionClient(config);
+      const checked = expect(client.control('status')).rejects.toMatchObject({
+        name: 'SafeToolError',
+        errorCategory: 'timeout',
+      });
+      await entered.promise;
+      timer.abort(new DOMException('internal timeout', 'TimeoutError'));
+      await checked;
+      expect(timeout).toHaveBeenCalledWith(5000);
+      const caller = new AbortController();
+      const reason = new Error('caller cancelled');
+      caller.abort(reason);
+      await expect(client.control('status', caller.signal)).rejects.toBe(reason);
+    } finally {
+      timeout.mockRestore();
+      fetch.mockRestore();
+    }
+  });
+
+  it('does not mark exactly one listed session as truncated when other entries have no records', async () => {
+    const parent = join(root, 'browser-sessions');
+    const id = 'a'.repeat(64);
+    await mkdir(join(parent, id), { recursive: true, mode: 0o700 });
+    await writeSessionRecord(join(parent, id, 'session.json'), {
+      token: 'b'.repeat(64),
+      configHash: 'fixture',
+      ended: 'expired',
+    });
+    await mkdir(join(parent, 'f'.repeat(64)), { mode: 0o700 });
+    await writeFile(join(parent, 'unrelated'), '');
+    await expect(listBrowserSessionRecords(1)).resolves.toEqual({
+      records: [{ id, state: 'expired' }],
+      truncated: false,
+    });
+  });
+
+  it('clears the attachment when parking release closes the worker with partial cleanup', async () => {
+    const config = {
+      wsEndpoint: 'ws://127.0.0.1:9222/browser',
+      sessionMode: 'existing' as const,
+      session: {
+        enabled: true as const,
+        key: 'parking-release',
+        retentionMs: 1000,
+        localParkingMs: 500,
+      },
+    };
+    const directory = join(
+      root,
+      'browser-sessions',
+      createHash('sha256').update(config.session.key).digest('hex'),
+    );
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await writeSessionRecord(join(directory, 'session.json'), {
+      port: 43210,
+      token: 'a'.repeat(64),
+      configHash: createHash('sha256').update(JSON.stringify(config)).digest('hex'),
+    });
+    const actions: string[] = [];
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      const { action } = JSON.parse(String(init?.body));
+      actions.push(action);
+      return action === 'release'
+        ? Response.json(
+            { error: 'Cleanup incomplete.', code: 'session_cleanup_partial' },
+            { status: 409 },
+          )
+        : Response.json({ result: {} });
+    });
+    const client = new BrowserSessionClient(config);
+    try {
+      await client.connect();
+      await expect(client.control('release')).rejects.toMatchObject({
+        code: 'session_cleanup_partial',
+      });
+      expect(client.getState()).toBe('disconnected');
+      await client.close();
+      expect(actions).toEqual(['attach', 'release']);
+    } finally {
+      await client.close();
+      fetch.mockRestore();
+    }
+  });
+
   it('keeps the original worker writable and releasable across temporary homes', async () => {
     const shared = join(root, 'shared');
     const homeA = join(root, 'home-a');

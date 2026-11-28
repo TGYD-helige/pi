@@ -116,15 +116,16 @@ export async function listBrowserSessionRecords(limit = 50, signal?: AbortSignal
   let visited = 0;
   for await (const entry of directory) {
     signal?.throwIfAborted();
-    if (++visited > 500 || records.length >= limit) return { records, truncated: true };
+    if (++visited > 500) return { records, truncated: true };
     if (!entry.isDirectory() || !/^[a-f0-9]{64}$/.test(entry.name)) continue;
     const path = join(root, entry.name);
+    let summary: (typeof records)[number];
     try {
       if (!(await isProtectedSessionDirectory(path))) continue;
       const record = await readSessionRecord(join(path, 'session.json'));
       if (!record) continue;
       const cleanup = record.cleanup;
-      records.push({
+      summary = {
         id: entry.name,
         state: record.ended ?? (record.port ? 'recorded' : 'unavailable'),
         ...(cleanup &&
@@ -139,10 +140,12 @@ export async function listBrowserSessionRecords(limit = 50, signal?: AbortSignal
               },
             }
           : {}),
-      });
+      };
     } catch {
-      records.push({ id: entry.name, state: 'unreadable' });
+      summary = { id: entry.name, state: 'unreadable' };
     }
+    if (records.length >= limit) return { records, truncated: true };
+    records.push(summary);
   }
   signal?.throwIfAborted();
   return { records, truncated: false };
@@ -263,6 +266,8 @@ export class BrowserSessionClient {
         if (this.record.ended || !this.record.port)
           throw new BrowserSessionError(
             'The previous browser session ended or startup was uncertain. Inspect the provider, then explicitly release it or use a new key.',
+            undefined,
+            this.record.ended === 'closed' ? undefined : 'session_cleanup_partial',
           );
       } else {
         if (this.config.session?.backend && !this.config.session.backend.create && !this.browser)
@@ -377,6 +382,7 @@ export class BrowserSessionClient {
     data: object = {},
     signal?: AbortSignal,
     record = this.record,
+    timeoutMs = 65_000,
   ): Promise<T> {
     if (!record?.port)
       throw new BrowserSessionError('The original browser session is unavailable.');
@@ -389,8 +395,8 @@ export class BrowserSessionClient {
         },
         body: JSON.stringify({ ...data, action, owner: this.owner }),
         signal: signal
-          ? AbortSignal.any([signal, AbortSignal.timeout(65_000)])
-          : AbortSignal.timeout(65_000),
+          ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])
+          : AbortSignal.timeout(timeoutMs),
         redirect: 'error',
       });
       const result = (await response.json()) as {
@@ -418,7 +424,9 @@ export class BrowserSessionClient {
       throw new SafeToolError(
         'Browser session request',
         error,
-        'The original browser session has not been replaced. The action may have completed; inspect the current page before retrying.',
+        action === 'status'
+          ? 'Retry the status query or check whether the worker is still running.'
+          : 'The original browser session has not been replaced. The action may have completed; inspect the current page before retrying.',
       );
     }
   }
@@ -452,12 +460,7 @@ export class BrowserSessionClient {
       this.validateRecordIdentity(record);
       if (record.ended) return { state: record.ended };
       if (!record.port) return { state: 'unavailable' };
-      return this.request<object>(
-        'status',
-        {},
-        signal ? AbortSignal.any([signal, AbortSignal.timeout(5000)]) : AbortSignal.timeout(5000),
-        record,
-      );
+      return this.request<object>('status', {}, signal, record, 5000);
     }
     if (action === 'release' && !this.connected) {
       const unlock = await this.lock(signal);
@@ -516,14 +519,29 @@ export class BrowserSessionClient {
       }
     }
     await this.connect(signal);
-    const result = await this.request<object>(action, {}, signal);
-    if (action === 'release' && 'state' in result && result.state === 'released') {
-      clearInterval(this.heartbeat);
-      this.heartbeat = undefined;
-      this.connected = false;
-      this.attachAttempted = false;
+    try {
+      const result = await this.request<object>(action, {}, signal);
+      if (action === 'release' && 'state' in result && result.state === 'released')
+        this.clearAttachment();
+      return result;
+    } catch (error) {
+      if (
+        action === 'release' &&
+        this.config.session?.enabled &&
+        this.config.session.localParkingMs !== undefined &&
+        error instanceof BrowserSessionError &&
+        error.code === 'session_cleanup_partial'
+      )
+        this.clearAttachment();
+      throw error;
     }
-    return result;
+  }
+
+  private clearAttachment() {
+    clearInterval(this.heartbeat);
+    this.heartbeat = undefined;
+    this.connected = false;
+    this.attachAttempted = false;
   }
 
   async close() {

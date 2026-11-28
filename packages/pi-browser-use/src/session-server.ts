@@ -303,7 +303,11 @@ export async function serveBrowserSession(
       }
       let outcome: typeof reason | 'cleanup-failed' =
         acquisitionFailed && !managed ? 'cleanup-failed' : reason;
-      const cleanup = { markerRemoved: true, transportClosed: true, providerReleased: true };
+      const cleanup = {
+        markerRemoved: true,
+        transportClosed: true,
+        providerReleased: !(acquisitionFailed && !managed),
+      };
       if (activeCalls.size) {
         try {
           await bounded(Promise.allSettled(activeCalls), 15_000);
@@ -768,6 +772,7 @@ export async function serveBrowserSession(
           undefined,
           'stale_page_state',
         );
+      const snapshots = refreshedSnapshots;
       return () => {
         executionSignal.throwIfAborted();
         const operation = executingClient.callTool(
@@ -781,15 +786,19 @@ export async function serveBrowserSession(
           abortStalledTools(executingClient, callLifetime);
         };
         void operation.then((result) => {
-          if (listsPages && !result.isError) requiresPageList = false;
           if (
-            refreshedSnapshots &&
-            name === 'take_snapshot' &&
-            pageId !== undefined &&
-            !result.isError
+            !result.isError &&
+            !requestSignal.aborted &&
+            !callLifetime.signal.aborted &&
+            callLifetime === toolLifetime &&
+            owner === input.owner &&
+            snapshots === refreshedSnapshots
           ) {
-            if (refreshedSnapshots.size >= 128) refreshedSnapshots.clear();
-            refreshedSnapshots.add(pageId);
+            if (listsPages) requiresPageList = false;
+            if (snapshots && name === 'take_snapshot' && pageId !== undefined) {
+              if (snapshots.size >= 128) snapshots.clear();
+              snapshots.add(pageId);
+            }
           }
           finish();
         }, finish);
@@ -854,6 +863,8 @@ export async function serveBrowserSession(
         )
           throw new BrowserSessionError(
             'The browser connection changed while this request was queued. This action was not dispatched. Call browser_list_pages and browser_take_snapshot before continuing.',
+            undefined,
+            'stale_page_state',
           );
         phase = 'execution';
         try {

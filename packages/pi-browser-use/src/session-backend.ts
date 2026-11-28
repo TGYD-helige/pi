@@ -264,14 +264,6 @@ export function createHttpBrowserAdapter(
     throw new BrowserSessionError(
       'Browser backend requires release and exactly one of create or a runtime browser binding, with valid response field mappings.',
     );
-  const retryReleaseUrl = config.retryRelease ? sessionIdUrlParts(config.release.url) : undefined;
-  if (
-    retryReleaseUrl &&
-    !retryReleaseUrl.path &&
-    !retryReleaseUrl.query &&
-    !containsSessionId(config.release.body)
-  )
-    throw new BrowserSessionError('Retryable browser release requires a transmitted session ID.');
   const timeoutMs = config.timeoutMs ?? 15_000;
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60_000) {
     throw new BrowserSessionError('Browser backend timeoutMs must be between 1 and 60000.');
@@ -297,6 +289,8 @@ export function createHttpBrowserAdapter(
       (request.method === 'GET' && request.body !== undefined)
     )
       throw new BrowserSessionError('Browser management request method or body is invalid.');
+    if (typeof request.url !== 'string' || !URL.canParse(request.url))
+      throw new BrowserSessionError('Browser management URL is invalid.');
     const url = new URL(request.url);
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
       throw new BrowserSessionError(
@@ -304,6 +298,14 @@ export function createHttpBrowserAdapter(
       );
     }
   }
+  const retryReleaseUrl = config.retryRelease ? sessionIdUrlParts(config.release.url) : undefined;
+  if (
+    retryReleaseUrl &&
+    !retryReleaseUrl.path &&
+    !retryReleaseUrl.query &&
+    !containsSessionId(config.release.body)
+  )
+    throw new BrowserSessionError('Retryable browser release requires a transmitted session ID.');
 
   async function request(
     spec: HttpSessionRequest,

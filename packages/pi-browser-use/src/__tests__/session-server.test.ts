@@ -793,7 +793,7 @@ describe('browser session shutdown', () => {
     const token = randomBytes(32).toString('hex');
     const owner = randomBytes(32).toString('hex');
     const release = vi.fn(async () => {});
-    const outcomes: string[] = [];
+    const onStop = vi.fn();
     let creates = 0;
     const server = await serveBrowserSession(
       { session: { enabled: true, key: 'invalid-adapter-id', retentionMs: 1000 } },
@@ -806,9 +806,7 @@ describe('browser session shutdown', () => {
           },
           release,
         },
-        async onStop(reason) {
-          outcomes.push(reason);
-        },
+        onStop,
       },
     );
     const request = (action: string, args: object = {}) =>
@@ -824,7 +822,11 @@ describe('browser session shutdown', () => {
       await server.stop();
       expect(creates).toBe(1);
       expect(release).not.toHaveBeenCalled();
-      expect(outcomes).toEqual(['cleanup-failed']);
+      expect(onStop).toHaveBeenCalledWith('cleanup-failed', {
+        markerRemoved: true,
+        transportClosed: true,
+        providerReleased: false,
+      });
     } finally {
       await server.stop();
     }

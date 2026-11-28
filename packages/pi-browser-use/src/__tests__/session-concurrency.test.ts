@@ -550,6 +550,52 @@ describe('browser session concurrency', () => {
     }
   });
 
+  it('keeps the recovery fence when a cancelled page list completes late', async () => {
+    const entered = deferred();
+    const cancelled = deferred();
+    const finish = deferred();
+    let delayPageList = false;
+    const session = await openSession(
+      async (name, _args, signal) => {
+        if (name === 'list_pages' && delayPageList) {
+          signal!.addEventListener('abort', cancelled.resolve, { once: true });
+          entered.resolve();
+          await finish.promise;
+        }
+        return { content: [] };
+      },
+      {
+        async reconnect() {
+          return { wsEndpoint: 'ws://127.0.0.1:1' };
+        },
+      },
+    );
+    try {
+      const pages = { name: 'list_pages', args: {} };
+      await session.request('call', pages);
+      session.state.mockReturnValue('stalled');
+      expect(await session.request('call', pages)).toMatchObject({
+        error: expect.stringContaining('MCP subprocess was replaced'),
+      });
+      delayPageList = true;
+      const controller = new AbortController();
+      const listing = session.request('call', pages, controller.signal).catch(() => undefined);
+      await entered.promise;
+      controller.abort();
+      await cancelled.promise;
+      finish.resolve();
+      await listing;
+      const snapshot = { name: 'take_snapshot', args: { pageId: 1 } };
+      expect(await session.request('call', snapshot)).toMatchObject({ code: 'stale_page_state' });
+      delayPageList = false;
+      await session.request('call', pages);
+      expect(await session.request('call', snapshot)).toMatchObject({ result: { content: [] } });
+    } finally {
+      finish.resolve();
+      await session.server.stop();
+    }
+  });
+
   it('drains a dispatched call during ordinary shutdown and refuses a new call', async () => {
     const entered = deferred();
     const finish = deferred();

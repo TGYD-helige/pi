@@ -299,6 +299,7 @@ export class DevToolsClient {
 
   async ping(signal?: AbortSignal): Promise<boolean> {
     if (this.sessionClient) {
+      if (this.sessionClient.getState() !== 'ready') return false;
       try {
         const status = await this.sessionClient.control('status', signal);
         return (
@@ -341,6 +342,7 @@ export class DevToolsClient {
   }
 
   async listAllTools(signal?: AbortSignal): Promise<Tool[]> {
+    signal?.throwIfAborted();
     if (this.sessionClient) {
       const { session: _session, ...config } = this.config;
       const discovery = new DevToolsClient(config);
