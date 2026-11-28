@@ -12,6 +12,7 @@ import {
   validateBrowserBinding,
   validateBrowserExpiry,
 } from './session-backend.js';
+import type { SessionCleanupProgress } from './session-client.js';
 import { createBrowserConnection, listenOnReachablePort } from './session-connection.js';
 import { BrowserSessionError, BrowserToolNotDispatched, scriptValue } from './session-control.js';
 import { loadConcurrencyMap } from './tool-groups.js';
@@ -19,6 +20,8 @@ import { loadConcurrencyMap } from './tool-groups.js';
 const MAX_BYTES = 32 * 1024 * 1024;
 const OPERATION_MS = 60_000;
 const MAX_TOOL_CALLS = 8;
+const VERIFICATION_FRESHNESS_MS = 5000;
+const SHUTDOWN_DRAIN_MS = 1000;
 
 async function bounded<T>(operation: Promise<T>, milliseconds: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -73,7 +76,10 @@ export async function serveBrowserSession(
     adapter?: BrowserLifecycleAdapter;
     browser?: ManagedBrowser;
     onAcquire?: (browser: ManagedBrowser) => Promise<void>;
-    onStop?: (reason: 'closed' | 'expired' | 'lost' | 'cleanup-failed') => Promise<void>;
+    onStop?: (
+      reason: 'closed' | 'expired' | 'lost' | 'cleanup-failed',
+      cleanup?: SessionCleanupProgress,
+    ) => Promise<void>;
   } = {},
 ) {
   const session = config.session;
@@ -82,6 +88,12 @@ export async function serveBrowserSession(
   if (!/^[a-f0-9]{64}$/.test(token))
     throw new BrowserSessionError('Browser session transport requires a random 32-byte hex token.');
   const retentionMs = session.retentionMs;
+  const localParkingMs = session.localParkingMs;
+  if (localParkingMs !== undefined) {
+    resolveConfig(config);
+    if (options.adapter)
+      throw new BrowserSessionError('Local parking requires the direct browser adapter.');
+  }
   const adapter = await createBrowserAdapter(config, options);
   const toolConcurrency = await loadConcurrencyMap();
   let managed: ManagedBrowser | undefined;
@@ -111,12 +123,18 @@ export async function serveBrowserSession(
   let ownerPid: number | undefined;
   let attachedOnce = false;
   let resumed = false;
+  let requiresPageList = false;
+  let refreshedSnapshots: Set<number> | undefined;
   const startedAt = Date.now();
   let lastSeen = Date.now();
   let expiresAt: number | undefined;
+  let parkedUntil: number | undefined;
+  let parkingLimit: number | undefined;
   let hardDeadline: number | undefined;
+  let verifiedAt: number | undefined;
   let marker: { pageId: number; nonce: string } | undefined;
   let stopped = false;
+  let stopFailed = false;
   let stopping: Promise<void> | undefined;
   let sweepScheduled = false;
   const activeCalls = new Set<Promise<unknown>>();
@@ -242,16 +260,32 @@ export async function serveBrowserSession(
   function status() {
     let state = browserUsed ? 'active' : 'idle';
     if (expiresAt) state = expiresAt > Date.now() ? 'retained' : 'expired';
+    if (parkedUntil) state = parkedUntil > Date.now() ? 'parked' : 'expired';
+    if (hardDeadline !== undefined && hardDeadline <= Date.now()) state = 'expired';
+    if (connection && !connection.alive) state = 'lost';
+    if (stopped) state = 'ending';
     return {
       state,
       resumed,
+      attached: owner !== undefined,
       toolState: recoveryFailed ? 'failed' : client.getState(),
       strategy: 'held-connection',
       ownership: adapter.ownership ?? 'adapter',
       providerDeadlineKnown: hardDeadline !== undefined,
       ...(expiresAt ? { expiresAt: new Date(expiresAt).toISOString() } : {}),
+      ...(parkedUntil ? { parkedUntil: new Date(parkedUntil).toISOString() } : {}),
       ...(hardDeadline ? { providerExpiresAt: new Date(hardDeadline).toISOString() } : {}),
+      ...(verifiedAt !== undefined ? { verifiedAt: new Date(verifiedAt).toISOString() } : {}),
     };
+  }
+
+  function clearOwner() {
+    owner = undefined;
+    ownerPid = undefined;
+    if (localParkingMs === undefined || expiresAt || !connection?.connected) return;
+    const now = Date.now();
+    parkingLimit ??= now + retentionMs;
+    if (parkingLimit > now) parkedUntil = Math.min(parkingLimit, now + localParkingMs);
   }
 
   async function stop(reason: 'closed' | 'expired' | 'lost' = 'closed') {
@@ -260,6 +294,10 @@ export async function serveBrowserSession(
     lifetime.abort();
     stopping = (async () => {
       clearInterval(sweep);
+      if (reason === 'closed' && activeCalls.size) {
+        await bounded(Promise.allSettled(activeCalls), SHUTDOWN_DRAIN_MS).catch(() => {});
+      }
+      toolLifetime.abort();
       if (acquiring) {
         try {
           await bounded(acquiring, 15_000);
@@ -269,11 +307,13 @@ export async function serveBrowserSession(
       }
       let outcome: typeof reason | 'cleanup-failed' =
         acquisitionFailed && !managed ? 'cleanup-failed' : reason;
+      const cleanup = { markerRemoved: true, transportClosed: true, providerReleased: true };
       if (activeCalls.size) {
         try {
           await bounded(Promise.allSettled(activeCalls), 15_000);
         } catch {
           outcome = 'cleanup-failed';
+          cleanup.transportClosed = false;
         }
       }
       if (replacing) {
@@ -284,6 +324,7 @@ export async function serveBrowserSession(
           );
         } catch {
           outcome = 'cleanup-failed';
+          cleanup.transportClosed = false;
         }
       }
       if (marker && reason !== 'lost' && adapter.ownership === 'external') {
@@ -292,25 +333,33 @@ export async function serveBrowserSession(
             throw new BrowserSessionError('The marker connection is no longer available.');
           await bounded(removeMarker(AbortSignal.timeout(5000)), 5000);
         } catch {
+          cleanup.markerRemoved = false;
           outcome = 'cleanup-failed';
           console.error('[pi-browser-use] could not remove the browser session marker');
         }
       }
       await closeBrowser(client, connection);
-      if (browserCleanupFailed) outcome = 'cleanup-failed';
+      if (browserCleanupFailed) {
+        cleanup.transportClosed = false;
+        outcome = 'cleanup-failed';
+      }
       try {
         await releaseManaged();
       } catch {
+        cleanup.providerReleased = false;
         outcome = 'cleanup-failed';
         console.error(
           '[pi-browser-use] provider cleanup failed; the protected session record contains recovery metadata',
         );
       }
       try {
-        await options.onStop?.(outcome);
+        if (outcome === 'cleanup-failed') await options.onStop?.(outcome, cleanup);
+        else await options.onStop?.(outcome);
       } catch {
+        outcome = 'cleanup-failed';
         console.error('[pi-browser-use] could not save browser session cleanup status');
       } finally {
+        stopFailed = outcome === 'cleanup-failed';
         if (server.listening) server.close();
         server.closeIdleConnections();
       }
@@ -405,17 +454,25 @@ export async function serveBrowserSession(
     if (recoveryFailed || !managed || !adapter.reconnect)
       throw new BrowserSessionError(
         'Browser tools are stalled. The previous action may have completed. Safe reattachment to the same live browser is unavailable; inspect it externally before explicitly starting another session. No action was replayed.',
+        undefined,
+        'reconnect_exhausted',
       );
     recoveryFailed = true;
+    verifiedAt = undefined;
     if (hardDeadline !== undefined && hardDeadline <= Date.now())
       throw new BrowserSessionError('The provider browser deadline has expired.');
     const recoverySignal = AbortSignal.any([signal, AbortSignal.timeout(10_000)]);
     console.error('[pi-browser-use] recovering browser tool execution (phase=recovery)');
     replacing = (async () => {
-      const resolved = await abortable(
-        adapter.reconnect!(managed!, recoverySignal),
-        recoverySignal,
-      );
+      const reconnect = () =>
+        abortable(adapter.reconnect!(managed!, recoverySignal), recoverySignal);
+      const resolved = await Promise.resolve()
+        .then(reconnect)
+        .catch((error: unknown) => {
+          recoverySignal.throwIfAborted();
+          if (classifyError(error).errorCategory !== 'network_error') throw error;
+          return reconnect();
+        });
       recoverySignal.throwIfAborted();
       validateBrowserBinding({ ...managed!, connection: resolved });
       await abortable(closeBrowser(client, connection), recoverySignal);
@@ -458,6 +515,8 @@ export async function serveBrowserSession(
       await options.onAcquire?.(managed!);
       recoverySignal.throwIfAborted();
       toolLifetime = new AbortController();
+      requiresPageList = true;
+      refreshedSnapshots = new Set();
       recoveryFailed = false;
     })();
     try {
@@ -466,6 +525,8 @@ export async function serveBrowserSession(
       console.error('[pi-browser-use] browser tool recovery failed (phase=recovery)');
       throw new BrowserSessionError(
         'Browser tool recovery failed. The previous action may have completed; inspect the original browser externally. No action was replayed.',
+        undefined,
+        'reconnect_exhausted',
       );
     } finally {
       // A late completion cannot start another attempt or publish a recovered session.
@@ -480,11 +541,18 @@ export async function serveBrowserSession(
     );
   }
 
-  async function verify(signal: AbortSignal) {
+  function checkBrowserConnection() {
     if (connection && !connection.alive)
       throw new BrowserSessionError(
         'The original CDP connection was lost. No replacement browser was created.',
       );
+    if (hardDeadline !== undefined && hardDeadline <= Date.now())
+      throw new BrowserSessionError('The provider browser deadline has expired.');
+  }
+
+  async function verify(signal: AbortSignal) {
+    verifiedAt = undefined;
+    checkBrowserConnection();
     if (adapter.describe && managed) {
       const description = await abortable(adapter.describe(managed, signal), signal);
       if (!description || typeof description.alive !== 'boolean')
@@ -506,15 +574,21 @@ export async function serveBrowserSession(
           'The original live browser was lost. Profile restoration is not live-session recovery.',
         );
     }
+    verifiedAt = Date.now();
   }
 
   async function removeMarker(signal: AbortSignal) {
     if (!marker) return;
     await client.removeSessionMarker(marker.pageId, marker.nonce, signal);
     marker = undefined;
+    verifiedAt = undefined;
   }
 
-  async function dispatch(input: Record<string, unknown>, signal: AbortSignal): Promise<unknown> {
+  async function dispatch(
+    input: Record<string, unknown>,
+    signal: AbortSignal,
+    requestSignal = signal,
+  ): Promise<unknown> {
     if (stopped) throw new BrowserSessionError('The browser session has ended.');
     const action = input.action;
     if (action === 'attach') {
@@ -525,15 +599,29 @@ export async function serveBrowserSession(
         (!Number.isSafeInteger(input.pid) || (input.pid as number) < 1)
       )
         throw new BrowserSessionError('Invalid browser session client process.');
-      if (ownerExited()) owner = undefined;
+      if (ownerExited()) clearOwner();
       if (owner && owner !== input.owner)
-        throw new BrowserSessionError('This browser session is already in use by another client.');
-      if (expiresAt && expiresAt <= Date.now())
-        throw new BrowserSessionError('The retained browser has expired.');
-      if (expiresAt) await verify(signal);
+        throw new BrowserSessionError(
+          'This browser session is already in use by another client.',
+          undefined,
+          'session_busy',
+        );
+      if ((expiresAt && expiresAt <= Date.now()) || (parkedUntil && parkedUntil <= Date.now()))
+        throw new BrowserSessionError(
+          'The retained browser has expired.',
+          undefined,
+          'session_expired',
+        );
+      const returning = attachedOnce && (expiresAt !== undefined || parkedUntil !== undefined);
+      if (returning) await verify(signal);
+      if (owner !== input.owner && returning) {
+        requiresPageList = true;
+        refreshedSnapshots = new Set();
+      }
       owner = input.owner;
       ownerPid = input.pid as number | undefined;
-      resumed = attachedOnce && expiresAt !== undefined;
+      resumed = returning;
+      parkedUntil = undefined;
       attachedOnce = true;
       lastSeen = Date.now();
       // Keep the deadline until explicit release, including a subsequent client crash.
@@ -544,13 +632,10 @@ export async function serveBrowserSession(
     lastSeen = Date.now();
     if (action === 'heartbeat') return {};
     if (action === 'detach') {
-      owner = undefined;
-      if (!expiresAt || expiresAt <= Date.now()) await stop(expiresAt ? 'expired' : 'closed');
+      clearOwner();
+      if (!parkedUntil && (!expiresAt || expiresAt <= Date.now()))
+        await stop(expiresAt ? 'expired' : 'closed');
       return {};
-    }
-    if (action === 'status') {
-      if (marker || connection) await verify(signal);
-      return status();
     }
     if (action === 'retain') {
       if (!browserUsed)
@@ -575,6 +660,7 @@ export async function serveBrowserSession(
             'Could not establish live-browser identity; retention was not enabled.',
           );
         marker = { pageId: Number(match[1]), nonce };
+        verifiedAt = undefined;
         scriptValue(
           await client.callTool(
             'evaluate_script',
@@ -604,6 +690,16 @@ export async function serveBrowserSession(
       return status();
     }
     if (action === 'release') {
+      if (localParkingMs !== undefined) {
+        await stop();
+        if (stopFailed)
+          throw new BrowserSessionError(
+            'The browser session stopped with incomplete cleanup.',
+            undefined,
+            'session_cleanup_partial',
+          );
+        return { state: 'released' };
+      }
       expiresAt = undefined;
       await removeMarker(signal);
       return status();
@@ -618,15 +714,17 @@ export async function serveBrowserSession(
       )
         throw new BrowserSessionError('Invalid browser tool request.');
       const callLifetime = toolLifetime;
-      const executionSignal = AbortSignal.any([
-        signal,
-        callLifetime.signal,
-        AbortSignal.timeout(50_000),
-      ]);
+      const toolDeadline = AbortSignal.timeout(50_000);
+      const executionSignal = AbortSignal.any([signal, callLifetime.signal, toolDeadline]);
       try {
         if (recoveryFailed || client.getState() === 'stalled') await recoverTools(signal);
         await ensureBrowser(executionSignal);
-        if (marker || connection) await verify(executionSignal);
+        checkBrowserConnection();
+        if (marker || connection) {
+          const age = verifiedAt === undefined ? Infinity : Date.now() - verifiedAt;
+          if (age < 0 || age >= VERIFICATION_FRESHNESS_MS || (marker && !connection))
+            await verify(executionSignal);
+        }
         await client.ensureReady(executionSignal);
         executionSignal.throwIfAborted();
       } catch (error) {
@@ -636,14 +734,53 @@ export async function serveBrowserSession(
       const executingClient = client;
       const name = input.name;
       const args = input.args as Record<string, unknown>;
+      const listsPages = name === 'list_pages' || name === 'new_page';
+      if (requiresPageList && !listsPages)
+        throw new BrowserSessionError(
+          'This action was not dispatched. Call browser_list_pages and take a fresh snapshot before using page or element identifiers.',
+          undefined,
+          'stale_page_state',
+        );
+      const pageId = typeof args.pageId === 'number' ? args.pageId : undefined;
+      if (
+        refreshedSnapshots &&
+        (args.uid !== undefined ||
+          args.from_uid !== undefined ||
+          args.to_uid !== undefined ||
+          args.elements !== undefined ||
+          (name === 'evaluate_script' && Array.isArray(args.args) && args.args.length > 0)) &&
+        (pageId === undefined || !refreshedSnapshots.has(pageId))
+      )
+        throw new BrowserSessionError(
+          'This action was not dispatched. Call browser_take_snapshot with the current pageId before using element identifiers.',
+          undefined,
+          'stale_page_state',
+        );
       return () => {
-        const operation = executingClient.callTool(name, args, executionSignal);
+        executionSignal.throwIfAborted();
+        const operation = executingClient.callTool(
+          name,
+          args,
+          AbortSignal.any([requestSignal, callLifetime.signal, toolDeadline]),
+        );
         activeCalls.add(operation);
         const finish = () => {
           activeCalls.delete(operation);
           abortStalledTools(executingClient, callLifetime);
         };
-        void operation.then(finish, finish);
+        void operation.then((result) => {
+          if (listsPages && !result.isError) requiresPageList = false;
+          if (
+            refreshedSnapshots &&
+            name === 'take_snapshot' &&
+            pageId !== undefined &&
+            !result.isError
+          ) {
+            if (refreshedSnapshots.size >= 128) refreshedSnapshots.clear();
+            refreshedSnapshots.add(pageId);
+          }
+          finish();
+        }, finish);
         return operation;
       };
     }
@@ -681,11 +818,17 @@ export async function serveBrowserSession(
       const input = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>;
       if (!input || typeof input !== 'object' || Array.isArray(input))
         throw new BrowserSessionError('Invalid browser session request.');
+      if (input.action === 'status') {
+        res.end(JSON.stringify({ result: status() }));
+        return;
+      }
       if (owner && input.owner === owner) lastSeen = Date.now();
       const isToolCall = input.action === 'call';
       if (isToolCall && pendingToolCalls >= MAX_TOOL_CALLS)
         throw new BrowserSessionError(
           'Browser session is busy (8 pending tool calls). This action was not dispatched. Wait for active operations before retrying.',
+          undefined,
+          'session_busy',
         );
       if (isToolCall) pendingToolCalls++;
       const admittedLifetime = toolLifetime;
@@ -702,7 +845,7 @@ export async function serveBrowserSession(
           );
         phase = 'execution';
         try {
-          const prepared = await dispatch(input, signal);
+          const prepared = await dispatch(input, signal, requestSignal);
           return { result: isToolCall ? (prepared as () => Promise<unknown>)() : prepared };
         } finally {
           abortStalledTools(client, admittedLifetime);
@@ -743,7 +886,11 @@ export async function serveBrowserSession(
       res.end(
         JSON.stringify({
           ...(error instanceof BrowserSessionError || error instanceof BrowserToolNotDispatched
-            ? { error: error.message, ...classifyError(error) }
+            ? {
+                error: error.message,
+                ...(error.code ? { code: error.code } : {}),
+                ...classifyError(error),
+              }
             : describeToolError(
                 'Browser session operation',
                 error,
@@ -761,10 +908,10 @@ export async function serveBrowserSession(
     void scheduleOperation(preparation, undefined, lifetime.signal, async () => {
       if (!attachedOnce && Date.now() - startedAt < OPERATION_MS) return;
       // Heartbeats track client liveness; they never extend the retention deadline.
-      if (owner && (ownerExited() || Date.now() - lastSeen > 30_000)) owner = undefined;
+      if (owner && (ownerExited() || Date.now() - lastSeen > 30_000)) clearOwner();
       const expired = hardDeadline !== undefined && Date.now() >= hardDeadline;
       if (connection && !connection.alive) await stop('lost');
-      else if (expired || (!owner && (!expiresAt || Date.now() >= expiresAt)))
+      else if (expired || (!owner && Date.now() >= (expiresAt ?? parkedUntil ?? 0)))
         await stop(expired || expiresAt ? 'expired' : 'closed');
       else if (!owner && marker && !connection) {
         try {

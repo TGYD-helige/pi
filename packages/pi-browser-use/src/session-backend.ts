@@ -54,6 +54,8 @@ export interface HttpSessionRequest {
 export interface HttpBrowserBackend {
   create?: HttpSessionRequest;
   release: HttpSessionRequest;
+  /** The host guarantees that repeating release of an exact instance is safe. */
+  retryRelease?: boolean;
   status?: HttpSessionRequest;
   retain?: HttpSessionRequest;
   fields?: {
@@ -79,6 +81,8 @@ export type BrowserSessionConfig = {
       key: string;
       /** Upper bound per handoff; no idle retention is enabled by this setting alone. */
       retentionMs: number;
+      /** Opt-in detachable idle window for a held loopback CDP socket. */
+      localParkingMs?: number;
     }
   | { enabled: false; key?: string; retentionMs?: number }
 );
@@ -222,6 +226,10 @@ export function createHttpBrowserAdapter(
   if (browser !== undefined) validateBrowserBinding(browser);
   if (
     !config?.release ||
+    (config.retryRelease !== undefined && typeof config.retryRelease !== 'boolean') ||
+    (config.retryRelease === true &&
+      !config.release.url?.includes('{sessionId}') &&
+      !JSON.stringify(config.release.body ?? null).includes('{sessionId}')) ||
     Object.hasOwn(config, 'sessionId') ||
     Boolean(config.create) === (browser !== undefined) ||
     (config.create &&

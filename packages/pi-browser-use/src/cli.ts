@@ -19,7 +19,12 @@ import { DevToolsClient } from './index.js';
 import { prepareBrowserProfile } from './profile.js';
 import { readBrowserSessionBinding } from './session-backend.js';
 import { parseBrowserHeaders } from './session-connection.js';
-import { SESSION_DESCRIPTION, sessionParameters, sessionToolResult } from './session-control.js';
+import {
+  SESSION_DESCRIPTION,
+  sessionParameters,
+  sessionRefusalResult,
+  sessionToolResult,
+} from './session-control.js';
 import { augmentToolDescription } from './tool-augment.js';
 import { toToolContent } from './tool-result.js';
 
@@ -228,8 +233,15 @@ async function main(): Promise<void> {
             return await handleAnalyzeScreenshot(client, callVision, params, signal);
           }
 
-          const result = await client.callTool(originalName, params, signal);
-          return toToolContent(result, originalName);
+          try {
+            const result = await client.callTool(originalName, params, signal);
+            return toToolContent(result, originalName);
+          } catch (error) {
+            if (signal?.aborted) throw error;
+            const refusal = sessionRefusalResult(error);
+            if (!refusal) throw error;
+            return refusal;
+          }
         },
       },
       undefined,

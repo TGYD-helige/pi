@@ -20,8 +20,9 @@ process.once(
           message.record.managed = browser;
           await writeSessionRecord(message.path, message.record);
         },
-        async onStop(reason) {
+        async onStop(reason, cleanup) {
           message.record.ended = reason;
+          if (cleanup) message.record.cleanup = cleanup;
           if (reason === 'closed') await rm(message.path, { force: true });
           else await writeSessionRecord(message.path, message.record);
         },

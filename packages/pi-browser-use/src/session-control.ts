@@ -1,4 +1,4 @@
-import { describeToolError, SafeToolError } from '@amaster.ai/pi-shared';
+import { agentToolErrorResult, describeToolError, SafeToolError } from '@amaster.ai/pi-shared';
 import { StringEnum } from '@earendil-works/pi-ai';
 import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import { Type } from 'typebox';
@@ -11,6 +11,13 @@ export const sessionParameters: ReturnType<typeof Type.Object> = Type.Object({
 });
 
 export type SessionAction = 'retain' | 'status' | 'release';
+export type SessionRefusalCode =
+  | 'session_busy'
+  | 'session_expired'
+  | 'session_cleanup_partial'
+  | 'stale_page_state'
+  | 'reconnect_exhausted'
+  | 'browser_launch_backoff';
 
 export async function sessionToolResult(
   action: unknown,
@@ -26,6 +33,8 @@ export async function sessionToolResult(
     return { content: [{ type: 'text' as const, text: JSON.stringify(status) }], details: status };
   } catch (error) {
     if (signal?.aborted) throw error;
+    const refusal = sessionRefusalResult(error);
+    if (refusal) return { ...refusal, details: {} };
     const failure = describeToolError(
       'Browser session operation',
       error,
@@ -46,18 +55,36 @@ export async function sessionToolResult(
 }
 
 export class BrowserToolNotDispatched extends SafeToolError {
+  readonly code?: SessionRefusalCode;
   constructor(error: unknown) {
     super('Browser preflight', error, 'Check the browser connection before retrying.');
     this.message = `The browser tool call was not sent. ${this.message}`;
+    if (
+      (error instanceof BrowserSessionError || error instanceof BrowserToolNotDispatched) &&
+      error.code
+    )
+      this.code = error.code;
   }
 }
 
 export class BrowserSessionError extends SafeToolError {
-  constructor(message: string, cause?: unknown) {
+  constructor(
+    message: string,
+    cause?: unknown,
+    readonly code?: SessionRefusalCode,
+  ) {
     super('Browser session', cause ?? new Error(message));
     this.message = message;
     this.name = 'BrowserSessionError';
   }
+}
+
+export function sessionRefusalResult(error: unknown) {
+  if (
+    (error instanceof BrowserSessionError || error instanceof BrowserToolNotDispatched) &&
+    error.code
+  )
+    return agentToolErrorResult({ code: error.code, message: error.message });
 }
 
 export function scriptValue(value: unknown): unknown {

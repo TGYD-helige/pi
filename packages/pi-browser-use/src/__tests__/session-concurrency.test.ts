@@ -67,6 +67,40 @@ async function openSession(
 describe('browser session concurrency', () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it('shares a recent provider verification across successful page operations', async () => {
+    const describeBrowser = vi.fn(async () => ({ alive: true }));
+    const session = await openSession(
+      async (_name, args) => ({
+        content: [{ type: 'text', text: `page ${args.pageId}` }],
+      }),
+      { describe: describeBrowser },
+    );
+    try {
+      const results = await Promise.all(
+        [1, 2].map((pageId) =>
+          session.request('call', { name: 'take_snapshot', args: { pageId } }),
+        ),
+      );
+      expect(results).toEqual(
+        [1, 2].map((pageId) => ({
+          result: { content: [{ type: 'text', text: `page ${pageId}` }] },
+        })),
+      );
+      expect(describeBrowser).toHaveBeenCalledTimes(1);
+      const now = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 5001);
+      try {
+        await expect(
+          session.request('call', { name: 'take_snapshot', args: { pageId: 1 } }),
+        ).resolves.toEqual({ result: { content: [{ type: 'text', text: 'page 1' }] } });
+        expect(describeBrowser).toHaveBeenCalledTimes(2);
+      } finally {
+        now.mockRestore();
+      }
+    } finally {
+      await session.server.stop();
+    }
+  });
+
   it('acquires once when first calls arrive during browser creation', async () => {
     const acquiring = deferred();
     const acquired = deferred();
@@ -477,9 +511,72 @@ describe('browser session concurrency', () => {
       for (const result of stale)
         expect(result).toMatchObject({ error: expect.stringContaining('was not dispatched') });
       expect(session.call.mock.calls.some(([name]) => name === 'click')).toBe(false);
+      const oldPage = { name: 'take_snapshot', args: { pageId: 1 } };
+      expect(await session.request('call', oldPage)).toMatchObject({
+        code: 'stale_page_state',
+      });
+      expect(session.call.mock.calls.some(([name]) => name === 'take_snapshot')).toBe(false);
+      await session.request('call', { name: 'list_pages', args: {} });
+      expect(
+        await session.request('call', { name: 'click', args: { pageId: 1, uid: 'old_uid' } }),
+      ).toMatchObject({ code: 'stale_page_state' });
+      await expect(session.request('call', oldPage)).resolves.toEqual({ result: { content: [] } });
+      await expect(
+        session.request('call', { name: 'click', args: { pageId: 1, uid: 'current_uid' } }),
+      ).resolves.toEqual({ result: { content: [] } });
     } finally {
       reconnected.resolve();
       await Promise.allSettled(requests);
+      await session.server.stop();
+    }
+  });
+
+  it('retries a settled transient reconnect failure without replaying an action', async () => {
+    const reconnect = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error('transient'), { code: 'ECONNRESET' }))
+      .mockResolvedValueOnce({ wsEndpoint: 'ws://127.0.0.1:1' });
+    const session = await openSession(async () => ({ content: [] }), { reconnect });
+    try {
+      await session.request('call', { name: 'list_pages', args: {} });
+      session.state.mockReturnValue('stalled');
+      expect(
+        await session.request('call', { name: 'click', args: { pageId: 1, uid: 'old_uid' } }),
+      ).toMatchObject({ error: expect.stringContaining('MCP subprocess was replaced') });
+      expect(reconnect).toHaveBeenCalledTimes(2);
+      expect(session.call.mock.calls.some(([name]) => name === 'click')).toBe(false);
+    } finally {
+      await session.server.stop();
+    }
+  });
+
+  it('drains a dispatched call during ordinary shutdown and refuses a new call', async () => {
+    const entered = deferred();
+    const finish = deferred();
+    const session = await openSession(async (_name, _args, signal) => {
+      entered.resolve();
+      await finish.promise;
+      signal?.throwIfAborted();
+      return { content: [{ type: 'text', text: 'completed' }] };
+    });
+    const operation = session.request('call', { name: 'list_pages', args: {} });
+    try {
+      await entered.promise;
+      const stopping = session.server.stop();
+      expect(await session.request('status', { owner: undefined })).toMatchObject({
+        result: { state: 'ending' },
+      });
+      expect(await session.request('call', { name: 'list_pages', args: {} })).toHaveProperty(
+        'error',
+      );
+      finish.resolve();
+      await expect(operation).resolves.toEqual({
+        result: { content: [{ type: 'text', text: 'completed' }] },
+      });
+      await stopping;
+    } finally {
+      finish.resolve();
+      await operation;
       await session.server.stop();
     }
   });

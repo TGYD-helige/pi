@@ -309,9 +309,13 @@ describe('browser session shutdown', () => {
           ? []
           : [[2, expect.stringMatching(/^[a-f0-9]{48}$/), expect.any(AbortSignal)]],
       );
-      expect(onStop).toHaveBeenCalledWith(
-        ['error', 'pending', 'disconnected'].includes(cleanup) ? 'cleanup-failed' : reason,
-      );
+      if (['error', 'pending', 'disconnected'].includes(cleanup))
+        expect(onStop).toHaveBeenCalledWith('cleanup-failed', {
+          markerRemoved: false,
+          transportClosed: true,
+          providerReleased: true,
+        });
+      else expect(onStop).toHaveBeenCalledWith(reason);
       expect(connect).toHaveBeenCalledOnce();
       expect(close).toHaveBeenCalled();
     } finally {
@@ -413,7 +417,12 @@ describe('browser session shutdown', () => {
       expect(tunnels).toHaveLength(1);
       expect(tunnels[0]!.alive).toBe(false);
       expect(close.mock.contexts).toContain(candidate);
-      expect(onStop).toHaveBeenCalledWith(cleanupMode === 'resolve' ? 'lost' : 'cleanup-failed');
+      if (cleanupMode === 'resolve') expect(onStop).toHaveBeenCalledWith('lost');
+      else
+        expect(onStop).toHaveBeenCalledWith(
+          'cleanup-failed',
+          expect.objectContaining({ providerReleased: true }),
+        );
     } finally {
       pending.resolve();
       cleanup.resolve();
@@ -548,6 +557,11 @@ describe('browser session shutdown', () => {
         result: { expiresAt: string };
       };
       await request('detach');
+      const callsBeforeStatus = call.mock.calls.length;
+      expect(await (await request('status', { owner: undefined })).json()).toMatchObject({
+        result: { state: 'retained', attached: false },
+      });
+      expect(call.mock.calls.length).toBe(callsBeforeStatus);
       expect(await (await request('attach')).json()).toMatchObject({ result: { resumed: true } });
       now = vi.spyOn(Date, 'now').mockReturnValue(Date.parse(retained.result.expiresAt) + 1);
       expect(await (await request('status')).json()).toMatchObject({

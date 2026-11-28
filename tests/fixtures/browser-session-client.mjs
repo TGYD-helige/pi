@@ -69,7 +69,9 @@ try {
     return JSON.parse(match[1]);
   };
   try {
-    if (phase === 'cleanup') {
+    if (phase === 'inspect') {
+      console.log(JSON.stringify(await client.sessionControl('status')));
+    } else if (phase === 'cleanup') {
       await client.sessionControl('release');
     } else {
       step = 'session-start';

@@ -5,6 +5,7 @@ import {
   lstat,
   mkdir,
   open,
+  opendir,
   readFile,
   realpath,
   rename,
@@ -21,11 +22,16 @@ import { createCloudBrowserAdapter } from './adapter.js';
 import type { BrowserUseConfig } from './config.js';
 import { buildSubprocessEnv } from './config.js';
 import type { DevToolsClient } from './index.js';
-import { createHttpBrowserAdapter, type ManagedBrowser } from './session-backend.js';
+import {
+  createHttpBrowserAdapter,
+  type ManagedBrowser,
+  validateBrowserBinding,
+} from './session-backend.js';
 import {
   BrowserSessionError,
   BrowserToolNotDispatched,
   type SessionAction,
+  type SessionRefusalCode,
 } from './session-control.js';
 
 export interface SessionRecord {
@@ -35,12 +41,111 @@ export interface SessionRecord {
   ended?: string;
   managed?: ManagedBrowser;
   binding?: ManagedBrowser;
+  cleanup?: SessionCleanupProgress;
+}
+
+export interface SessionCleanupProgress {
+  markerRemoved: boolean;
+  transportClosed: boolean;
+  providerReleased: boolean;
 }
 
 export async function writeSessionRecord(path: string, record: SessionRecord) {
   const temporary = `${path}.${randomBytes(8).toString('hex')}.tmp`;
   await writeFile(temporary, JSON.stringify(record), { mode: 0o600, flag: 'wx' });
   await rename(temporary, path);
+}
+
+async function readSessionRecord(path: string) {
+  try {
+    const stat = await lstat(path);
+    if (
+      !stat.isFile() ||
+      (process.platform !== 'win32' &&
+        ((stat.mode & 0o077) !== 0 || stat.uid !== process.getuid?.()))
+    ) {
+      throw new BrowserSessionError('Browser session record permissions are unsafe.');
+    }
+    if (stat.size > 131_072) throw new BrowserSessionError('Browser session record is invalid.');
+    const value = JSON.parse(await readFile(path, 'utf8')) as SessionRecord;
+    if (
+      !/^[a-f0-9]{64}$/.test(value.token) ||
+      typeof value.configHash !== 'string' ||
+      (value.ended !== undefined &&
+        !['closed', 'expired', 'lost', 'cleanup-failed', 'startup-failed'].includes(value.ended)) ||
+      (value.port !== undefined &&
+        (!Number.isInteger(value.port) || value.port < 1 || value.port > 65535))
+    ) {
+      throw new BrowserSessionError('Browser session record is invalid.');
+    }
+    return value;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    if (error instanceof BrowserSessionError || error instanceof SafeToolError) throw error;
+    throw new BrowserSessionError('Could not read the browser session record.');
+  }
+}
+
+async function isProtectedSessionDirectory(path: string): Promise<boolean> {
+  const directory = await lstat(path).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return undefined;
+    throw new BrowserSessionError('Could not inspect the browser session directory.');
+  });
+  if (!directory) return false;
+  if (
+    !directory.isDirectory() ||
+    (process.platform !== 'win32' &&
+      (directory.uid !== process.getuid?.() || (directory.mode & 0o077) !== 0))
+  )
+    throw new BrowserSessionError('Browser session directory ownership is unsafe.');
+  return true;
+}
+
+/** Summarize protected local records for SDK hosts without opening browser connections. */
+export async function listBrowserSessionRecords(limit = 50, signal?: AbortSignal) {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100)
+    throw new BrowserSessionError('Browser session record limit must be between 1 and 100.');
+  signal?.throwIfAborted();
+  const root = join(resolveHome(), 'browser-sessions');
+  const records: Array<{ id: string; state: string; cleanup?: SessionCleanupProgress }> = [];
+  const directory = await opendir(root).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return undefined;
+    throw new BrowserSessionError('Could not list browser session records.');
+  });
+  if (!directory) return { records, truncated: false };
+  let visited = 0;
+  for await (const entry of directory) {
+    signal?.throwIfAborted();
+    if (++visited > 500 || records.length >= limit) return { records, truncated: true };
+    if (!entry.isDirectory() || !/^[a-f0-9]{64}$/.test(entry.name)) continue;
+    const path = join(root, entry.name);
+    try {
+      if (!(await isProtectedSessionDirectory(path))) continue;
+      const record = await readSessionRecord(join(path, 'session.json'));
+      if (!record) continue;
+      const cleanup = record.cleanup;
+      records.push({
+        id: entry.name,
+        state: record.ended ?? (record.port ? 'recorded' : 'unavailable'),
+        ...(cleanup &&
+        typeof cleanup.markerRemoved === 'boolean' &&
+        typeof cleanup.transportClosed === 'boolean' &&
+        typeof cleanup.providerReleased === 'boolean'
+          ? {
+              cleanup: {
+                markerRemoved: cleanup.markerRemoved,
+                transportClosed: cleanup.transportClosed,
+                providerReleased: cleanup.providerReleased,
+              },
+            }
+          : {}),
+      });
+    } catch {
+      records.push({ id: entry.name, state: 'unreadable' });
+    }
+  }
+  signal?.throwIfAborted();
+  return { records, truncated: false };
 }
 
 /** Authenticated local bridge to an independent process holding the same MCP/CDP connection. */
@@ -90,38 +195,6 @@ export class BrowserSessionClient {
     }
   }
 
-  private async readRecord() {
-    try {
-      const stat = await lstat(this.path);
-      if (
-        !stat.isFile() ||
-        (process.platform !== 'win32' &&
-          ((stat.mode & 0o077) !== 0 || stat.uid !== process.getuid?.()))
-      ) {
-        throw new BrowserSessionError('Browser session record permissions are unsafe.');
-      }
-      if (stat.size > 131_072) throw new BrowserSessionError('Browser session record is invalid.');
-      const value = JSON.parse(await readFile(this.path, 'utf8')) as SessionRecord;
-      if (
-        !/^[a-f0-9]{64}$/.test(value.token) ||
-        typeof value.configHash !== 'string' ||
-        (value.ended !== undefined &&
-          !['closed', 'expired', 'lost', 'cleanup-failed', 'startup-failed'].includes(
-            value.ended,
-          )) ||
-        (value.port !== undefined &&
-          (!Number.isInteger(value.port) || value.port < 1 || value.port > 65535))
-      ) {
-        throw new BrowserSessionError('Browser session record is invalid.');
-      }
-      return value;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-      if (error instanceof BrowserSessionError || error instanceof SafeToolError) throw error;
-      throw new BrowserSessionError('Could not read the browser session record.');
-    }
-  }
-
   private async lock(signal?: AbortSignal) {
     signal?.throwIfAborted();
     let directory = dirname(this.path);
@@ -159,7 +232,7 @@ export class BrowserSessionClient {
   private async open(signal?: AbortSignal) {
     const unlock = await this.lock(signal);
     try {
-      this.record = await this.readRecord();
+      this.record = await readSessionRecord(this.path);
       if (this.record) {
         const stored = this.record.binding;
         if (
@@ -272,7 +345,7 @@ export class BrowserSessionClient {
           if (child.connected) child.disconnect();
           child.unref();
         }
-        this.record = await this.readRecord();
+        this.record = await readSessionRecord(this.path);
       }
     } finally {
       await unlock();
@@ -297,14 +370,15 @@ export class BrowserSessionClient {
     action: string,
     data: object = {},
     signal?: AbortSignal,
+    record = this.record,
   ): Promise<T> {
-    if (!this.record?.port)
+    if (!record?.port)
       throw new BrowserSessionError('The original browser session is unavailable.');
     try {
-      const response = await fetch(`http://127.0.0.1:${this.record.port}/`, {
+      const response = await fetch(`http://127.0.0.1:${record.port}/`, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${this.record.token}`,
+          Authorization: `Bearer ${record.token}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ ...data, action, owner: this.owner }),
@@ -315,6 +389,7 @@ export class BrowserSessionClient {
       });
       const result = (await response.json()) as {
         error?: string;
+        code?: SessionRefusalCode;
         errorCategory?: string;
         httpStatus?: number;
         result?: unknown;
@@ -328,6 +403,7 @@ export class BrowserSessionClient {
             errorCategory: result.errorCategory,
             httpStatus: result.httpStatus,
           }),
+          result.code,
         );
       return result.result as T;
     } catch (error) {
@@ -362,17 +438,63 @@ export class BrowserSessionClient {
 
   async control(action: SessionAction, signal?: AbortSignal): Promise<object> {
     signal?.throwIfAborted();
+    if (action === 'status') {
+      if (!(await isProtectedSessionDirectory(dirname(this.path)))) return { state: 'not-started' };
+      const record = await readSessionRecord(this.path);
+      signal?.throwIfAborted();
+      if (!record) return { state: 'not-started' };
+      if (record.configHash !== this.configHash)
+        throw new BrowserSessionError('Browser session configuration changed.');
+      if (record.ended) return { state: record.ended };
+      if (!record.port) return { state: 'unavailable' };
+      return this.request<object>(
+        'status',
+        {},
+        signal ? AbortSignal.any([signal, AbortSignal.timeout(5000)]) : AbortSignal.timeout(5000),
+        record,
+      );
+    }
     if (action === 'release' && !this.connected) {
       const unlock = await this.lock(signal);
       try {
-        const record = await this.readRecord();
+        const record = await readSessionRecord(this.path);
         if (!record) return { state: 'released' };
+        const backend = this.config.session?.backend;
+        if (
+          record.ended === 'cleanup-failed' &&
+          record.configHash === this.configHash &&
+          backend?.retryRelease === true &&
+          record.cleanup?.markerRemoved === true &&
+          record.cleanup.transportClosed === true &&
+          record.cleanup.providerReleased === false &&
+          record.managed
+        ) {
+          const releaseSignal = signal
+            ? AbortSignal.any([signal, AbortSignal.timeout(15_000)])
+            : AbortSignal.timeout(15_000);
+          try {
+            validateBrowserBinding(record.managed);
+            const adapter = createHttpBrowserAdapter(backend, record.binding);
+            await adapter.release(record.managed, releaseSignal);
+            await rm(this.path, { force: true });
+            return { state: 'released' };
+          } catch (error) {
+            if (signal?.aborted) throw signal.reason;
+            throw new BrowserSessionError(
+              'Provider cleanup is still incomplete. Inspect the provider before continuing.',
+              error,
+              'session_cleanup_partial',
+            );
+          }
+        }
         if (
           (!record.port && !record.ended) ||
           ['cleanup-failed', 'startup-failed'].includes(record.ended ?? '')
         ) {
           throw new BrowserSessionError(
             'Provider startup or cleanup was uncertain. Inspect the protected session record and provider before manually resetting this session.',
+            undefined,
+            'session_cleanup_partial',
           );
         }
         if (record.ended || !record.port) {
@@ -387,7 +509,14 @@ export class BrowserSessionClient {
       }
     }
     await this.connect(signal);
-    return this.request<object>(action, {}, signal);
+    const result = await this.request<object>(action, {}, signal);
+    if (action === 'release' && 'state' in result && result.state === 'released') {
+      clearInterval(this.heartbeat);
+      this.heartbeat = undefined;
+      this.connected = false;
+      this.attachAttempted = false;
+    }
+    return result;
   }
 
   async close() {

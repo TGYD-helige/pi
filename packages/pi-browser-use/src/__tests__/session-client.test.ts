@@ -5,7 +5,12 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { BrowserSessionClient, type SessionRecord, writeSessionRecord } from '../session-client.js';
+import {
+  BrowserSessionClient,
+  listBrowserSessionRecords,
+  type SessionRecord,
+  writeSessionRecord,
+} from '../session-client.js';
 
 function deferred() {
   let resolve!: () => void;
@@ -37,6 +42,14 @@ describe('BrowserSessionClient', () => {
     vi.stubEnv('PI_AGENT_HOME', root);
     vi.mocked(open).mockClear();
     vi.mocked(spawn).mockClear();
+  });
+
+  it('reports a missing session through status without creating a worker', async () => {
+    const client = new BrowserSessionClient({
+      session: { enabled: true, key: 'missing', retentionMs: 1000 },
+    });
+    await expect(client.control('status')).resolves.toEqual({ state: 'not-started' });
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it('keeps the original worker writable and releasable across temporary homes', async () => {
@@ -85,6 +98,9 @@ describe('BrowserSessionClient', () => {
       await first.close();
       await rm(homeA, { recursive: true });
       vi.stubEnv('PI_AGENT_HOME', homeB);
+      const observer = new BrowserSessionClient(config);
+      await expect(observer.control('status')).resolves.toEqual({ state: 'status' });
+      expect(observer.getState()).toBe('disconnected');
       second = new BrowserSessionClient(config);
       await second.connect();
       await expect(second.control('retain')).resolves.toEqual({ state: 'retain' });
@@ -208,6 +224,9 @@ describe('BrowserSessionClient', () => {
     await expect(new BrowserSessionClient(config).connect()).rejects.toThrow(
       ended === 'expired' ? 'expired' : 'lost',
     );
+    await expect(new BrowserSessionClient(config).control('status')).resolves.toEqual({
+      state: ended,
+    });
     expect(spawn).not.toHaveBeenCalled();
   });
 
@@ -469,6 +488,71 @@ describe('BrowserSessionClient', () => {
       JSON.parse(JSON.stringify(record)),
     );
     await expect(readFile(join(directory, 'lock'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('retries only the unfinished idempotent provider cleanup from a protected record', async () => {
+    const actions: Array<string | undefined> = [];
+    const server = createServer((req, res) => {
+      actions.push(req.url);
+      res.writeHead(actions.length === 1 ? 503 : 204).end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw Error('No server address');
+    const config = {
+      session: {
+        enabled: true as const,
+        key: 'retry-release',
+        retentionMs: 1000,
+        backend: {
+          release: {
+            url: `http://127.0.0.1:${address.port}/stop/{sessionId}`,
+            method: 'DELETE' as const,
+          },
+          retryRelease: true,
+          create: { url: `http://127.0.0.1:${address.port}/create` },
+          fields: { id: 'id', wsEndpoint: 'url' },
+        },
+      },
+    };
+    const directory = join(
+      root,
+      'browser-sessions',
+      createHash('sha256').update(config.session.key).digest('hex'),
+    );
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    const recordPath = join(directory, 'session.json');
+    const record = {
+      token: 'a'.repeat(64),
+      configHash: createHash('sha256').update(JSON.stringify(config)).digest('hex'),
+      ended: 'cleanup-failed',
+      managed: { id: 'same-instance', connection: { wsEndpoint: 'ws://localhost:9222/original' } },
+      cleanup: { markerRemoved: true, transportClosed: true, providerReleased: false },
+    };
+    await writeFile(recordPath, JSON.stringify(record), { mode: 0o600 });
+    const client = new BrowserSessionClient(config);
+    try {
+      await expect(listBrowserSessionRecords()).resolves.toEqual({
+        records: [
+          {
+            id: createHash('sha256').update(config.session.key).digest('hex'),
+            state: 'cleanup-failed',
+            cleanup: record.cleanup,
+          },
+        ],
+        truncated: false,
+      });
+      await expect(client.control('release')).rejects.toMatchObject({
+        code: 'session_cleanup_partial',
+      });
+      expect(JSON.parse(await readFile(recordPath, 'utf8'))).toEqual(record);
+      await expect(client.control('release')).resolves.toEqual({ state: 'released' });
+      await expect(readFile(recordPath)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(actions).toEqual(['/stop/same-instance', '/stop/same-instance']);
+      expect(spawn).not.toHaveBeenCalled();
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it('waits for startup and preserves a replacement record when releasing an ended session', async () => {

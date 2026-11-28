@@ -45,6 +45,7 @@ import {
   SESSION_DESCRIPTION,
   scriptValue,
   sessionParameters,
+  sessionRefusalResult,
   sessionToolResult,
 } from './session-control.js';
 import { augmentToolDescription } from './tool-augment.js';
@@ -64,7 +65,7 @@ export type {
   ManagedBrowser,
 } from './session-backend.js';
 export { createHttpBrowserAdapter, readBrowserSessionBinding } from './session-backend.js';
-export { BrowserSessionClient } from './session-client.js';
+export { BrowserSessionClient, listBrowserSessionRecords } from './session-client.js';
 export { BrowserSessionError } from './session-control.js';
 export { serveBrowserSession } from './session-server.js';
 export type { BrowserSessionMode, BrowserUseConfig, VisionModelConfig };
@@ -79,7 +80,8 @@ const MCP_HEALTH_TIMEOUT_MS = 5_000;
 const MCP_HEALTH_CHECK_INTERVAL_MS = 10_000;
 const MCP_STDERR_LIMIT = 4_096;
 const MCP_SYSTEM_ERROR_CODE_PATTERN =
-  /^(?:EACCES|EADDRINUSE|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENOENT|ENOTEMPTY|ENOTFOUND|EPERM|ETIMEDOUT)$/;
+  /\b(?:EACCES|EADDRINUSE|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|EMFILE|ENFILE|ENOENT|ENOTEMPTY|ENOTFOUND|EPERM|ETIMEDOUT)\b/;
+const CHROME_LAUNCH_FAILURE = /^(?:Error: )?failed to launch (?:the )?(?:browser|chrome)\b/i;
 const require = createRequire(import.meta.url);
 
 // Resolved lazily at connect time so extension load does no filesystem work.
@@ -98,15 +100,16 @@ function requestOptions(timeout: number, signal?: AbortSignal) {
 }
 
 function safeMcpSystemErrorCode(value: unknown): string | undefined {
-  return typeof value === 'string' && MCP_SYSTEM_ERROR_CODE_PATTERN.test(value) ? value : undefined;
+  return typeof value === 'string' && value.match(MCP_SYSTEM_ERROR_CODE_PATTERN)?.[0] === value
+    ? value
+    : undefined;
 }
 
 function summarizeMcpFailure(stderr: string, errorName: string, errorCode?: string): string {
   const systemError =
-    safeMcpSystemErrorCode(errorCode) ??
-    stderr.match(
-      /\b(EACCES|EADDRINUSE|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENOENT|ENOTEMPTY|ENOTFOUND|EPERM|ETIMEDOUT)\b/,
-    )?.[1];
+    safeMcpSystemErrorCode(errorCode) ?? stderr.match(MCP_SYSTEM_ERROR_CODE_PATTERN)?.[0];
+  if (systemError === 'EMFILE' || systemError === 'ENFILE')
+    return `MCP subprocess exhausted file descriptors (${systemError}). Close unused browser sessions before retrying.`;
   if (systemError) return `MCP subprocess failed (${systemError}).`;
   if (/could not find (?:chrome|browser)/i.test(stderr)) {
     return 'Chrome executable was not found.';
@@ -166,6 +169,8 @@ export class DevToolsClient {
   private hasConnected = false;
   private explicitlyClosed = false;
   private lastHealthCheckAt = 0;
+  private launchFailures = 0;
+  private launchRetryAt = 0;
 
   constructor(config?: BrowserUseConfig, browser?: ManagedBrowser) {
     this.config = resolveConfig(config);
@@ -295,8 +300,14 @@ export class DevToolsClient {
   async ping(signal?: AbortSignal): Promise<boolean> {
     if (this.sessionClient) {
       try {
-        await this.sessionClient.control('status', signal);
-        return true;
+        const status = await this.sessionClient.control('status', signal);
+        return (
+          this.sessionClient.getState() === 'ready' &&
+          'state' in status &&
+          ['idle', 'active', 'retained'].includes(String(status.state)) &&
+          'toolState' in status &&
+          status.toolState === 'ready'
+        );
       } catch (error) {
         if (signal?.aborted) throw error;
         return false;
@@ -363,6 +374,13 @@ export class DevToolsClient {
     isError?: boolean;
   }> {
     if (this.sessionClient) return this.sessionClient.callTool(name, args, signal);
+    signal?.throwIfAborted();
+    if (this.launchRetryAt > Date.now())
+      throw new BrowserSessionError(
+        'This browser tool was not sent. Wait for the local Chrome launch backoff before retrying.',
+        undefined,
+        'browser_launch_backoff',
+      );
     const callerSignal = signal;
     signal = AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(MCP_TIMEOUT_MS)]);
     let client: Client;
@@ -386,7 +404,7 @@ export class DevToolsClient {
     }
 
     try {
-      return (await client.callTool(
+      const result = (await client.callTool(
         { name, arguments: args },
         undefined,
         requestOptions(MCP_TIMEOUT_MS, signal),
@@ -399,6 +417,23 @@ export class DevToolsClient {
         }>;
         isError?: boolean;
       };
+      if (!this.config.wsEndpoint && !this.config.browserUrl && !this.config.autoConnect) {
+        if (!result.isError) {
+          this.launchFailures = 0;
+          this.launchRetryAt = 0;
+        } else if (
+          result.content?.some(
+            (item) =>
+              item.type === 'text' && CHROME_LAUNCH_FAILURE.test(item.text?.slice(0, 128) ?? ''),
+          )
+        ) {
+          this.launchFailures = Math.min(this.launchFailures + 1, 8);
+          if (this.launchFailures >= 3)
+            this.launchRetryAt =
+              Date.now() + Math.min(30_000, 1000 * 2 ** (this.launchFailures - 3));
+        }
+      }
+      return result;
     } catch (error) {
       if (
         !this.explicitlyClosed &&
@@ -774,9 +809,15 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
           _ctx: ExtensionContext,
         ) {
           await ensureConnected(signal);
-          const result = await client!.callTool(originalName, params, signal);
-          const toolContent = toToolContent(result, originalName);
-          return { ...toolContent, details: undefined };
+          try {
+            const result = await client!.callTool(originalName, params, signal);
+            return { ...toToolContent(result, originalName), details: undefined };
+          } catch (error) {
+            if (signal?.aborted) throw error;
+            const refusal = sessionRefusalResult(error);
+            if (!refusal) throw error;
+            return { ...refusal, details: undefined };
+          }
         },
       });
     }

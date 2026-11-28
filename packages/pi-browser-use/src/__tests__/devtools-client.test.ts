@@ -61,6 +61,31 @@ vi.mock('@modelcontextprotocol/sdk/client/stdio.js', () => ({
 const { DevToolsClient } = await import('../index.js');
 
 describe('DevToolsClient', () => {
+  it('backs off after repeated local Chrome launch failures and permits later use', async () => {
+    const client = new DevToolsClient({ headless: true });
+    const failure = {
+      isError: true,
+      content: [{ type: 'text', text: 'Error: Failed to launch the browser process' }],
+    };
+    for (let attempt = 0; attempt < 3; attempt++) mockCallTool.mockResolvedValueOnce(failure);
+    for (let attempt = 0; attempt < 3; attempt++)
+      await expect(client.callTool('list_pages', {})).resolves.toMatchObject({ isError: true });
+    await expect(client.callTool('list_pages', {})).rejects.toMatchObject({
+      code: 'browser_launch_backoff',
+    });
+    expect(mockCallTool).toHaveBeenCalledTimes(3);
+    const now = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 1100);
+    try {
+      await expect(client.callTool('list_pages', {})).resolves.toEqual({
+        content: [{ type: 'text', text: 'done' }],
+      });
+      expect(mockCallTool).toHaveBeenCalledTimes(4);
+    } finally {
+      now.mockRestore();
+      await client.close();
+    }
+  });
+
   beforeEach(() => {
     mockClientConnect.mockClear();
     mockClientClose.mockClear();

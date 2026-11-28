@@ -89,6 +89,25 @@ try {
   await assert.rejects(readFile(recordPath('ordinary')), { code: 'ENOENT' });
   console.log('PASS: ordinary tasks detach and clean up without a retention window.');
   await delay(1500);
+  const parked = {
+    ...ordinary,
+    session: { ...ordinary.session, key: 'parked', localParkingMs: 4000 },
+  };
+  await writeFile(configPath, JSON.stringify(parked), { mode: 0o600 });
+  await writeFile(join(root, 'settings.json'), JSON.stringify({ 'pi-browser-use': parked }), {
+    mode: 0o600,
+  });
+  const beforeParking = await run('ordinary');
+  const inspection = await run('inspect');
+  assert.equal(inspection.state, 'parked');
+  assert.equal(inspection.attached, false);
+  assert.equal(typeof inspection.parkedUntil, 'string');
+  const afterParking = await run('resume');
+  assert.equal(afterParking.handshake, beforeParking.handshake);
+  assert.equal(afterParking.state, 'released');
+  assert.equal((await run('inspect')).state, 'not-started');
+  console.log('PASS: passive inspection leaves a parked loopback browser available for the next client.');
+  await delay(1500);
   const crashed = { ...ordinary, session: { ...ordinary.session, key: 'crashed-client' } };
   await writeFile(configPath, JSON.stringify(crashed), { mode: 0o600 });
   await writeFile(join(root, 'settings.json'), JSON.stringify({ 'pi-browser-use': crashed }), {

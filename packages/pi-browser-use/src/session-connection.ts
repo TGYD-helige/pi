@@ -177,6 +177,9 @@ export async function createBrowserConnection(config: BrowserUseConfig, signal: 
     get alive() {
       return !lost;
     },
+    get connected() {
+      return !lost && remoteSocket !== undefined;
+    },
     async close() {
       fail();
       await new Promise<void>((resolve) => server.close(() => resolve()));
