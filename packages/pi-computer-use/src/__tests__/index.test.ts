@@ -6,7 +6,6 @@ import { mkdtemp, realpath, rename, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import toolManifest from '../generated/cua-driver-tools.js';
 
 Object.defineProperty(process, 'platform', { value: 'darwin' });
 
@@ -21,6 +20,70 @@ type LiveTool = {
   description?: string;
   inputSchema: unknown;
 };
+
+// Model only the tools exercised by these tests. Platform CI checks the real catalog.
+const bundledTools: LiveTool[] = [
+  'browser_click',
+  'browser_dialog',
+  'browser_download',
+  'browser_navigate',
+  'browser_pointer',
+  'browser_prepare',
+  'browser_select',
+  'browser_set_input_files',
+  'browser_type',
+  'check_permissions',
+  'click',
+  'clipboard_read',
+  'clipboard_write',
+  'get_accessibility_tree',
+  'get_browser_state',
+  'get_config',
+  'get_guide',
+  'get_window_state',
+  'health_report',
+  'install_extension',
+  'kill_app',
+  'launch_app',
+  'list_apps',
+  'list_sessions',
+  'list_windows',
+  'run_script',
+  'run_steps',
+  'start_recording',
+  'start_session',
+  'stop_recording',
+  'type_text',
+  'verify_state',
+  'double_click',
+  'right_click',
+  'drag',
+  'press_key',
+  'hotkey',
+  'set_value',
+  'scroll',
+  'zoom',
+].map((name) => ({
+  name,
+  description:
+    name === 'start_recording'
+      ? 'To record a named session, pass its label here and reuse it for the recorded actions and stop_recording.'
+      : name,
+  inputSchema: { type: 'object' },
+}));
+bundledTools.push({
+  name: 'parse_visual_regions',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      options: {
+        type: 'object',
+        properties: { kinds: { type: 'array', items: { type: 'string', enum: ['text', 'icon'] } } },
+      },
+    },
+  },
+});
+let mockManifestJson: string | null | undefined;
 
 function abortableDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -65,7 +128,7 @@ let mockCallTool: (
 ) => UpstreamResult | Promise<UpstreamResult> = () => ({
   content: [{ type: 'text', text: 'Action executed.' }],
 });
-let mockLiveTools: readonly LiveTool[] = toolManifest.tools;
+let mockLiveTools: readonly LiveTool[] = bundledTools;
 let lastTransportOptions: Record<string, unknown> | undefined;
 let lastRequestOptions: Record<string, unknown> | undefined;
 let lastTransport: { onclose?: () => void; onerror?: (error: Error) => void } | undefined;
@@ -145,6 +208,31 @@ vi.mock('node:fs', async (importOriginal) => {
       if (mockConfigContent !== null) return mockConfigContent;
       throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     }),
+  };
+});
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    readFile: async (file: string, options: { encoding: BufferEncoding }) => {
+      if (file.endsWith('tools.json')) {
+        if (mockManifestJson === null) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        return (
+          mockManifestJson ??
+          JSON.stringify({
+            driverVersion: '0.37.0',
+            generatedFrom:
+              process.platform === 'darwin'
+                ? 'darwin-universal'
+                : `${process.platform}-${process.arch}`,
+            tools: bundledTools,
+          })
+        );
+      }
+      if (file.endsWith('.version')) return 'cua-driver-rs-v0.37.0\n';
+      return actual.readFile(file, options);
+    },
   };
 });
 
@@ -241,7 +329,8 @@ describe('computerUseExtension', () => {
             structuredContent: { accessibility: true, screen_recording: true },
           }
         : { content: [{ type: 'text', text: 'Action executed.' }] };
-    mockLiveTools = toolManifest.tools;
+    mockLiveTools = bundledTools;
+    mockManifestJson = undefined;
     lastRequestOptions = undefined;
     lastTransport = undefined;
     closeCount = 0;
@@ -258,7 +347,7 @@ describe('computerUseExtension', () => {
   it('registers the pinned Rust tool manifest on macOS', async () => {
     await start();
 
-    expect(tools.size).toBe(toolManifest.tools.length + 1);
+    expect(tools.size).toBe(bundledTools.length + 1);
     expect(tools.has('computer_use_tools')).toBe(true);
     expect(tools.has('computer_use_start_session')).toBe(true);
     expect(tools.has('computer_use_health_report')).toBe(true);
@@ -1016,7 +1105,47 @@ describe('computerUseExtension', () => {
   it.each([
     'linux',
     'win32',
-  ] as const)('uses the parameterless permission probe on %s', async (platform) => {
+  ] as const)('registers the bundled %s tools without starting the driver until first use', async (platform) => {
+    const connection = abortableDeferred<void>();
+    const connects = vi.fn(connection.wait);
+    const callTool = vi.fn(mockCallTool);
+    mockCallTool = callTool;
+    mockConnect = async () => {};
+    const requests = vi.mocked(spawn).mock.calls.length;
+
+    await start(undefined, platform);
+
+    expect(tools.has('computer_use_get_guide')).toBe(true);
+    expect(tools.has('computer_use_health_report')).toBe(true);
+    await tools
+      .get('computer_use_tools')!
+      .execute('enable', { group: 'diagnostics' }, undefined, undefined, mockCtx);
+    expect(callTool).not.toHaveBeenCalled();
+    expect(spawn).toHaveBeenCalledTimes(requests);
+    mockConnect = connects;
+    const tool = tools.get('computer_use_get_guide')!;
+    const first = tool.execute('first', { topic: 'browser' }, undefined, undefined, mockCtx);
+    const second = tool.execute('second', { topic: 'browser' }, undefined, undefined, mockCtx);
+    await connection.started;
+    connection.resolve();
+
+    for (const result of await Promise.all([first, second])) {
+      expect(result).toMatchObject({
+        content: [{ type: 'text', text: 'Action executed.' }],
+      });
+    }
+    expect(connects).toHaveBeenCalledTimes(1);
+    const probes = callTool.mock.calls
+      .filter(([name]) => name === 'check_permissions')
+      .map(([, args]) => args);
+    expect(probes).toEqual([{}]);
+  }, 1_500);
+
+  it.each([
+    ['linux', { mode: 'path', binaryPath: '/mock/cua-driver' }],
+    ['win32', { mode: 'path', binaryPath: '/mock/cua-driver' }],
+    ['linux', { extraArgs: ['--claude-code-compat'] }],
+  ] as const)('uses live discovery and the parameterless permission probe on %s with %o', async (platform, config) => {
     let connects = 0;
     let permissionArgs: Record<string, unknown> | undefined;
     mockConnect = async () => {
@@ -1027,10 +1156,67 @@ describe('computerUseExtension', () => {
       return { content: [{ type: 'text', text: 'ok' }] };
     };
 
-    await start({ mode: 'path', binaryPath: '/mock/cua-driver' }, platform);
+    mockLiveTools = [
+      { name: 'platform_specific_tool', inputSchema: { type: 'object', properties: {} } },
+    ];
+    await start(config, platform);
 
+    expect(tools.has('computer_use_platform_specific_tool')).toBe(true);
     expect(connects).toBe(1);
     expect(permissionArgs).toEqual({});
+  });
+
+  it('can retry a failed bundled connection without replacing its tool definitions', async () => {
+    let attempts = 0;
+    mockConnect = async () => {
+      attempts++;
+      if (attempts <= 2) throw new DOMException('connection timed out', 'TimeoutError');
+    };
+    mockLiveTools = [];
+
+    await start(undefined, 'linux');
+
+    const tool = tools.get('computer_use_get_guide')!;
+    const failed = await tool.execute('first', { topic: 'browser' }, undefined, undefined, mockCtx);
+    expect(failed).toMatchObject({ isError: true });
+    const connect = tools.get('computer_use_connect')!;
+    const retry = await connect.execute('retry', {}, undefined, undefined, mockCtx);
+    expect(retry).toMatchObject({
+      isError: true,
+      structuredContent: { error: { code: 'driver_preflight_failed' } },
+    });
+    const connected = await connect.execute('retry-again', {}, undefined, undefined, mockCtx);
+
+    expect(connected).toMatchObject({
+      content: [
+        {
+          type: 'text',
+          text: 'Cua Driver connected. Continue with the requested computer_use tool.',
+        },
+      ],
+    });
+    expect(tools.get('computer_use_get_guide')).toBe(tool);
+    expect(attempts).toBe(3);
+  });
+
+  it.each([
+    null,
+    '{"generatedFrom":"wrong-target","tools":[]}',
+  ])('keeps startup lazy when the installed tool catalog is missing or invalid (%s)', async (fixture) => {
+    mockManifestJson = fixture;
+    const connect = vi.fn(mockConnect);
+    mockConnect = connect;
+    await start(undefined, 'linux');
+
+    expect(connect).not.toHaveBeenCalled();
+    expect(tools.has('computer_use_get_guide')).toBe(false);
+
+    const result = await tools
+      .get('computer_use_connect')!
+      .execute('recover', {}, undefined, undefined, mockCtx);
+    expect(result).toMatchObject({ details: { registered_tools: bundledTools.length } });
+    expect(tools.has('computer_use_get_guide')).toBe(true);
+    expect(connect).toHaveBeenCalledOnce();
   });
 
   it('registers only a recovery contract after failed platform discovery', async () => {
@@ -1047,7 +1233,7 @@ describe('computerUseExtension', () => {
       },
     ];
 
-    await start(undefined, 'linux');
+    await start({ mode: 'path', binaryPath: '/mock/cua-driver' }, 'linux');
 
     expect(tools.has('computer_use_click')).toBe(false);
     expect(tools.has('computer_use_connect')).toBe(true);
@@ -2030,7 +2216,7 @@ describe('computerUseExtension', () => {
     it('defers every driver tool with the lazy profile on native Pi', async () => {
       await start({ toolProfile: 'lazy' });
 
-      for (const tool of toolManifest.tools) {
+      for (const tool of bundledTools) {
         const name = `computer_use_${tool.name}`;
         expect(tools.get(name)).toMatchObject({
           exposure: 'deferred',
@@ -2072,9 +2258,9 @@ describe('computerUseExtension', () => {
 
       const active = mockPi.getActiveTools();
       expect(
-        toolManifest.tools.filter((tool) => active.includes(`computer_use_${tool.name}`)),
+        bundledTools.filter((tool) => active.includes(`computer_use_${tool.name}`)),
       ).toHaveLength(14);
-      for (const tool of toolManifest.tools) {
+      for (const tool of bundledTools) {
         if (active.includes(`computer_use_${tool.name}`)) {
           expect(tools.get(`computer_use_${tool.name}`)?.exposure).toBe('direct');
         }
@@ -2094,7 +2280,7 @@ describe('computerUseExtension', () => {
       await start({ toolProfile: 'full' });
 
       const active = mockPi.getActiveTools();
-      for (const tool of toolManifest.tools) {
+      for (const tool of bundledTools) {
         expect(active).toContain(`computer_use_${tool.name}`);
         expect(tools.get(`computer_use_${tool.name}`)?.exposure).toBe('direct');
       }
@@ -2191,7 +2377,7 @@ describe('computerUseExtension', () => {
       mockConnect = async () => {
         throw new Error('connection refused');
       };
-      await start(undefined, 'linux');
+      await start({ mode: 'path', binaryPath: '/mock/cua-driver' }, 'linux');
 
       const result = (await tools
         .get('computer_use_tools')!
@@ -2211,7 +2397,7 @@ describe('computerUseExtension', () => {
           inputSchema: { type: 'object', properties: {} },
         },
       ];
-      await start(undefined, 'linux');
+      await start({ mode: 'path', binaryPath: '/mock/cua-driver' }, 'linux');
 
       const result = (await tools
         .get('computer_use_tools')!
@@ -2227,7 +2413,7 @@ describe('computerUseExtension', () => {
         attempts++;
         if (attempts === 1) throw new Error('connection refused');
       };
-      await start(undefined, 'linux');
+      await start({ mode: 'path', binaryPath: '/mock/cua-driver' }, 'linux');
 
       await commands.get('computer-use-connect')!.handler('', mockCtx);
 
@@ -2242,7 +2428,7 @@ describe('computerUseExtension', () => {
         attempts++;
         if (attempts === 1) throw new Error('connection refused');
       };
-      await start(undefined, 'linux');
+      await start({ mode: 'path', binaryPath: '/mock/cua-driver' }, 'linux');
       expect(mockPi.getActiveTools()).not.toContain('computer_use_click');
 
       await tools.get('computer_use_connect')!.execute('retry', {}, undefined, undefined, mockCtx);

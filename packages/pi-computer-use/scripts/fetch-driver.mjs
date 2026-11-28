@@ -5,10 +5,11 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writ
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { generateToolManifest, hostDriverTarget } from './generate-tool-manifest.mjs';
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const release = JSON.parse(readFileSync(join(packageRoot, 'driver-release.json'), 'utf8'));
-const target = process.argv[2] ?? (process.platform === 'darwin' ? 'darwin-universal' : `${process.platform}-${process.arch}`);
+const target = process.argv[2] ?? hostDriverTarget;
 const artifact = release.targets[target];
 if (!artifact) throw new Error(`Unsupported Cua Driver target: ${target}`);
 
@@ -52,6 +53,7 @@ try {
       : ['cua-driver', 'cua-cursor-theme', 'wayland-helper'];
   for (const entry of entries) cpSync(join(sourceRoot, entry), join(packageBin, basename(entry)), { recursive: true });
   writeFileSync(join(packageBin, '.version'), `${release.tag}\n`);
+  if (target === hostDriverTarget) generateToolManifest(packageBin, target, release.version);
   process.stdout.write(`${packageBin}\n`);
 } finally {
   rmSync(work, { recursive: true, force: true });

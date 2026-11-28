@@ -17,7 +17,13 @@ const patches = new Map([
     'pi-computer-use/dist/mcp-client.js',
     `
     for (const name of ['connect', 'ensureReady']) CuaDriverClient.prototype[name] = async function () { __perfHit('computer.ready'); this.state = 'ready'; };
-    CuaDriverClient.prototype.listAllTools = async function () { __perfHit('computer.catalog'); return [{name: 'health_report', description: 'Offline fixture', inputSchema: {type: 'object', properties: {}}}]; };
+    const __perfComputerCatalog = async () => {
+      __perfHit('computer.catalog');
+      return [{name: 'health_report', description: 'Offline fixture', inputSchema: {type: 'object', properties: {}}}];
+    };
+    CuaDriverClient.prototype.listAllTools = __perfComputerCatalog;
+    // Baselines before packaged catalogs still use live discovery.
+    if (typeof loadBundledTools === 'function') loadBundledTools = __perfComputerCatalog;
     CuaDriverClient.prototype.callTool = async function () { __perfHit('computer.probe'); return {content: [], structuredContent: {accessibility: true, screen_recording: true}}; };
     CuaDriverClient.prototype.close = async function () { this.state = 'disconnected'; };
   `,

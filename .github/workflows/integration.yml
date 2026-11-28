@@ -147,9 +147,6 @@ jobs:
       - name: Fetch verified Cua Driver runtime
         run: node packages/pi-computer-use/scripts/fetch-driver.mjs ${{ matrix.target }}
         shell: bash
-      - name: Fetch verified Cua Perception artifacts
-        run: node packages/pi-computer-use/scripts/fetch-perception.mjs ${{ matrix.perception_target }} "${{ runner.temp }}/cua-perception"
-        shell: bash
       - run: pnpm --filter @amaster.ai/pi-shared build
         shell: bash
       - run: pnpm --filter @amaster.ai/pi-computer-use build
@@ -163,6 +160,27 @@ jobs:
           fi
         shell: bash
 
+      - name: Verify Pi starts Cua Driver on first use and cleans up
+        if: runner.os != 'macOS'
+        timeout-minutes: 3
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            env -u DISPLAY -u WAYLAND_DISPLAY node .github/scripts/computer-use-lazy-start-e2e.mjs --startup-only
+            xvfb-run -a node .github/scripts/computer-use-lazy-start-e2e.mjs
+          else
+            node .github/scripts/computer-use-lazy-start-e2e.mjs
+          fi
+        shell: bash
+
+      - name: Verify Linux cleanup after abrupt owner and process-group exit
+        if: runner.os == 'Linux'
+        run: |
+          node .github/scripts/computer-use-owner-exit.mjs
+          node .github/scripts/computer-use-owner-exit.mjs --process-group
+
+      - name: Fetch verified Cua Perception artifacts
+        run: node packages/pi-computer-use/scripts/fetch-perception.mjs ${{ matrix.perception_target }} "${{ runner.temp }}/cua-perception"
+        shell: bash
       - name: Verify upstream perception installation and real OCR
         env:
           CUA_DRIVER_PERCEPTION_DIR: ${{ runner.temp }}/cua-perception
@@ -737,11 +755,6 @@ jobs:
       - name: Verify pi-memory system snapshot across session resume and fork
         if: matrix.extension == 'pi-memory'
         run: node .github/scripts/pi-memory-snapshot-e2e.mjs
-
-      - name: Verify computer-use daemon follows abrupt owner exit
-        if: matrix.extension == 'pi-computer-use' && runner.os == 'Linux'
-        run: |
-          node .github/scripts/computer-use-owner-exit.mjs
 
       - name: Compose preview video (pi-video-gen only)
         if: matrix.extension == 'pi-video-gen'

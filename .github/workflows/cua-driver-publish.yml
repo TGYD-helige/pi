@@ -41,6 +41,11 @@ jobs:
                 echo "${name}@${package_version} contains Cua Driver ${published_driver_version:-unknown}, expected ${driver_version}."
                 exit 1
               fi
+              published_manifest="$(npm view "${name}@${package_version}" cuaDriverToolManifest)"
+              if [ "$published_manifest" != 1 ]; then
+                echo "${name}@${package_version} does not declare tool manifest format 1."
+                exit 1
+              fi
               echo "already on npm: ${name}@${package_version}"
             else
               echo "to publish: ${name}@${package_version}"
@@ -83,7 +88,7 @@ jobs:
           dir="packages/pi-computer-use/platforms/cua-driver-${{ matrix.target }}"
           driver_version="$(node -p "require('./packages/pi-computer-use/driver-release.json').version")"
           package_version="${{ needs.decide.outputs.package_version }}"
-          npm pkg set version="$package_version" cuaDriverVersion="$driver_version" --prefix "$dir"
+          npm pkg set version="$package_version" cuaDriverVersion="$driver_version" cuaDriverToolManifest=1 --prefix "$dir"
           case "${{ matrix.target }}" in
             darwin-universal)
               bin="$dir/bin/CuaDriver.app/Contents/MacOS/cua-driver"
@@ -98,7 +103,9 @@ jobs:
           esac
           "$bin" --version | grep -F "$driver_version"
           "$bin" list-tools | grep -F 'get_window_state:'
-          npm pack "$dir" --pack-destination "$RUNNER_TEMP"
+          archive="$(npm pack "$dir" --pack-destination "$RUNNER_TEMP")"
+          tar -xOf "$RUNNER_TEMP/$archive" package/bin/tools.json | cmp - "$dir/bin/tools.json"
+          tar -xOf "$RUNNER_TEMP/$archive" package/bin/.version | cmp - "$dir/bin/.version"
       - uses: actions/upload-artifact@v7
         with:
           name: cua-driver-${{ matrix.target }}
