@@ -58,9 +58,34 @@ vi.mock('@modelcontextprotocol/sdk/client/stdio.js', () => ({
   },
 }));
 
-const { DevToolsClient } = await import('../index.js');
+const { BrowserSessionClient, DevToolsClient } = await import('../index.js');
 
 describe('DevToolsClient', () => {
+  it('backs off after repeated local Chrome launch failures and permits later use', async () => {
+    const client = new DevToolsClient({ headless: true });
+    const failure = {
+      isError: true,
+      content: [{ type: 'text', text: 'Error: Failed to launch the browser process' }],
+    };
+    for (let attempt = 0; attempt < 3; attempt++) mockCallTool.mockResolvedValueOnce(failure);
+    for (let attempt = 0; attempt < 3; attempt++)
+      await expect(client.callTool('list_pages', {})).resolves.toMatchObject({ isError: true });
+    await expect(client.callTool('list_pages', {})).rejects.toMatchObject({
+      code: 'browser_launch_backoff',
+    });
+    expect(mockCallTool).toHaveBeenCalledTimes(3);
+    const now = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 1100);
+    try {
+      await expect(client.callTool('list_pages', {})).resolves.toEqual({
+        content: [{ type: 'text', text: 'done' }],
+      });
+      expect(mockCallTool).toHaveBeenCalledTimes(4);
+    } finally {
+      now.mockRestore();
+      await client.close();
+    }
+  });
+
   beforeEach(() => {
     mockClientConnect.mockClear();
     mockClientClose.mockClear();
@@ -176,6 +201,14 @@ describe('DevToolsClient', () => {
       );
     });
 
+    it.each(['EMFILE', 'ENFILE'])('reports exhausted file descriptors for %s', async (code) => {
+      mockClientConnect.mockRejectedValueOnce(Object.assign(new Error('startup failed'), { code }));
+      const client = new DevToolsClient({ headless: true });
+      await expect(client.connect()).rejects.toThrow(
+        `MCP subprocess exhausted file descriptors (${code}).`,
+      );
+    });
+
     it('does not expose arbitrary MCP subprocess stderr in connection errors', async () => {
       mockClientConnect.mockImplementationOnce(async () => {
         mockTransports[0]!.stderr!.write(
@@ -194,6 +227,24 @@ describe('DevToolsClient', () => {
   });
 
   describe('listAllTools()', () => {
+    it('does not probe status or start discovery for a disconnected cancelled session client', async () => {
+      const status = vi.spyOn(BrowserSessionClient.prototype, 'control');
+      const client = new DevToolsClient({
+        session: { enabled: true, key: 'passive', retentionMs: 1000 },
+      });
+      const controller = new AbortController();
+      const reason = new Error('discovery cancelled');
+      controller.abort(reason);
+      try {
+        expect(await client.ping()).toBe(false);
+        expect(status).not.toHaveBeenCalled();
+        await expect(client.listAllTools(controller.signal)).rejects.toBe(reason);
+        expect(mockTransports).toHaveLength(0);
+      } finally {
+        status.mockRestore();
+        await client.close();
+      }
+    });
     test('paginates through all tool pages', async () => {
       const client = new DevToolsClient();
       await client.connect();

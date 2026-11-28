@@ -4,6 +4,7 @@ import {
   handleAnalyzeScreenshot,
   type VisionCaller,
 } from '../analyze-screenshot.js';
+import { BrowserSessionError } from '../session-control.js';
 
 vi.mock('@earendil-works/pi-coding-agent', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@earendil-works/pi-coding-agent')>();
@@ -70,6 +71,18 @@ function failingVisionCaller(error: string): VisionCaller {
 }
 
 describe('handleAnalyzeScreenshot', () => {
+  it('preserves a session refusal before calling the vision provider', async () => {
+    const client = createMockClient();
+    client.callTool.mockRejectedValueOnce(
+      new BrowserSessionError('List pages again.', undefined, 'stale_page_state'),
+    );
+    const caller = mockVisionCaller('false success');
+    await expect(handleAnalyzeScreenshot(client, caller, { pageId: 1 })).resolves.toMatchObject({
+      isError: true,
+      structuredContent: { error: { code: 'stale_page_state' } },
+    });
+    expect(caller).not.toHaveBeenCalled();
+  });
   it.each([
     false,
     true,
@@ -179,7 +192,7 @@ describe('handleAnalyzeScreenshot', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toContain('Failed to capture screenshot');
-    expect(result.structuredContent?.errorCategory).toBe('invalid_response');
+    expect(result.structuredContent).toMatchObject({ errorCategory: 'invalid_response' });
     expect(caller).not.toHaveBeenCalled();
   });
 
@@ -226,7 +239,7 @@ describe('handleAnalyzeScreenshot', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toContain('no analysis');
-    expect(result.structuredContent?.errorCategory).toBe('invalid_response');
+    expect(result.structuredContent).toMatchObject({ errorCategory: 'invalid_response' });
   });
 
   test('defaults instruction to empty string', async () => {
@@ -323,7 +336,7 @@ describe('handleAnalyzeScreenshot', () => {
     );
     expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(50 * 1024);
     expect(result.isError).toBe(true);
-    expect(result.structuredContent?.errorCategory).toBe('invalid_response');
+    expect(result.structuredContent).toMatchObject({ errorCategory: 'invalid_response' });
     expect(result.content[0]!.text).toContain('shorter analysis');
   });
 

@@ -36,14 +36,16 @@ export function assertModelPhase(events, { phase, url, script, marker }) {
   const memory = JSON.parse(match[1]);
   assert.equal(memory.marker, marker, 'Original page marker changed');
   assert.equal(typeof memory.ticks, 'number', 'Missing page polling counter');
-  const sessions = calls.filter(event => event.toolName === 'browser_session').map(event => ({ action: event.args?.action, status: JSON.parse(text(event.result)) }));
+  const sessions = calls.flatMap((event, index) => event.toolName === 'browser_session'
+    ? [{ index, action: event.args?.action, status: JSON.parse(text(event.result)) }]
+    : []);
   if (phase === 'retain') {
     assert.equal(memory.ticks, 0, 'Fixture was not initialized');
     assert.equal(sessions.at(-1)?.action, 'retain', 'Model did not retain before exiting');
     assert.equal(sessions.at(-1)?.status.state, 'retained', 'Session was not retained');
     assert(!sessions.some(event => event.action === 'release'), 'Model released the first handoff');
   } else {
-    assert(sessions.some(event => event.action === 'status' && event.status.resumed === true), 'Second Pi did not resume the retained session');
+    assert(sessions.some(event => event.index > calls.indexOf(pages) && event.action === 'status' && event.status.resumed === true), 'Second Pi did not report a resumed session after listing pages');
     assert(memory.ticks > 0, 'Original page polling did not continue');
     assert.equal(sessions.at(-1)?.action, 'release', 'Model did not release the handoff');
     assert.equal(sessions.at(-1)?.status.state, 'active', 'Handoff release failed');
@@ -92,7 +94,7 @@ export async function runBrowserSessionModelE2E({ browser } = {}) {
       const script = phase === 'retain' ? initialize : inspect;
       const prompt = phase === 'retain'
         ? `Use browser_list_pages, then browser_new_page to open ${url}. On its pageId call browser_evaluate_script with this exact function: ${script} Then call browser_session action retain and end immediately. Do not release, close, navigate or refresh the page.`
-        : `Call browser_session action status, then browser_list_pages to find ${url}. Use its pageId in browser_evaluate_script with this exact read-only function: ${script} Read the existing marker and confirm ticks > 0. Then call browser_session action release and end. Do not open, close, navigate or refresh any page. Never initialize or rewrite the marker.`;
+        : `First call browser_list_pages to attach and find ${url}. After it returns, call browser_session action status and check that resumed is true. Use the listed pageId in browser_evaluate_script with this exact read-only function: ${script} Read the existing marker and confirm ticks > 0. Then call browser_session action release and end. Do not open, close, navigate or refresh any page. Never initialize or rewrite the marker.`;
       const args = ['--provider', provider, '--model', model, '--thinking', 'off', '--no-session', '--mode', 'json', '--no-approve',
         '--no-extensions', '--extension', resolve('packages/pi-browser-use/dist/index.js'), '--no-context-files', '--no-skills', '--no-prompt-templates', '--no-mcp', '--no-builtin-tools',
         '--tools', phase === 'retain' ? 'browser_list_pages,browser_new_page,browser_evaluate_script,browser_session' : 'browser_list_pages,browser_evaluate_script,browser_session', '-p', prompt];

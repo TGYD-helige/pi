@@ -11,8 +11,8 @@ function trace() {
     events.push({ type: 'tool_execution_start', toolName, toolCallId, args });
     events.push({ type: 'tool_execution_end', toolName, toolCallId, result: { content: [{ type: 'text', text: output }] } });
   };
-  tool('browser_session', { action: 'status' }, '{"state":"retained","resumed":true}');
   tool('browser_list_pages', {}, '2: about:blank#unique-test');
+  tool('browser_session', { action: 'status' }, '{"state":"retained","resumed":true}');
   tool('browser_evaluate_script', { pageId: 2, function: fixture.script }, '```json\n{"marker":"hidden-nonce","ticks":37}\n```');
   tool('browser_session', { action: 'release' }, '{"state":"active","resumed":true}');
   return events;
@@ -20,6 +20,13 @@ function trace() {
 
 test('accepts real tool-backed continuation and release evidence', () => {
   assert.deepEqual(assertModelPhase(trace(), fixture), { phase: 'resume', markerMatched: true, ticks: 37, toolCalls: 4 });
+});
+
+test('requires resumed status after the page list, even if an earlier status says resumed', () => {
+  const events = trace();
+  const pageEvents = events.splice(0, 2);
+  events.splice(2, 0, ...pageEvents);
+  assert.throws(() => assertModelPhase(events, fixture), /after listing pages/);
 });
 
 test('rejects assistant claims without tool evidence', () => {

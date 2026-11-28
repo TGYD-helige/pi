@@ -309,9 +309,13 @@ describe('browser session shutdown', () => {
           ? []
           : [[2, expect.stringMatching(/^[a-f0-9]{48}$/), expect.any(AbortSignal)]],
       );
-      expect(onStop).toHaveBeenCalledWith(
-        ['error', 'pending', 'disconnected'].includes(cleanup) ? 'cleanup-failed' : reason,
-      );
+      if (['error', 'pending', 'disconnected'].includes(cleanup))
+        expect(onStop).toHaveBeenCalledWith('cleanup-failed', {
+          markerRemoved: false,
+          transportClosed: true,
+          providerReleased: true,
+        });
+      else expect(onStop).toHaveBeenCalledWith(reason);
       expect(connect).toHaveBeenCalledOnce();
       expect(close).toHaveBeenCalled();
     } finally {
@@ -413,7 +417,12 @@ describe('browser session shutdown', () => {
       expect(tunnels).toHaveLength(1);
       expect(tunnels[0]!.alive).toBe(false);
       expect(close.mock.contexts).toContain(candidate);
-      expect(onStop).toHaveBeenCalledWith(cleanupMode === 'resolve' ? 'lost' : 'cleanup-failed');
+      if (cleanupMode === 'resolve') expect(onStop).toHaveBeenCalledWith('lost');
+      else
+        expect(onStop).toHaveBeenCalledWith(
+          'cleanup-failed',
+          expect.objectContaining({ providerReleased: true }),
+        );
     } finally {
       pending.resolve();
       cleanup.resolve();
@@ -548,6 +557,11 @@ describe('browser session shutdown', () => {
         result: { expiresAt: string };
       };
       await request('detach');
+      const callsBeforeStatus = call.mock.calls.length;
+      expect(await (await request('status', { owner: undefined })).json()).toMatchObject({
+        result: { state: 'retained', attached: false },
+      });
+      expect(call.mock.calls.length).toBe(callsBeforeStatus);
       expect(await (await request('attach')).json()).toMatchObject({ result: { resumed: true } });
       now = vi.spyOn(Date, 'now').mockReturnValue(Date.parse(retained.result.expiresAt) + 1);
       expect(await (await request('status')).json()).toMatchObject({
@@ -779,7 +793,7 @@ describe('browser session shutdown', () => {
     const token = randomBytes(32).toString('hex');
     const owner = randomBytes(32).toString('hex');
     const release = vi.fn(async () => {});
-    const outcomes: string[] = [];
+    const onStop = vi.fn();
     let creates = 0;
     const server = await serveBrowserSession(
       { session: { enabled: true, key: 'invalid-adapter-id', retentionMs: 1000 } },
@@ -792,9 +806,7 @@ describe('browser session shutdown', () => {
           },
           release,
         },
-        async onStop(reason) {
-          outcomes.push(reason);
-        },
+        onStop,
       },
     );
     const request = (action: string, args: object = {}) =>
@@ -810,7 +822,11 @@ describe('browser session shutdown', () => {
       await server.stop();
       expect(creates).toBe(1);
       expect(release).not.toHaveBeenCalled();
-      expect(outcomes).toEqual(['cleanup-failed']);
+      expect(onStop).toHaveBeenCalledWith('cleanup-failed', {
+        markerRemoved: true,
+        transportClosed: true,
+        providerReleased: false,
+      });
     } finally {
       await server.stop();
     }
@@ -936,10 +952,21 @@ describe('browser session shutdown', () => {
       });
     try {
       expect((await attach(owner, child.pid!)).status).toBe(200);
+      const call = (identity: string, name: string) =>
+        fetch(`http://127.0.0.1:${server.port}/`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ action: 'call', owner: identity, name, args: { pageId: 1 } }),
+        });
+      expect((await call(owner, 'list_pages')).status).toBe(200);
       const exited = once(child, 'exit');
       child.kill('SIGKILL');
       await exited;
-      expect((await attach(randomBytes(32).toString('hex'), process.pid)).status).toBe(200);
+      const successor = randomBytes(32).toString('hex');
+      expect((await attach(successor, process.pid)).status).toBe(200);
+      expect(await (await call(successor, 'take_snapshot')).json()).toMatchObject({
+        code: 'stale_page_state',
+      });
     } finally {
       child.kill();
       await server.stop();

@@ -7,6 +7,18 @@ import {
 } from '../config.js';
 
 describe('browser session configuration', () => {
+  it('permits bounded parking only for an explicit loopback CDP connection', () => {
+    const session = { enabled: true as const, key: 'park', retentionMs: 5000, localParkingMs: 500 };
+    const local = { sessionMode: 'existing' as const, wsEndpoint: 'ws://127.0.0.1:9222/exact' };
+    expect(resolveConfig({ ...local, session }).session).toEqual(session);
+    expect(() => resolveConfig({ ...local, session, autoConnect: true })).toThrow('loopback');
+    expect(() =>
+      resolveConfig({ ...local, session, wsEndpoint: 'wss://example.test/chrome' }),
+    ).toThrow('loopback');
+    expect(() =>
+      resolveConfig({ ...local, session: { ...session, localParkingMs: 5001 } }),
+    ).toThrow('retentionMs');
+  });
   it('rejects provider instance IDs in persistent settings', () => {
     const session = JSON.parse(
       JSON.stringify({

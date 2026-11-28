@@ -173,6 +173,29 @@ export function resolveConfig(config?: BrowserUseConfig): BrowserUseConfig {
       throw new Error('Browser session.retentionMs must be between 1 and 86400000');
     if ([backend, adapterModule, provider].filter(Boolean).length > 1)
       throw new Error('Choose one browser session provider, backend, or adapterModule');
+    const { localParkingMs } = resolved.session;
+    if (localParkingMs !== undefined) {
+      if (!Number.isInteger(localParkingMs) || localParkingMs < 1 || localParkingMs > retentionMs)
+        throw new Error('Browser session.localParkingMs must be between 1 and retentionMs.');
+      const url =
+        typeof resolved.wsEndpoint === 'string' && URL.canParse(resolved.wsEndpoint)
+          ? new URL(resolved.wsEndpoint)
+          : undefined;
+      if (
+        resolved.sessionMode !== 'existing' ||
+        resolved.autoConnect ||
+        resolved.browserUrl ||
+        backend ||
+        adapterModule ||
+        provider ||
+        !url ||
+        !['ws:', 'wss:'].includes(url.protocol) ||
+        !['127.0.0.1', '[::1]'].includes(url.hostname)
+      )
+        throw new Error(
+          'Browser session.localParkingMs requires a direct loopback WebSocket in existing mode.',
+        );
+    }
     if (provider) createCloudBrowserAdapter(provider);
     if (backend && Object.hasOwn(backend, 'sessionId'))
       throw new Error(

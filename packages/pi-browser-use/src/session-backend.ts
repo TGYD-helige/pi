@@ -54,6 +54,8 @@ export interface HttpSessionRequest {
 export interface HttpBrowserBackend {
   create?: HttpSessionRequest;
   release: HttpSessionRequest;
+  /** The host guarantees that repeating release of an exact instance is safe. */
+  retryRelease?: boolean;
   status?: HttpSessionRequest;
   retain?: HttpSessionRequest;
   fields?: {
@@ -79,6 +81,8 @@ export type BrowserSessionConfig = {
       key: string;
       /** Upper bound per handoff; no idle retention is enabled by this setting alone. */
       retentionMs: number;
+      /** Opt-in detachable idle window for a held loopback CDP socket. */
+      localParkingMs?: number;
     }
   | { enabled: false; key?: string; retentionMs?: number }
 );
@@ -91,16 +95,19 @@ export function validateBrowserExpiry(value: unknown) {
     throw new BrowserSessionError('The browser backend returned an invalid expiry.');
 }
 
+export function hasKnownBrowserId(browser: ManagedBrowser) {
+  return (
+    typeof browser?.id === 'string' && browser.id.trim().length > 0 && browser.id.length <= 1024
+  );
+}
+
 export function validateBrowserBinding(
   browser: ManagedBrowser,
   ownership: NonNullable<BrowserAdapter['ownership']> = 'adapter',
 ) {
   try {
     if (
-      !browser ||
-      typeof browser.id !== 'string' ||
-      !browser.id.trim() ||
-      browser.id.length > 1024 ||
+      !hasKnownBrowserId(browser) ||
       !browser.connection ||
       typeof browser.connection !== 'object' ||
       Array.isArray(browser.connection) ||
@@ -214,6 +221,25 @@ export async function requestBrowserManagement(
   }
 }
 
+function containsSessionId(value: unknown): boolean {
+  if (typeof value === 'string') return value.includes('{sessionId}');
+  return (
+    value !== null && typeof value === 'object' && Object.values(value).some(containsSessionId)
+  );
+}
+
+function renderSessionTemplate(value: string, id: string, expiry = '') {
+  return value.replace(/\{(sessionId|expiresAt)\}/g, (_match, field: string) =>
+    field === 'expiresAt' ? expiry : id,
+  );
+}
+
+function sessionIdUrlParts(url: string) {
+  const first = new URL(renderSessionTemplate(url, 'session-marker-a'));
+  const second = new URL(renderSessionTemplate(url, 'session-marker-b'));
+  return { path: first.pathname !== second.pathname, query: first.search !== second.search };
+}
+
 export function createHttpBrowserAdapter(
   config: HttpBrowserBackend,
   browser?: ManagedBrowser,
@@ -222,6 +248,7 @@ export function createHttpBrowserAdapter(
   if (browser !== undefined) validateBrowserBinding(browser);
   if (
     !config?.release ||
+    (config.retryRelease !== undefined && typeof config.retryRelease !== 'boolean') ||
     Object.hasOwn(config, 'sessionId') ||
     Boolean(config.create) === (browser !== undefined) ||
     (config.create &&
@@ -262,6 +289,8 @@ export function createHttpBrowserAdapter(
       (request.method === 'GET' && request.body !== undefined)
     )
       throw new BrowserSessionError('Browser management request method or body is invalid.');
+    if (typeof request.url !== 'string' || !URL.canParse(request.url))
+      throw new BrowserSessionError('Browser management URL is invalid.');
     const url = new URL(request.url);
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
       throw new BrowserSessionError(
@@ -269,6 +298,14 @@ export function createHttpBrowserAdapter(
       );
     }
   }
+  const retryReleaseUrl = config.retryRelease ? sessionIdUrlParts(config.release.url) : undefined;
+  if (
+    retryReleaseUrl &&
+    !retryReleaseUrl.path &&
+    !retryReleaseUrl.query &&
+    !containsSessionId(config.release.body)
+  )
+    throw new BrowserSessionError('Retryable browser release requires a transmitted session ID.');
 
   async function request(
     spec: HttpSessionRequest,
@@ -276,16 +313,11 @@ export function createHttpBrowserAdapter(
     browser?: ManagedBrowser,
     expiresAt?: number,
   ) {
-    const replace = (value: string, encodeId = false) =>
-      value
-        .replaceAll(
-          '{sessionId}',
-          encodeId ? encodeURIComponent(browser?.id ?? '') : (browser?.id ?? ''),
-        )
-        .replaceAll('{expiresAt}', String(expiresAt ?? ''));
+    const id = browser?.id ?? '';
+    const expiry = String(expiresAt ?? '');
     const map = (value: unknown): unknown => {
       if (value === '{expiresAt}') return expiresAt;
-      if (typeof value === 'string') return replace(value);
+      if (typeof value === 'string') return renderSessionTemplate(value, id, expiry);
       if (Array.isArray(value)) return value.map(map);
       if (value !== null && typeof value === 'object')
         return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, map(child)]));
@@ -294,7 +326,7 @@ export function createHttpBrowserAdapter(
     return requestBrowserManagement(
       {
         ...spec,
-        url: replace(spec.url, true),
+        url: renderSessionTemplate(spec.url, encodeURIComponent(id), expiry),
         ...(spec.body === undefined ? {} : { body: map(spec.body) }),
       },
       signal,
@@ -362,6 +394,10 @@ export function createHttpBrowserAdapter(
         }
       : {}),
     async release(browser, signal) {
+      if (retryReleaseUrl?.path && (browser.id === '.' || browser.id === '..'))
+        throw new BrowserSessionError(
+          'The provider session ID cannot be used in the release URL path.',
+        );
       await request(config.release, signal, browser);
     },
   };
