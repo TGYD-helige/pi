@@ -13,13 +13,15 @@ export function selectCuaDriverPackageVersion(baseVersion, driverVersion, releas
     .map((release) => ({ ...release, parsed: parseVersion(release.version) }))
     .filter(({ parsed }) => parsed.major === base.major && parsed.minor === base.minor)
     .sort((left, right) => right.parsed.patch - left.parsed.patch);
-  const existing = line.find((release) => release.cuaDriverVersion === driverVersion);
+  const existing = line.find(
+    (release) => release.cuaDriverVersion === driverVersion && release.cuaDriverToolManifest === '1',
+  );
   if (existing) return existing.version;
   return `${base.major}.${base.minor}.${Math.max(base.patch, line[0]?.parsed.patch ?? 0) + 1}`;
 }
 
-function npmView(packageSpec, field) {
-  const output = execFileSync('npm', ['view', packageSpec, field, '--json'], {
+function npmView(packageSpec, ...fields) {
+  const output = execFileSync('npm', ['view', packageSpec, ...fields, '--json'], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'inherit'],
   }).trim();
@@ -32,10 +34,14 @@ function main() {
     throw new Error('Usage: resolve-cua-driver-package-version.mjs <package> <base-version> <driver-version>');
   }
   const versions = npmView(packageName, 'versions');
-  const releases = (Array.isArray(versions) ? versions : versions ? [versions] : []).map((version) => ({
-    version,
-    cuaDriverVersion: npmView(`${packageName}@${version}`, 'cuaDriverVersion'),
-  }));
+  const releases = (Array.isArray(versions) ? versions : versions ? [versions] : []).map((version) => {
+    const metadata = npmView(`${packageName}@${version}`, 'cuaDriverVersion', 'cuaDriverToolManifest');
+    return {
+      version,
+      cuaDriverVersion: metadata?.cuaDriverVersion,
+      cuaDriverToolManifest: metadata?.cuaDriverToolManifest,
+    };
+  });
   console.log(selectCuaDriverPackageVersion(baseVersion, driverVersion, releases));
 }
 

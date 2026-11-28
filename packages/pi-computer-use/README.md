@@ -177,7 +177,7 @@ For maintainers, the platform integration job downloads pinned upstream artifact
 
 Windows daemon status probes allow up to 10 seconds per process invocation, so slow driver initialization is not interrupted after 250 ms. Session cancellation still aborts the probe.
 
-Pi registers the bundled Cua Driver's platform-specific tool manifest when a session starts. The driver daemon and MCP proxy start on the first call that needs the driver. On macOS, the first applicable call checks permissions with `check_permissions({ prompt: true })`; existing grants do not raise a dialog. Linux and Windows use `check_permissions({})` on first use. Listing or enabling tool groups leaves the driver stopped.
+Pi reads the bundled Cua Driver's tool manifest from the installed platform package and registers those tools when a session starts. The driver daemon and MCP proxy start on the first call that needs the driver. On macOS, the first applicable call checks permissions with `check_permissions({ prompt: true })`; existing grants do not raise a dialog. Linux and Windows use `check_permissions({})` on first use. Listing or enabling tool groups leaves the driver stopped.
 
 Linux and Windows discover tools at session startup when using a custom `binaryPath` in `mode: "path"` or when passing `extraArgs`. These configurations can expose a different tool contract. Use `computer_use_connect` or `/computer-use-connect` to retry a failed connection or discovery. The requested tool reports its own capability or permission errors.
 
@@ -212,7 +212,7 @@ The package ships a [computer-use skill](skills/computer-use/SKILL.md) for selec
    recording, escalated sessions, ...), call `computer_use_tools` with the
    matching group first
 
-When updating the bundled driver, run `node packages/pi-computer-use/scripts/generate-tool-manifest.mjs` on macOS, Linux, and Windows after building the extension and fetching the pinned binary for the host. The platform integration check compares the Linux and Windows manifests with the live tools from their release binaries.
+Each platform package ships a generated `bin/tools.json` alongside the driver. For local development, run `node packages/pi-computer-use/scripts/fetch-driver.mjs` on the target host to fetch the pinned driver and generate its manifest. The release workflow uses this same step before packing, and platform integration tests compare the generated manifest with the live driver tool list.
 
 ## License
 

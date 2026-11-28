@@ -12,9 +12,16 @@ test('keeps Cua Driver platform packages on their own patch version line', () =>
   assert.equal(
     selectCuaDriverPackageVersion('0.1.0', 'current-driver', [
       ...releases,
-      { version: '0.1.1', cuaDriverVersion: 'current-driver' },
+      { version: '0.1.1', cuaDriverVersion: 'current-driver', cuaDriverToolManifest: '1' },
     ]),
     '0.1.1',
+  );
+  assert.equal(
+    selectCuaDriverPackageVersion('0.1.0', 'current-driver', [
+      ...releases,
+      { version: '0.1.1', cuaDriverVersion: 'current-driver' },
+    ]),
+    '0.1.2',
   );
   assert.equal(
     selectCuaDriverPackageVersion('0.1.0', 'next-driver', [

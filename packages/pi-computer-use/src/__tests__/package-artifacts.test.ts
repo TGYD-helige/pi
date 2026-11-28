@@ -70,6 +70,7 @@ describe('pi-computer-use package artifacts', () => {
         name: string;
         version: string;
         cuaDriverVersion?: string;
+        cuaDriverToolManifest?: string;
         os: string[];
         cpu?: string[];
         libc?: string[];
@@ -88,6 +89,7 @@ describe('pi-computer-use package artifacts', () => {
       expect(pkg.version).toBe(preparedPackageVersion ?? '0.1.0');
       expect(pkg.version).toMatch(/^0\.1\.\d+$/);
       expect(pkg.cuaDriverVersion).toBe(preparedForRelease ? release.version : undefined);
+      expect(pkg.cuaDriverToolManifest).toBe(preparedForRelease ? '1' : undefined);
       expect(pkg.os).toEqual([target.os]);
       expect(pkg.cpu).toEqual(target.cpu ? [target.cpu] : undefined);
       expect(pkg.libc).toEqual('libc' in target ? target.libc : undefined);
@@ -110,9 +112,10 @@ describe('pi-computer-use package artifacts', () => {
     expect(runtimeWorkflow).toContain('scripts/fetch-driver.mjs');
     expect(runtimeWorkflow).toContain('resolve-cua-driver-package-version.mjs');
     expect(runtimeWorkflow).toContain(
-      'npm pkg set version="$package_version" cuaDriverVersion="$driver_version"',
+      'npm pkg set version="$package_version" cuaDriverVersion="$driver_version" cuaDriverToolManifest=1',
     );
     expect(runtimeWorkflow).toContain('npm pack');
+    expect(runtimeWorkflow).toContain('package/bin/tools.json');
     expect(runtimeWorkflow).not.toContain('pnpm/action-setup');
     expect(runtimeWorkflow).toContain('npm publish');
     expect(publishWorkflow).toContain('publish_cua_driver');
@@ -120,7 +123,7 @@ describe('pi-computer-use package artifacts', () => {
     expect(publishWorkflow).toContain('Verify native platform packages are published');
     expect(publishWorkflow).toContain('resolve-cua-driver-package-version.mjs');
     expect(publishWorkflow).toContain(
-      'npm pkg set version="$package_version" cuaDriverVersion="$driver_version"',
+      'npm pkg set version="$package_version" cuaDriverVersion="$driver_version" cuaDriverToolManifest=1',
     );
     expect(publishWorkflow).toContain('driver-release.json');
   });

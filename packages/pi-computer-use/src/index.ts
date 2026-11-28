@@ -18,7 +18,9 @@ import { type ComputerUseConfig, loadConfigFromFile, resolveConfig } from './con
 import {
   CuaDriverClient,
   CuaDriverRequestNotDispatched,
+  type DriverToolDefinition,
   isNamedSessionCursor,
+  loadBundledTools,
   sanitizeSchemaFormats,
   waitForPromise,
 } from './mcp-client.js';
@@ -38,20 +40,6 @@ export type { ComputerUseConfig };
 export { loadConfigFromFile, resolveConfig };
 
 const TOOL_PREFIX = 'computer_use_';
-
-type DriverToolDefinition = {
-  name: string;
-  description?: string | undefined;
-  inputSchema: unknown;
-};
-
-const loadPlatformToolManifest: Partial<
-  Record<NodeJS.Platform, () => Promise<{ default: { tools: readonly DriverToolDefinition[] } }>>
-> = {
-  darwin: () => import('./generated/cua-driver-tools.js'),
-  linux: () => import('./generated/cua-driver-tools-linux.js'),
-  win32: () => import('./generated/cua-driver-tools-win32.js'),
-};
 
 const OPTIONAL_EXTENSION_HINTS: Record<string, string> = {
   parse_visual_regions:
@@ -801,30 +789,25 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
 
     const requiresLiveDiscovery =
       (config.mode === 'path' && config.binaryPath) || config.extraArgs?.length;
-    const loadManifest =
-      process.platform === 'darwin' || !requiresLiveDiscovery
-        ? loadPlatformToolManifest[process.platform]
-        : undefined;
-    if (loadManifest) {
-      const { default: manifest } = await loadManifest();
-      registerTools(manifest.tools);
-      if (process.platform !== 'darwin') registerRecoverySurface(true);
-      registerVisionTool();
-      applyToolProfile();
-      return;
-    }
-
+    const useBundledManifest = process.platform === 'darwin' || !requiresLiveDiscovery;
     let connectedAtStartup = false;
     try {
-      await discoverAndRegisterTools(ctx.signal);
-      connectedAtStartup = true;
+      if (useBundledManifest) {
+        registerTools(await loadBundledTools(ctx.signal));
+        if (process.platform !== 'darwin') registerRecoverySurface(true);
+      } else {
+        await discoverAndRegisterTools(ctx.signal);
+        connectedAtStartup = true;
+      }
     } catch (error) {
       registerRecoverySurface();
       console.error(
-        `[pi-computer-use] startup discovery failed (category=${classifyError(error).errorCategory})`,
+        `[pi-computer-use] startup tool registration failed (category=${classifyError(error).errorCategory})`,
       );
       ctx.ui.notify(
-        'pi-computer-use: driver unavailable; use computer_use_connect to retry discovery.',
+        useBundledManifest
+          ? 'pi-computer-use: bundled tool manifest unavailable; use computer_use_connect to discover tools.'
+          : 'pi-computer-use: driver unavailable; use computer_use_connect to retry discovery.',
         'warning',
       );
     }

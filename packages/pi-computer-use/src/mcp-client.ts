@@ -1,6 +1,7 @@
 import { type ChildProcess, execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { accessSync, chmodSync, constants, existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -121,6 +122,34 @@ function resolveDriverPackageRoot(platform: string, arch: string): string {
   } catch {
     throw new Error(`Cua Driver runtime package is not installed for ${target}.`);
   }
+}
+
+export type DriverToolDefinition = Pick<Tool, 'name' | 'description' | 'inputSchema'>;
+
+export async function loadBundledTools(signal?: AbortSignal): Promise<DriverToolDefinition[]> {
+  const { platform, arch } = process;
+  const dir = path.join(resolveDriverPackageRoot(platform, arch), 'bin');
+  const [manifest, tag] = await Promise.all([
+    readFile(path.join(dir, 'tools.json'), { encoding: 'utf8', signal }),
+    readFile(path.join(dir, '.version'), { encoding: 'utf8', signal }),
+  ]);
+  const { driverVersion, generatedFrom, tools } = JSON.parse(manifest);
+  if (
+    typeof driverVersion !== 'string' ||
+    tag.trim() !== `cua-driver-rs-v${driverVersion}` ||
+    generatedFrom !== resolveBundledTarget(platform, arch) ||
+    !Array.isArray(tools) ||
+    tools.length === 0 ||
+    tools.some(
+      (tool) =>
+        typeof tool?.name !== 'string' ||
+        (tool.description !== undefined && typeof tool.description !== 'string') ||
+        tool.inputSchema?.type !== 'object',
+    )
+  ) {
+    throw new Error('Cua Driver tool manifest does not match the installed platform package.');
+  }
+  return tools;
 }
 
 export function resolveUnixSocketPath(tempDir: string, suffix: string): string {
