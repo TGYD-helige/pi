@@ -19,6 +19,7 @@ import toolManifest from './generated/cua-driver-tools.js';
 import {
   CuaDriverClient,
   CuaDriverRequestNotDispatched,
+  isNamedSessionCursor,
   sanitizeSchemaFormats,
   waitForPromise,
 } from './mcp-client.js';
@@ -44,6 +45,8 @@ const OPTIONAL_EXTENSION_HINTS: Record<string, string> = {
     'Requires optional Perception. If not_installed, use accessibility/browser state or screenshot reasoning, or consult computer_use_install_extension.',
   install_extension:
     'Uses a local signed catalog; does not download artifacts. On-demand setup: https://github.com/TGYD-helige/pi/blob/master/packages/pi-computer-use/README.md#optional-local-perception',
+  start_recording:
+    'Pi uses separate connections for unnamed and named calls. To record a named session, pass its label here and reuse it for the recorded actions and stop_recording.',
 };
 
 const HIGH_RISK_TOOLS = new Set([
@@ -154,7 +157,7 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
 
   async function ensureConnected(
     signal?: AbortSignal,
-    requestMacPermissions = true,
+    options: { requestMacPermissions?: boolean; deferConnection?: boolean } = {},
   ): Promise<void> {
     signal?.throwIfAborted();
     if (!client) {
@@ -165,8 +168,12 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
     const sessionSignal = sessionAbortController?.signal;
     if (!sessionSignal) throw new Error('pi-computer-use: session not started');
     sessionSignal.throwIfAborted();
-    await sessionClient.ensureReady(signal);
-    if (process.platform !== 'darwin' || !requestMacPermissions) return;
+    const probePermissions =
+      process.platform === 'darwin' && options.requestMacPermissions !== false;
+    if (!options.deferConnection || (probePermissions && !macPermissionPromise)) {
+      await sessionClient.ensureReady(signal);
+    }
+    if (!probePermissions) return;
 
     sessionSignal.throwIfAborted();
     if (!macPermissionPromise) {
@@ -318,6 +325,7 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
         'List or activate extra computer-use tool groups when the core tools are insufficient',
       promptGuidelines: [
         `Only the core computer-use tools are active by default. When a task needs browser automation, recording, escalated sessions, cursor overlay, window management, clipboard, or diagnostics capabilities, call ${TOOLS_META_TOOL} with the matching group first — the group's tools become available on the next turn.`,
+        'When using a named computer-use session, pass the same session label when launching a browser and in subsequent calls for that browser.',
       ],
       prepareLoadout: (loadout) =>
         loadout.declared.some((tool) => tool.name === 'tool_search')
@@ -434,9 +442,18 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
               exposure,
             }
           : {}),
-        description: [tool.description, OPTIONAL_EXTENSION_HINTS[originalName]]
-          .filter(Boolean)
-          .join(' '),
+        description:
+          originalName === 'list_sessions'
+            ? 'List the unnamed and named lifecycle sessions for this Pi session.'
+            : [tool.description, OPTIONAL_EXTENSION_HINTS[originalName]].filter(Boolean).join(' '),
+        ...(originalName === 'list_sessions'
+          ? {
+              promptSnippet: 'List unnamed and named computer-use sessions',
+              promptGuidelines: [
+                'Continue computer_use_list_sessions with a nonempty next_cursor from an untruncated page. If sessions were truncated, repeat that page with a smaller limit.',
+              ],
+            }
+          : {}),
         parameters: Type.Unsafe(sanitizeSchemaFormats(tool.inputSchema) as object),
         async execute(
           _toolCallId: string,
@@ -460,7 +477,12 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
 
           let dispatched = false;
           try {
-            await ensureConnected(signal, originalName !== 'check_permissions');
+            await ensureConnected(signal, {
+              requestMacPermissions:
+                originalName !== 'check_permissions' &&
+                !(originalName === 'list_sessions' && isNamedSessionCursor(params.cursor)),
+              deferConnection: true,
+            });
             if (
               originalName.startsWith('browser_') &&
               originalName !== 'browser_dialog' &&

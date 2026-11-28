@@ -174,10 +174,10 @@ describe('CuaDriverClient', () => {
     // Isolate the wiring from the daemon process and the real binary.
     const internals = client as unknown as {
       ensureExecutable: () => void;
-      ensureDaemon: () => Promise<string>;
+      startDaemon: () => Promise<void>;
     };
     internals.ensureExecutable = () => {};
-    internals.ensureDaemon = () => Promise.resolve('/tmp/pi-cua-test.sock');
+    internals.startDaemon = async () => {};
 
     await client.connect();
 

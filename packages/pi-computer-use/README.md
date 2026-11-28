@@ -111,6 +111,10 @@ Recovery guidance also covers stale window IDs and element tokens, window owner 
 
 Long descriptive text and large lists are shortened with a truncation notice; opaque IDs and continuation tokens are never shortened. Narrow browser reads with `query` or `scope_ref` in `semantic_v2` when needed. If session records are omitted locally, repeat `list_sessions` with a smaller `limit` before using `next_cursor` to avoid skipping unseen records. Original structured results remain available in bounded details.
 
+Pass the same nonempty `session` label when launching and controlling a browser in a named session. Pi routes named sessions through a separate MCP proxy on the same daemon, so expiry of the unnamed session leaves named browsers running. `list_sessions` lists sessions from both proxies and returns a continuation cursor when more records are available.
+
+To record named-session actions, use that same label on `start_recording`, the actions, and `stop_recording`.
+
 Before typed browser actions such as navigation, clicks, typing, pointer input, file assignment, and downloads, the extension automatically inspects the exact tab's JavaScript dialog state. This establishes the driver's CDP dialog-event subscription before the action can open a modal, so callers do not need to manually inspect first. If a dialog is already open, the action is not dispatched and its current `dialog_id` is returned for `browser_dialog` to resolve. If a dialog opened before this driver ever subscribed and inspection times out, dismiss it manually once before retrying; the extension cannot recover that existing modal through the affected driver path.
 
 ### Optional local perception
