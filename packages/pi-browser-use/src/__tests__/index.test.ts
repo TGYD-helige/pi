@@ -146,7 +146,11 @@ const mockPi = {
   }),
 };
 
-const { default: browserUseExtension, BrowserSessionClient } = await import('../index.js');
+const {
+  default: browserUseExtension,
+  BrowserSessionClient,
+  BrowserSessionError,
+} = await import('../index.js');
 const fs = await import('node:fs');
 
 /** Register the extension and fire session_start. */
@@ -210,6 +214,25 @@ describe('browserUseExtension', () => {
   });
 
   describe('config loading', () => {
+    it('discovers tools without attaching and returns a coded refusal on the first action', async () => {
+      const connect = vi
+        .spyOn(BrowserSessionClient.prototype, 'connect')
+        .mockRejectedValue(
+          new BrowserSessionError('Session is occupied.', undefined, 'session_busy'),
+        );
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        JSON.stringify({
+          'pi-browser-use': {
+            session: { enabled: true, key: 'isolated-observer', retentionMs: 1000 },
+          },
+        }),
+      );
+      await startExtension();
+      expect(connect).not.toHaveBeenCalled();
+      expect(
+        await registeredTools.get('browser_click')!.execute('id', {}, undefined, undefined, {}),
+      ).toMatchObject({ isError: true, structuredContent: { error: { code: 'session_busy' } } });
+    });
     it.each([
       '界'.repeat(30000),
       'row\n'.repeat(3000),

@@ -5,9 +5,11 @@ import { classifyError, describeToolError } from '@amaster.ai/pi-shared';
 import { createBrowserAdapter } from './adapter.js';
 import { type BrowserUseConfig, resolveConfig } from './config.js';
 import { DevToolsClient } from './index.js';
+import { prepareBrowserProfile } from './profile.js';
 import {
   BrowserAcquisitionError,
   type BrowserLifecycleAdapter,
+  hasKnownBrowserId,
   type ManagedBrowser,
   validateBrowserBinding,
   validateBrowserExpiry,
@@ -60,12 +62,6 @@ async function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise
   } finally {
     if (abort) signal.removeEventListener('abort', abort);
   }
-}
-
-function hasKnownId(browser: ManagedBrowser) {
-  return (
-    typeof browser?.id === 'string' && browser.id.trim().length > 0 && browser.id.length <= 1024
-  );
 }
 
 /** SDK hosts can run this in their own long-lived process and inject an adapter. */
@@ -377,11 +373,11 @@ export async function serveBrowserSession(
         acquiring = (async () => {
           try {
             const acquired = await adapter.acquire(config, signal);
-            if (hasKnownId(acquired)) managed = acquired;
+            if (hasKnownBrowserId(acquired)) managed = acquired;
             validateBrowserBinding(acquired, adapter.ownership);
             hardDeadline = acquired.expiresAt;
           } catch (error) {
-            if (error instanceof BrowserAcquisitionError && hasKnownId(error.browser))
+            if (error instanceof BrowserAcquisitionError && hasKnownBrowserId(error.browser))
               managed = error.browser;
             throw error;
           } finally {
@@ -402,6 +398,7 @@ export async function serveBrowserSession(
     signal.throwIfAborted();
     if (!browserUsed) {
       const resolved = managed!.connection;
+      if (adapter.ownership === 'local') prepareBrowserProfile(resolveConfig(resolved));
       // Keep the discovery transport when the acquired launch configuration is unchanged.
       if (
         !resolved.wsEndpoint &&
@@ -460,7 +457,11 @@ export async function serveBrowserSession(
     recoveryFailed = true;
     verifiedAt = undefined;
     if (hardDeadline !== undefined && hardDeadline <= Date.now())
-      throw new BrowserSessionError('The provider browser deadline has expired.');
+      throw new BrowserSessionError(
+        'The provider browser deadline has expired.',
+        undefined,
+        'session_expired',
+      );
     const recoverySignal = AbortSignal.any([signal, AbortSignal.timeout(10_000)]);
     console.error('[pi-browser-use] recovering browser tool execution (phase=recovery)');
     replacing = (async () => {
@@ -547,7 +548,11 @@ export async function serveBrowserSession(
         'The original CDP connection was lost. No replacement browser was created.',
       );
     if (hardDeadline !== undefined && hardDeadline <= Date.now())
-      throw new BrowserSessionError('The provider browser deadline has expired.');
+      throw new BrowserSessionError(
+        'The provider browser deadline has expired.',
+        undefined,
+        'session_expired',
+      );
   }
 
   async function verify(signal: AbortSignal) {
@@ -565,7 +570,11 @@ export async function serveBrowserSession(
       if (description.expiresAt !== undefined) hardDeadline = description.expiresAt;
     }
     if (hardDeadline !== undefined && hardDeadline <= Date.now())
-      throw new BrowserSessionError('The provider browser deadline has expired.');
+      throw new BrowserSessionError(
+        'The provider browser deadline has expired.',
+        undefined,
+        'session_expired',
+      );
     if (marker) {
       const snapshot = await client.callTool('take_snapshot', { pageId: marker.pageId }, signal);
       const text = snapshot.content?.map((item) => item.text ?? '').join('\n') ?? '';
@@ -589,6 +598,7 @@ export async function serveBrowserSession(
     signal: AbortSignal,
     requestSignal = signal,
   ): Promise<unknown> {
+    signal.throwIfAborted();
     if (stopped) throw new BrowserSessionError('The browser session has ended.');
     const action = input.action;
     if (action === 'attach') {
@@ -614,7 +624,8 @@ export async function serveBrowserSession(
         );
       const returning = attachedOnce && (expiresAt !== undefined || parkedUntil !== undefined);
       if (returning) await verify(signal);
-      if (owner !== input.owner && returning) {
+      signal.throwIfAborted();
+      if (owner !== input.owner && browserUsed) {
         requiresPageList = true;
         refreshedSnapshots = new Set();
       }
@@ -686,6 +697,7 @@ export async function serveBrowserSession(
         throw new BrowserSessionError(
           'The provider cannot retain this browser beyond its current deadline.',
         );
+      signal.throwIfAborted();
       expiresAt = effective;
       return status();
     }
@@ -866,7 +878,9 @@ export async function serveBrowserSession(
           : undefined;
       // Match MCP's page/exclusive ordering before dispatch so queued calls remain cancellable.
       const work = (
-        input.action === 'heartbeat'
+        input.action === 'heartbeat' ||
+        (input.action === 'detach' && localParkingMs === undefined && expiresAt === undefined) ||
+        (input.action === 'release' && localParkingMs !== undefined)
           ? dispatch(input, signal)
           : scheduleOperation(scheduled, pageId, signal, prepare)
       ).finally(() => {
@@ -912,7 +926,7 @@ export async function serveBrowserSession(
       const expired = hardDeadline !== undefined && Date.now() >= hardDeadline;
       if (connection && !connection.alive) await stop('lost');
       else if (expired || (!owner && Date.now() >= (expiresAt ?? parkedUntil ?? 0)))
-        await stop(expired || expiresAt ? 'expired' : 'closed');
+        await stop(expired || expiresAt || parkedUntil ? 'expired' : 'closed');
       else if (!owner && marker && !connection) {
         try {
           await bounded(

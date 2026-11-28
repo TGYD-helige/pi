@@ -950,10 +950,21 @@ describe('browser session shutdown', () => {
       });
     try {
       expect((await attach(owner, child.pid!)).status).toBe(200);
+      const call = (identity: string, name: string) =>
+        fetch(`http://127.0.0.1:${server.port}/`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ action: 'call', owner: identity, name, args: { pageId: 1 } }),
+        });
+      expect((await call(owner, 'list_pages')).status).toBe(200);
       const exited = once(child, 'exit');
       child.kill('SIGKILL');
       await exited;
-      expect((await attach(randomBytes(32).toString('hex'), process.pid)).status).toBe(200);
+      const successor = randomBytes(32).toString('hex');
+      expect((await attach(successor, process.pid)).status).toBe(200);
+      expect(await (await call(successor, 'take_snapshot')).json()).toMatchObject({
+        code: 'stale_page_state',
+      });
     } finally {
       child.kill();
       await server.stop();

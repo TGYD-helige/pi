@@ -145,9 +145,11 @@ export function parseArgs(argv: string[]): BrowserUseConfig {
 
 async function main(): Promise<void> {
   const config = resolveConfig(parseArgs(process.argv.slice(2)));
-  prepareBrowserProfile(config);
   const client = new DevToolsClient(config, readBrowserSessionBinding(config));
-  await client.connect();
+  if (!config.session?.enabled) {
+    prepareBrowserProfile(config);
+    await client.connect();
+  }
 
   const toolNameMap = new Map<string, string>();
 

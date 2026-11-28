@@ -400,7 +400,7 @@ describe('BrowserSessionClient', () => {
         enabled: true as const,
         key: 'runtime-bound',
         retentionMs: 1000,
-        backend: { release: { url: 'http://localhost/stop/{sessionId}' } },
+        backend: { release: { url: 'http://localhost/stop/{sessionId}' }, retryRelease: true },
       },
     };
     const binding = {
@@ -437,9 +437,17 @@ describe('BrowserSessionClient', () => {
     try {
       await client.connect();
       await client.close();
-      await expect(
-        new BrowserSessionClient(config, { ...binding, id: 'another-instance' }).connect(),
-      ).rejects.toThrow('binding changed');
+      const other = new BrowserSessionClient(config, { ...binding, id: 'another-instance' });
+      await expect(other.connect()).rejects.toThrow('binding changed');
+      await expect(other.control('status')).rejects.toThrow('binding changed');
+      const path = join(directory, 'session.json');
+      await writeSessionRecord(path, {
+        ...JSON.parse(await readFile(path, 'utf8')),
+        ended: 'cleanup-failed',
+        managed: binding,
+        cleanup: { markerRemoved: true, transportClosed: true, providerReleased: false },
+      });
+      await expect(other.control('release')).rejects.toThrow('binding changed');
       expect(actions).toEqual(['attach', 'detach']);
     } finally {
       await client.close();
@@ -526,7 +534,7 @@ describe('BrowserSessionClient', () => {
       token: 'a'.repeat(64),
       configHash: createHash('sha256').update(JSON.stringify(config)).digest('hex'),
       ended: 'cleanup-failed',
-      managed: { id: 'same-instance', connection: { wsEndpoint: 'ws://localhost:9222/original' } },
+      managed: { id: 'same-instance', connection: {} },
       cleanup: { markerRemoved: true, transportClosed: true, providerReleased: false },
     };
     await writeFile(recordPath, JSON.stringify(record), { mode: 0o600 });

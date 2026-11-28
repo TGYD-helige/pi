@@ -3,6 +3,39 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHttpBrowserAdapter, readBrowserSessionBinding } from '../session-backend.js';
 
 describe('browser session HTTP adapter', () => {
+  it('requires a substituted instance ID in the retry release request', () => {
+    const config = {
+      create: { url: 'https://example.test/create' },
+      release: { url: 'https://example.test/release', body: [{ '{sessionId}': 'stop' }] },
+      retryRelease: true,
+      fields: { id: 'id', wsEndpoint: 'cdpUrl' },
+    };
+    expect(() => createHttpBrowserAdapter(config)).toThrow();
+    expect(() =>
+      createHttpBrowserAdapter({
+        ...config,
+        release: { url: 'https://example.test/release#{sessionId}' },
+      }),
+    ).toThrow();
+    expect(() =>
+      createHttpBrowserAdapter({
+        ...config,
+        release: { url: 'https://example.test/{sessionId}/../release' },
+      }),
+    ).toThrow();
+    expect(() =>
+      createHttpBrowserAdapter({
+        ...config,
+        release: { url: 'https://example.test/{sessionId}/{expiresAt}../release' },
+      }),
+    ).toThrow();
+    expect(() =>
+      createHttpBrowserAdapter({
+        ...config,
+        release: { ...config.release, body: [{ id: '{sessionId}' }] },
+      }),
+    ).not.toThrow();
+  });
   it('rejects incomplete lifecycle configuration before any paid creation', () => {
     const base = {
       create: { url: 'https://example.test/create' },
@@ -40,6 +73,33 @@ describe('browser session HTTP adapter', () => {
         .splice(0)
         .map((server) => new Promise<void>((resolve) => server.close(() => resolve()))),
     );
+  });
+
+  it('transmits the original instance ID in a retryable release body', async () => {
+    const bodies: unknown[] = [];
+    const server = createServer(async (req, res) => {
+      let body = '';
+      for await (const chunk of req) body += chunk;
+      bodies.push(JSON.parse(body));
+      res.writeHead(204).end();
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw Error('No server address');
+    const browser = {
+      id: 'job$&{expiresAt}42',
+      connection: { wsEndpoint: 'ws://localhost/original' },
+    };
+    const adapter = createHttpBrowserAdapter(
+      {
+        release: { url: `http://127.0.0.1:${address.port}/stop`, body: [{ id: '{sessionId}' }] },
+        retryRelease: true,
+      },
+      browser,
+    );
+    await adapter.release(browser, AbortSignal.timeout(1000));
+    expect(bodies).toEqual([[{ id: browser.id }]]);
   });
 
   it('accepts runtime environment bindings only for their matching conversation', () => {

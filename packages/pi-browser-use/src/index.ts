@@ -341,7 +341,15 @@ export class DevToolsClient {
   }
 
   async listAllTools(signal?: AbortSignal): Promise<Tool[]> {
-    if (this.sessionClient) return this.sessionClient.listAllTools(signal);
+    if (this.sessionClient) {
+      const { session: _session, ...config } = this.config;
+      const discovery = new DevToolsClient(config);
+      try {
+        return await discovery.listAllTools(signal);
+      } finally {
+        await discovery.close();
+      }
+    }
     await this.ensureReady(signal);
     const client = this.client;
     if (!client) throw new Error('Client not connected');
@@ -764,8 +772,8 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
   async function registerUpstreamTools(signal?: AbortSignal): Promise<void> {
     // Inspect the host, since the extension's installed peer can be a different version.
     const nativeDiscovery = pi.getAllTools?.().some((tool) => 'exposure' in tool) ?? false;
-    await ensureConnected(signal);
-    const upstreamTools = await client!.listAllTools(signal);
+    if (!client) throw new BrowserSessionError('The browser session is unavailable.');
+    const upstreamTools = await client.listAllTools(signal);
 
     for (const tool of upstreamTools) {
       const prefixedName = `${TOOL_PREFIX}${tool.name}`;
@@ -808,8 +816,8 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
           _onUpdate: unknown,
           _ctx: ExtensionContext,
         ) {
-          await ensureConnected(signal);
           try {
+            await ensureConnected(signal);
             const result = await client!.callTool(originalName, params, signal);
             return { ...toToolContent(result, originalName), details: undefined };
           } catch (error) {
@@ -933,9 +941,9 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
         _onUpdate: unknown,
         ctx: ExtensionContext,
       ) {
-        await ensureConnected(signal);
+        if (!client) throw new BrowserSessionError('The browser session is unavailable.');
         const callVision = createPiVisionCaller(visionConfig, ctx);
-        const result = await handleAnalyzeScreenshot(client!, callVision, params, signal);
+        const result = await handleAnalyzeScreenshot(client, callVision, params, signal);
         const content: Array<{ type: 'text'; text: string }> = [];
         if (result.content) {
           for (const item of result.content) {
@@ -965,9 +973,11 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
       name: 'browser_session',
       label: 'Browser session',
       description: SESSION_DESCRIPTION,
-      promptSnippet: 'Retain a live browser only when a human handoff needs the original page.',
+      promptSnippet:
+        'Inspect a session without attaching, or retain the original page for a human handoff.',
       promptGuidelines: [
-        'Retain before ending a turn that waits for browser interaction; release when complete.',
+        'Use browser_session retain before a human handoff and release when complete. Release disconnects parking-enabled sessions.',
+        'After reattachment, call browser_list_pages and take a fresh snapshot before using element UIDs.',
       ],
       parameters: sessionParameters,
       prepareLoadout: () =>
@@ -1004,7 +1014,7 @@ export default function browserUseExtension(pi: ExtensionAPI): void {
         projectTrusted: isProjectTrusted(ctx),
       }),
     );
-    prepareBrowserProfile(config);
+    if (!config.session?.enabled) prepareBrowserProfile(config);
     client = new DevToolsClient(config, readBrowserSessionBinding(config));
     if (config.session?.enabled) registerSessionSurface();
     else pi.setActiveTools(pi.getActiveTools().filter((name) => name !== 'browser_session'));

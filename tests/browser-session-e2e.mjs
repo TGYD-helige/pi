@@ -2,10 +2,12 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
+import { createRequire } from 'node:module';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 import {
   createBrowserSessionRunner,
   waitForSessionEnd,
@@ -35,6 +37,28 @@ const runner = createBrowserSessionRunner(
 const { run } = runner;
 let gateway, management;
 try {
+  await writeFile(configPath, JSON.stringify(baseConfig), { mode: 0o600 });
+  const cli = fileURLToPath(new URL('../packages/pi-browser-use/dist/cli.js', import.meta.url));
+  const require = createRequire(cli);
+  const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
+  const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js');
+  const mcp = new Client({ name: 'browser-session-check', version: '1' });
+  try {
+    await mcp.connect(new StdioClientTransport({
+      command: process.execPath,
+      args: [cli, '--config', configPath],
+      env: { PI_AGENT_HOME: root, PI_CODING_AGENT_DIR: root },
+    }));
+    assert.ok((await mcp.listTools()).tools.some((tool) => tool.name === 'browser_session'));
+    const status = await mcp.callTool({ name: 'browser_session', arguments: { action: 'status' } });
+    assert.equal(status.isError, undefined);
+    assert.deepEqual(JSON.parse(status.content[0].text), { state: 'not-started' });
+    await assert.rejects(readFile(join(root, 'browser-sessions',
+      createHash('sha256').update(baseConfig.session.key).digest('hex'), 'session.json')), { code: 'ENOENT' });
+  } finally {
+    await mcp.close();
+  }
+  console.log('PASS: standalone MCP discovers tools and inspects a missing session without creating it.');
   gateway = await createSessionGateway(join(root, 'gateway-profile'));
   for (const [name, config] of [
     [
@@ -56,6 +80,9 @@ try {
       mode: 0o600,
     });
     const first = await run('retain');
+    const observation = await run('discover');
+    assert.equal(observation.state, 'retained');
+    assert.equal(observation.attached, false);
     await delay(1500); // Longer than the gateway's disconnect-to-close window.
     const second = await run('resume');
     assert.equal(second.handshake, first.handshake, 'Must resume the original in-memory handshake');
@@ -107,6 +134,18 @@ try {
   assert.equal(afterParking.state, 'released');
   assert.equal((await run('inspect')).state, 'not-started');
   console.log('PASS: passive inspection leaves a parked loopback browser available for the next client.');
+  await delay(1500);
+  const shortPark = { ...parked, session: { ...parked.session, key: 'park-expired', localParkingMs: 200 } };
+  await writeFile(configPath, JSON.stringify(shortPark), { mode: 0o600 });
+  await writeFile(join(root, 'settings.json'), JSON.stringify({ 'pi-browser-use': shortPark }), {
+    mode: 0o600,
+  });
+  await run('ordinary');
+  assert.equal(await waitForSessionEnd(recordPath('park-expired')), 'expired');
+  assert.equal((await run('inspect')).state, 'expired');
+  await assert.rejects(run('resume'));
+  await run('cleanup');
+  console.log('PASS: parking expiry keeps a terminal record until explicit release.');
   await delay(1500);
   const crashed = { ...ordinary, session: { ...ordinary.session, key: 'crashed-client' } };
   await writeFile(configPath, JSON.stringify(crashed), { mode: 0o600 });
@@ -196,7 +235,7 @@ try {
   await writeFile(join(root, 'settings.json'), JSON.stringify({ 'pi-browser-use': cloud }), {
     mode: 0o600,
   });
-  assert.equal((await run('discover')).state, 'idle');
+  assert.equal((await run('discover')).state, 'not-started');
   assert.deepEqual(requests, [], 'Discovery must not create a paid cloud browser');
   const cloudFirst = await run('retain');
   assert.deepEqual(requests, ['POST /create'], 'Retaining must not release the cloud browser');
@@ -227,7 +266,7 @@ try {
     key: existing.session.key,
     browser: { id: 'host-supplied-1', connection: { wsEndpoint: gateway.wsEndpoint } },
   };
-  assert.equal((await run('discover', binding)).state, 'idle');
+  assert.equal((await run('discover', binding)).state, 'not-started');
   assert.deepEqual(requests, [], 'Discovery must not adopt or release the supplied instance');
   const existingFirst = await run('retain', binding);
   await assert.rejects(

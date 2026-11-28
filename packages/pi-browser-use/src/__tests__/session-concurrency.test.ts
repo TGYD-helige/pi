@@ -562,9 +562,11 @@ describe('browser session concurrency', () => {
     const operation = session.request('call', { name: 'list_pages', args: {} });
     try {
       await entered.promise;
-      const stopping = session.server.stop();
-      expect(await session.request('status', { owner: undefined })).toMatchObject({
-        result: { state: 'ending' },
+      const stopping = session.request('detach');
+      await vi.waitFor(async () => {
+        expect(await session.request('status', { owner: undefined })).toMatchObject({
+          result: { state: 'ending' },
+        });
       });
       expect(await session.request('call', { name: 'list_pages', args: {} })).toHaveProperty(
         'error',

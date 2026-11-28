@@ -24,8 +24,8 @@ import { buildSubprocessEnv } from './config.js';
 import type { DevToolsClient } from './index.js';
 import {
   createHttpBrowserAdapter,
+  hasKnownBrowserId,
   type ManagedBrowser,
-  validateBrowserBinding,
 } from './session-backend.js';
 import {
   BrowserSessionError,
@@ -229,30 +229,36 @@ export class BrowserSessionClient {
     };
   }
 
+  private validateRecordIdentity(record: SessionRecord) {
+    const stored = record.binding;
+    if (
+      this.browser &&
+      (!stored ||
+        this.browser.id !== stored.id ||
+        (['wsEndpoint', 'browserUrl', 'wsHeaders'] as const).some(
+          (key) => this.browser!.connection[key] !== stored.connection?.[key],
+        ))
+    )
+      throw new BrowserSessionError(
+        'The runtime browser binding changed. Release the original session or use a new key.',
+      );
+    if (record.configHash !== this.configHash)
+      throw new BrowserSessionError(
+        'Browser session configuration changed. Release the old session or use a new key.',
+      );
+  }
+
   private async open(signal?: AbortSignal) {
     const unlock = await this.lock(signal);
     try {
       this.record = await readSessionRecord(this.path);
       if (this.record) {
-        const stored = this.record.binding;
-        if (
-          this.browser &&
-          (!stored ||
-            this.browser.id !== stored.id ||
-            (['wsEndpoint', 'browserUrl', 'wsHeaders'] as const).some(
-              (key) => this.browser!.connection[key] !== stored.connection?.[key],
-            ))
-        )
-          throw new BrowserSessionError(
-            'The runtime browser binding changed. Release the original session or use a new key.',
-          );
-        if (this.record.configHash !== this.configHash)
-          throw new BrowserSessionError(
-            'Browser session configuration changed. Release the old session or use a new key.',
-          );
+        this.validateRecordIdentity(this.record);
         if (this.record.ended === 'expired' || this.record.ended === 'lost')
           throw new BrowserSessionError(
             `The original browser session ${this.record.ended === 'expired' ? 'expired' : 'was lost'}. No replacement was created. Release it explicitly or use a new key.`,
+            undefined,
+            this.record.ended === 'expired' ? 'session_expired' : undefined,
           );
         if (this.record.ended || !this.record.port)
           throw new BrowserSessionError(
@@ -443,8 +449,7 @@ export class BrowserSessionClient {
       const record = await readSessionRecord(this.path);
       signal?.throwIfAborted();
       if (!record) return { state: 'not-started' };
-      if (record.configHash !== this.configHash)
-        throw new BrowserSessionError('Browser session configuration changed.');
+      this.validateRecordIdentity(record);
       if (record.ended) return { state: record.ended };
       if (!record.port) return { state: 'unavailable' };
       return this.request<object>(
@@ -469,11 +474,13 @@ export class BrowserSessionClient {
           record.cleanup.providerReleased === false &&
           record.managed
         ) {
+          this.validateRecordIdentity(record);
           const releaseSignal = signal
             ? AbortSignal.any([signal, AbortSignal.timeout(15_000)])
             : AbortSignal.timeout(15_000);
           try {
-            validateBrowserBinding(record.managed);
+            if (!hasKnownBrowserId(record.managed))
+              throw new BrowserSessionError('The recorded provider instance ID is invalid.');
             const adapter = createHttpBrowserAdapter(backend, record.binding);
             await adapter.release(record.managed, releaseSignal);
             await rm(this.path, { force: true });

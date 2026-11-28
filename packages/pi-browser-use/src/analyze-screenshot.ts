@@ -19,6 +19,7 @@ import {
 import type { TextContent as AiTextContent } from '@earendil-works/pi-ai';
 import type { VisionModelConfig } from './config.js';
 import type { DevToolsClient } from './index.js';
+import { sessionRefusalResult } from './session-control.js';
 
 /** System prompt for the vision analysis model. */
 export const VISUAL_SYSTEM_PROMPT = `You are a Visual Analysis Agent. You receive a screenshot of a browser page and an instruction.
@@ -161,7 +162,9 @@ export async function handleAnalyzeScreenshot(
 ): Promise<{
   content: Array<{ type: string; text: string }>;
   isError?: boolean;
-  structuredContent?: { error?: string; errorCategory: string; httpStatus?: number; phase: string };
+  structuredContent?:
+    | { error?: string; errorCategory: string; httpStatus?: number; phase: string }
+    | NonNullable<ReturnType<typeof sessionRefusalResult>>['structuredContent'];
 }> {
   const instruction = String(args.instruction ?? '');
   const screenshotArgs = typeof args.pageId === 'number' ? { pageId: args.pageId } : {};
@@ -238,6 +241,10 @@ export async function handleAnalyzeScreenshot(
     };
   } catch (error) {
     if (signal?.aborted) throw error;
+    if (phase === 'capture') {
+      const refusal = sessionRefusalResult(error);
+      if (refusal) return refusal;
+    }
     const errorMsg = error instanceof Error ? error.message : String(error);
     if (phase === 'vision' && errorMsg.includes('not found in model registry'))
       phase = 'model_lookup';
