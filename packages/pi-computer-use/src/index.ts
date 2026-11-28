@@ -15,7 +15,6 @@ import type {
 } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
 import { type ComputerUseConfig, loadConfigFromFile, resolveConfig } from './config.js';
-import toolManifest from './generated/cua-driver-tools.js';
 import {
   CuaDriverClient,
   CuaDriverRequestNotDispatched,
@@ -39,6 +38,20 @@ export type { ComputerUseConfig };
 export { loadConfigFromFile, resolveConfig };
 
 const TOOL_PREFIX = 'computer_use_';
+
+type DriverToolDefinition = {
+  name: string;
+  description?: string | undefined;
+  inputSchema: unknown;
+};
+
+const loadPlatformToolManifest: Partial<
+  Record<NodeJS.Platform, () => Promise<{ default: { tools: readonly DriverToolDefinition[] } }>>
+> = {
+  darwin: () => import('./generated/cua-driver-tools.js'),
+  linux: () => import('./generated/cua-driver-tools-linux.js'),
+  win32: () => import('./generated/cua-driver-tools-win32.js'),
+};
 
 const OPTIONAL_EXTENSION_HINTS: Record<string, string> = {
   parse_visual_regions:
@@ -149,7 +162,7 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
   let config: ComputerUseConfig | undefined;
   let client: CuaDriverClient | undefined;
   let sessionAbortController: AbortController | undefined;
-  let macPermissionPromise: Promise<void> | undefined;
+  let permissionProbe: Promise<void> | undefined;
   const approvedLaunchApprovalKeys = new Set<string>();
   const driverToolNames = new Set<string>();
 
@@ -157,7 +170,11 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
 
   async function ensureConnected(
     signal?: AbortSignal,
-    options: { requestMacPermissions?: boolean; deferConnection?: boolean } = {},
+    options: {
+      requestPermissions?: boolean;
+      deferConnection?: boolean;
+      context?: ExtensionContext;
+    } = {},
   ): Promise<void> {
     signal?.throwIfAborted();
     if (!client) {
@@ -168,30 +185,38 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
     const sessionSignal = sessionAbortController?.signal;
     if (!sessionSignal) throw new Error('pi-computer-use: session not started');
     sessionSignal.throwIfAborted();
-    const probePermissions =
-      process.platform === 'darwin' && options.requestMacPermissions !== false;
-    if (!options.deferConnection || (probePermissions && !macPermissionPromise)) {
+    const isMac = process.platform === 'darwin';
+    const probePermissions = options.requestPermissions !== false && (isMac || options.context);
+    if (!options.deferConnection || (probePermissions && !permissionProbe)) {
       await sessionClient.ensureReady(signal);
     }
     if (!probePermissions) return;
 
     sessionSignal.throwIfAborted();
-    if (!macPermissionPromise) {
-      const permissionPromise = sessionClient
-        .callTool('check_permissions', { prompt: true }, sessionSignal)
+    if (!permissionProbe) {
+      permissionProbe = sessionClient
+        .callTool('check_permissions', isMac ? { prompt: true } : {}, sessionSignal)
         .then(
-          () => undefined,
+          (permissions) => {
+            const status = permissions.structuredContent;
+            if (
+              !isMac &&
+              !sessionSignal.aborted &&
+              (status?.accessibility === false || status?.screen_recording === false)
+            ) {
+              options.context?.ui.notify(`pi-computer-use: ${permissionHint()}`, 'warning');
+            }
+          },
           () => {
             if (!sessionSignal.aborted) {
               console.error(
-                '[pi-computer-use] macOS permission probe failed; requested tool will continue',
+                `[pi-computer-use] ${isMac ? 'macOS ' : ''}permission probe failed; requested tool will continue`,
               );
             }
           },
         );
-      macPermissionPromise = permissionPromise;
     }
-    await waitForPromise(macPermissionPromise, signal);
+    await waitForPromise(permissionProbe, signal);
     sessionSignal.throwIfAborted();
   }
 
@@ -410,9 +435,7 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
     });
   }
 
-  function registerTools(
-    tools: ReadonlyArray<{ name: string; description?: string | undefined; inputSchema: unknown }>,
-  ): void {
+  function registerTools(tools: readonly DriverToolDefinition[]): void {
     // Inspect the host, since the extension's installed peer can be a different version.
     const nativeDiscovery = pi.getAllTools?.().some((tool) => 'exposure' in tool) ?? false;
     for (const tool of tools) {
@@ -478,10 +501,11 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
           let dispatched = false;
           try {
             await ensureConnected(signal, {
-              requestMacPermissions:
+              requestPermissions:
                 originalName !== 'check_permissions' &&
                 !(originalName === 'list_sessions' && isNamedSessionCursor(params.cursor)),
               deferConnection: true,
+              context: ctx,
             });
             if (
               originalName.startsWith('browser_') &&
@@ -572,49 +596,77 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
     return liveTools.length;
   }
 
-  function registerRecoverySurface(): void {
+  function registerRecoverySurface(bundled = false): void {
+    async function reconnect(signal: AbortSignal | undefined, ctx: ExtensionContext) {
+      if (bundled) {
+        await ensureConnected(signal, { context: ctx });
+        return;
+      }
+      const count = await discoverAndRegisterTools(signal);
+      applyToolProfile();
+      return count;
+    }
+
     registerTool({
       name: `${TOOL_PREFIX}connect`,
       label: `${TOOL_PREFIX}connect`,
-      description:
-        'Retry Cua Driver startup and register the exact live tool contract for this platform.',
+      description: !bundled
+        ? 'Retry Cua Driver startup and register the exact live tool contract for this platform.'
+        : 'Retry connecting to the bundled Cua Driver for this platform.',
+      promptSnippet: 'Retry connecting to Cua Driver',
+      promptGuidelines: [
+        'Use computer_use_connect to retry a failed driver connection before retrying a computer-use tool.',
+      ],
       parameters: Type.Object({}),
       async execute(
         _toolCallId: string,
         _params: Record<string, never>,
         signal: AbortSignal | undefined,
+        _onUpdate: unknown,
+        ctx: ExtensionContext,
       ) {
         try {
-          const count = await discoverAndRegisterTools(signal);
-          applyToolProfile();
+          const count = await reconnect(signal, ctx);
           return {
             content: [
               {
                 type: 'text' as const,
-                text: `Cua Driver connected; registered ${count} platform tools. Continue with the requested computer_use tool.`,
+                text:
+                  count === undefined
+                    ? 'Cua Driver connected. Continue with the requested computer_use tool.'
+                    : `Cua Driver connected; registered ${count} platform tools. Continue with the requested computer_use tool.`,
               },
             ],
-            details: { registered_tools: count },
+            details: count === undefined ? undefined : { registered_tools: count },
           };
         } catch (error) {
           if (signal?.aborted) throw error;
           return {
-            ...toolFailure('Cua Driver connection', error),
+            ...toolFailure('Cua Driver connection', error, false),
           };
         }
       },
     });
 
     pi.registerCommand('computer-use-connect', {
-      description: 'Retry Cua Driver startup and discover platform tools',
+      description: !bundled
+        ? 'Retry Cua Driver startup and discover platform tools'
+        : 'Retry connecting to the bundled Cua Driver',
       async handler(_args, ctx) {
         try {
-          const count = await discoverAndRegisterTools(ctx.signal);
-          applyToolProfile();
-          ctx.ui.notify(`pi-computer-use: registered ${count} platform tools.`, 'info');
+          const count = await reconnect(ctx.signal, ctx);
+          ctx.ui.notify(
+            count === undefined
+              ? 'pi-computer-use: Cua Driver connected.'
+              : `pi-computer-use: registered ${count} platform tools.`,
+            'info',
+          );
         } catch (error) {
           if (ctx.signal?.aborted) throw error;
-          ctx.ui.notify(toolFailure('Cua Driver connection', error).content[0]!.text, 'warning');
+          ctx.ui.notify(
+            toolFailure('Cua Driver connection', error, false).content[0]!.text,
+            'warning',
+          );
         }
       },
     });
@@ -649,10 +701,10 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
         ctx: ExtensionContext,
       ) {
         try {
-          await ensureConnected(signal);
+          await ensureConnected(signal, { context: ctx });
         } catch (connErr) {
           if (signal?.aborted) throw connErr;
-          return toolFailure('Cua Driver connection', connErr);
+          return toolFailure('Cua Driver connection', connErr, false);
         }
 
         const screenshotArgs: Record<string, unknown> = {
@@ -743,12 +795,20 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
     );
     client = undefined;
     sessionAbortController = new AbortController();
-    macPermissionPromise = undefined;
+    permissionProbe = undefined;
     approvedLaunchApprovalKeys.clear();
     driverToolNames.clear();
 
-    if (process.platform === 'darwin') {
-      registerTools(toolManifest.tools);
+    const requiresLiveDiscovery =
+      (config.mode === 'path' && config.binaryPath) || config.extraArgs?.length;
+    const loadManifest =
+      process.platform === 'darwin' || !requiresLiveDiscovery
+        ? loadPlatformToolManifest[process.platform]
+        : undefined;
+    if (loadManifest) {
+      const { default: manifest } = await loadManifest();
+      registerTools(manifest.tools);
+      if (process.platform !== 'darwin') registerRecoverySurface(true);
       registerVisionTool();
       applyToolProfile();
       return;
@@ -774,11 +834,7 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
     if (!connectedAtStartup) return;
 
     try {
-      const permissions = await client!.callTool('check_permissions', {}, ctx.signal);
-      const status = permissions.structuredContent;
-      if (status?.accessibility === false || status?.screen_recording === false) {
-        ctx.ui.notify(`pi-computer-use: ${permissionHint()}`, 'warning');
-      }
+      await ensureConnected(ctx.signal, { context: ctx });
     } catch (error) {
       console.error(
         `[pi-computer-use] startup probe failed (category=${classifyError(error).errorCategory})`,
@@ -789,11 +845,11 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
   pi.on('session_shutdown', async () => {
     const closingClient = client;
     const sessionAbort = sessionAbortController;
-    const pendingPermission = macPermissionPromise;
+    const pendingPermission = permissionProbe;
     client = undefined;
     config = undefined;
     sessionAbortController = undefined;
-    macPermissionPromise = undefined;
+    permissionProbe = undefined;
     approvedLaunchApprovalKeys.clear();
     sessionAbort?.abort(new Error('pi-computer-use: session shut down'));
     await Promise.allSettled([pendingPermission, closingClient?.close()]);

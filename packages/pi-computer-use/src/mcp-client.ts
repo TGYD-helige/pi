@@ -565,11 +565,12 @@ export class CuaDriverClient {
     signal: AbortSignal,
   ): Promise<void> {
     if (process.platform !== 'win32') {
-      // This anonymous pipe is the lease: owner death closes it even after SIGKILL.
+      // Keep the lease outside the owner's process group. Owner death closes its stdin pipe.
       const lease = spawn(
         '/bin/sh',
         ['-c', DAEMON_LEASE_SCRIPT, 'pi-computer-use-lease', layout.binaryPath, socket],
         {
+          detached: true,
           env: this.daemonEnvironment(layout.embedded),
           stdio: ['pipe', 'ignore', 'ignore'],
         },

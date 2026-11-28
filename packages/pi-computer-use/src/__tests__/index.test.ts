@@ -1016,7 +1016,47 @@ describe('computerUseExtension', () => {
   it.each([
     'linux',
     'win32',
-  ] as const)('uses the parameterless permission probe on %s', async (platform) => {
+  ] as const)('registers the bundled %s tools without starting the driver until first use', async (platform) => {
+    const connection = abortableDeferred<void>();
+    const connects = vi.fn(connection.wait);
+    const callTool = vi.fn(mockCallTool);
+    mockCallTool = callTool;
+    mockConnect = async () => {};
+    const requests = vi.mocked(spawn).mock.calls.length;
+
+    await start(undefined, platform);
+
+    expect(tools.has('computer_use_get_guide')).toBe(true);
+    expect(tools.has('computer_use_health_report')).toBe(true);
+    await tools
+      .get('computer_use_tools')!
+      .execute('enable', { group: 'diagnostics' }, undefined, undefined, mockCtx);
+    expect(callTool).not.toHaveBeenCalled();
+    expect(spawn).toHaveBeenCalledTimes(requests);
+    mockConnect = connects;
+    const tool = tools.get('computer_use_get_guide')!;
+    const first = tool.execute('first', { topic: 'browser' }, undefined, undefined, mockCtx);
+    const second = tool.execute('second', { topic: 'browser' }, undefined, undefined, mockCtx);
+    await connection.started;
+    connection.resolve();
+
+    for (const result of await Promise.all([first, second])) {
+      expect(result).toMatchObject({
+        content: [{ type: 'text', text: 'Action executed.' }],
+      });
+    }
+    expect(connects).toHaveBeenCalledTimes(1);
+    const probes = callTool.mock.calls
+      .filter(([name]) => name === 'check_permissions')
+      .map(([, args]) => args);
+    expect(probes).toEqual([{}]);
+  }, 1_500);
+
+  it.each([
+    ['linux', { mode: 'path', binaryPath: '/mock/cua-driver' }],
+    ['win32', { mode: 'path', binaryPath: '/mock/cua-driver' }],
+    ['linux', { extraArgs: ['--claude-code-compat'] }],
+  ] as const)('uses live discovery and the parameterless permission probe on %s with %o', async (platform, config) => {
     let connects = 0;
     let permissionArgs: Record<string, unknown> | undefined;
     mockConnect = async () => {
@@ -1027,10 +1067,47 @@ describe('computerUseExtension', () => {
       return { content: [{ type: 'text', text: 'ok' }] };
     };
 
-    await start({ mode: 'path', binaryPath: '/mock/cua-driver' }, platform);
+    mockLiveTools = [
+      { name: 'platform_specific_tool', inputSchema: { type: 'object', properties: {} } },
+    ];
+    await start(config, platform);
 
+    expect(tools.has('computer_use_platform_specific_tool')).toBe(true);
     expect(connects).toBe(1);
     expect(permissionArgs).toEqual({});
+  });
+
+  it('can retry a failed bundled connection without replacing its tool definitions', async () => {
+    let attempts = 0;
+    mockConnect = async () => {
+      attempts++;
+      if (attempts <= 2) throw new DOMException('connection timed out', 'TimeoutError');
+    };
+    mockLiveTools = [];
+
+    await start(undefined, 'linux');
+
+    const tool = tools.get('computer_use_get_guide')!;
+    const failed = await tool.execute('first', { topic: 'browser' }, undefined, undefined, mockCtx);
+    expect(failed).toMatchObject({ isError: true });
+    const connect = tools.get('computer_use_connect')!;
+    const retry = await connect.execute('retry', {}, undefined, undefined, mockCtx);
+    expect(retry).toMatchObject({
+      isError: true,
+      structuredContent: { error: { code: 'driver_preflight_failed' } },
+    });
+    const connected = await connect.execute('retry-again', {}, undefined, undefined, mockCtx);
+
+    expect(connected).toMatchObject({
+      content: [
+        {
+          type: 'text',
+          text: 'Cua Driver connected. Continue with the requested computer_use tool.',
+        },
+      ],
+    });
+    expect(tools.get('computer_use_get_guide')).toBe(tool);
+    expect(attempts).toBe(3);
   });
 
   it('registers only a recovery contract after failed platform discovery', async () => {
@@ -1047,7 +1124,7 @@ describe('computerUseExtension', () => {
       },
     ];
 
-    await start(undefined, 'linux');
+    await start({ mode: 'path', binaryPath: '/mock/cua-driver' }, 'linux');
 
     expect(tools.has('computer_use_click')).toBe(false);
     expect(tools.has('computer_use_connect')).toBe(true);
@@ -2191,7 +2268,7 @@ describe('computerUseExtension', () => {
       mockConnect = async () => {
         throw new Error('connection refused');
       };
-      await start(undefined, 'linux');
+      await start({ mode: 'path', binaryPath: '/mock/cua-driver' }, 'linux');
 
       const result = (await tools
         .get('computer_use_tools')!
@@ -2211,7 +2288,7 @@ describe('computerUseExtension', () => {
           inputSchema: { type: 'object', properties: {} },
         },
       ];
-      await start(undefined, 'linux');
+      await start({ mode: 'path', binaryPath: '/mock/cua-driver' }, 'linux');
 
       const result = (await tools
         .get('computer_use_tools')!
@@ -2227,7 +2304,7 @@ describe('computerUseExtension', () => {
         attempts++;
         if (attempts === 1) throw new Error('connection refused');
       };
-      await start(undefined, 'linux');
+      await start({ mode: 'path', binaryPath: '/mock/cua-driver' }, 'linux');
 
       await commands.get('computer-use-connect')!.handler('', mockCtx);
 
@@ -2242,7 +2319,7 @@ describe('computerUseExtension', () => {
         attempts++;
         if (attempts === 1) throw new Error('connection refused');
       };
-      await start(undefined, 'linux');
+      await start({ mode: 'path', binaryPath: '/mock/cua-driver' }, 'linux');
       expect(mockPi.getActiveTools()).not.toContain('computer_use_click');
 
       await tools.get('computer_use_connect')!.execute('retry', {}, undefined, undefined, mockCtx);

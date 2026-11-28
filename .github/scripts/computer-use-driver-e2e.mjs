@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 
 const repoRoot = path.resolve(import.meta.dirname, '../..');
 const packageRoot = path.join(repoRoot, 'packages', 'pi-computer-use');
@@ -17,6 +18,20 @@ assert.match(execFileSync(layout.binaryPath, ['--version'], { encoding: 'utf8' }
 const client = new CuaDriverClient({ mode: 'bundled' });
 try {
   const tools = await client.listAllTools();
+  if (process.platform !== 'darwin') {
+    const manifestUrl = pathToFileURL(path.join(
+      packageRoot, 'src', 'generated', `cua-driver-tools-${process.platform}.ts`,
+    ));
+    const { default: manifest } = await import(manifestUrl.href);
+    assert.equal(manifest.driverVersion, release.version);
+    const liveByName = new Map(tools.map((tool) => [tool.name, tool]));
+    assert.deepEqual([...liveByName.keys()].sort(), manifest.tools.map(({ name }) => name).sort());
+    for (const { name, description, inputSchema } of manifest.tools) {
+      const live = liveByName.get(name);
+      assert(live.description === description, `${name} description differs from the manifest`);
+      assert(isDeepStrictEqual(live.inputSchema, inputSchema), `${name} schema differs from the manifest`);
+    }
+  }
   const names = new Set(tools.map(({ name }) => name));
   for (const name of ['get_window_state', 'click', 'browser_select', 'get_guide', 'check_permissions', 'health_report']) assert(names.has(name), `missing ${name}`);
   assert(tools.length >= 50, `expected at least 50 tools, received ${tools.length}`);

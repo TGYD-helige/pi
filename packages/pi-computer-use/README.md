@@ -7,11 +7,11 @@ Cross-platform computer-use tools for Pi desktop automation. The extension expos
 ## What it provides
 
 - One Rust 0.37.0 driver line across macOS, Linux, and Windows
-- 62 version-pinned upstream tools, including sessions, element tokens, accessibility + screenshot state, native input, browser tools, diagnostics, recording, and permission policy support
+- Platform-specific, version-pinned upstream tools, including sessions, element tokens, accessibility + screenshot state, native input, browser tools, diagnostics, recording, and permission policy support
 - Deferred tool activation: only the core toolset is active by default; extra groups are activated on demand via `computer_use_tools` or `/computer-use-tools`
 - Full MCP text, image, and `structuredContent` forwarding
 - Owned daemon + MCP proxy lifecycle with session-owned reconnect and per-call cancellation
-- A non-prompting Linux/Windows permission probe on session start
+- A non-prompting Linux/Windows permission probe when connecting to the driver
 - Once-per-session app-launch approval and confirmation for high-risk operations
 - Bounded text and structured results before they enter Pi's context
 - Optional secondary vision analysis through a configured Pi model
@@ -177,9 +177,11 @@ For maintainers, the platform integration job downloads pinned upstream artifact
 
 Windows daemon status probes allow up to 10 seconds per process invocation, so slow driver initialization is not interrupted after 250 ms. Session cancellation still aborts the probe.
 
-On macOS, `session_start` registers the generated 0.37.0 manifest without starting the driver. The signed app and MCP proxy start lazily on the first computer-use tool call, which requests any missing permissions through `check_permissions({ prompt: true })`. Existing grants do not raise another system dialog. The requested tool still runs and reports its own capability or permission error. Linux and Windows keep eager startup: they discover the exact live `tools/list` surface and call `check_permissions({})` (the optional `prompt` parameter is not needed for this probe). If discovery fails, the extension registers `computer_use_connect` (and `/computer-use-connect`) so a later retry can install the exact live platform contract without advertising another OS's schemas.
+Pi registers the bundled Cua Driver's platform-specific tool manifest when a session starts. The driver daemon and MCP proxy start on the first call that needs the driver. On macOS, the first applicable call checks permissions with `check_permissions({ prompt: true })`; existing grants do not raise a dialog. Linux and Windows use `check_permissions({})` on first use. Listing or enabling tool groups leaves the driver stopped.
 
-Driver startup, reconnect, and the first macOS permission probe are session-owned. Cancelling a tool stops only that caller's wait or MCP request; session shutdown aborts the shared work. macOS and Linux also use a transient pipe-backed lease to stop the owned daemon after an abrupt host exit; no persistent service or system scheduler is installed.
+Linux and Windows discover tools at session startup when using a custom `binaryPath` in `mode: "path"` or when passing `extraArgs`. These configurations can expose a different tool contract. Use `computer_use_connect` or `/computer-use-connect` to retry a failed connection or discovery. The requested tool reports its own capability or permission errors.
+
+Driver startup, reconnect, and the first permission probe are session-owned. Cancelling a tool stops only that caller's wait or MCP request; session shutdown aborts the shared work. macOS and Linux use a transient pipe-backed cleanup process in a separate process group. After an abrupt host exit it stops the owned daemon and removes its socket.
 
 - **Bundled macOS:** launches the signed `CuaDriver.app` through LaunchServices,
   so Accessibility and Screen Recording grants belong to `com.trycua.driver`.
@@ -210,7 +212,7 @@ The package ships a [computer-use skill](skills/computer-use/SKILL.md) for selec
    recording, escalated sessions, ...), call `computer_use_tools` with the
    matching group first
 
-Linux and Windows tool descriptions and schemas come from the exact live driver. macOS uses the generated manifest for the bundled driver release.
+When updating the bundled driver, run `node packages/pi-computer-use/scripts/generate-tool-manifest.mjs` on macOS, Linux, and Windows after building the extension and fetching the pinned binary for the host. The platform integration check compares the Linux and Windows manifests with the live tools from their release binaries.
 
 ## License
 

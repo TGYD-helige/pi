@@ -20,7 +20,8 @@ try {
   const tools = await client.listAllTools();
   const manifest = { driverVersion: release.version, generatedFrom: target, tools };
   const source = `// biome-ignore-all format: Generated from Cua Driver Rust ${release.version} tools/list. Do not edit manually.\nexport default ${JSON.stringify(manifest, null, 2)} as const;\n`;
-  writeFileSync(join(packageRoot, 'src', 'generated', 'cua-driver-tools.ts'), source);
+  const suffix = process.platform === 'darwin' ? '' : `-${process.platform}`;
+  writeFileSync(join(packageRoot, 'src', 'generated', `cua-driver-tools${suffix}.ts`), source);
   process.stdout.write(`Generated ${tools.length} tools from ${reportedVersion}.\n`);
 } finally {
   await client.close();

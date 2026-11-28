@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -17,7 +17,8 @@ const extensionUrl = pathToFileURL(path.join(packageRoot, 'dist', 'index.js')).h
 const { resolveDriverLayout } = await import(extensionUrl);
 const { binaryPath } = resolveDriverLayout({ mode: 'bundled' });
 
-const owner = execFile(
+const killGroup = process.argv.includes('--process-group');
+const owner = spawn(
   process.execPath,
   [
     '--input-type=module',
@@ -30,7 +31,7 @@ const owner = execFile(
       setInterval(() => {}, 1_000);
     `,
   ],
-  { cwd: repoRoot, maxBuffer: 8_192 },
+  { cwd: repoRoot, detached: true, stdio: ['ignore', 'ignore', 'pipe'] },
 );
 let ownerStderr = '';
 owner.stderr?.on('data', (chunk) => {
@@ -53,7 +54,7 @@ try {
     throw new Error(`Cua Driver processes not found for ${socketPath}`);
   }
 
-  owner.kill('SIGKILL');
+  process.kill(killGroup ? -owner.pid : owner.pid, 'SIGKILL');
   await waitFor(() => owner.exitCode !== null || owner.signalCode !== null, 5_000);
   let cleanupStatus;
   try {
@@ -65,7 +66,8 @@ try {
     throw new Error(`Cua Driver cleanup timed out: ${JSON.stringify(cleanupStatus)}`);
   }
 
-  console.log('Cua Driver lease, daemon, and proxy exited after their owner was killed.');
+  const target = killGroup ? "their owner's process group" : 'their owner';
+  console.log(`Cua Driver processes exited and the socket was removed after ${target} was killed.`);
 } finally {
   if (owner.exitCode === null && owner.signalCode === null) owner.kill('SIGKILL');
   if (socketPath && existsSync(socketPath)) {
